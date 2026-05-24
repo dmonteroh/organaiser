@@ -2,6 +2,10 @@
 
 A catalog of AI-first agentic workflows for software work, authored as plain markdown.
 
+TLDR: I believe strongly that humans should be in the driving seat of the decision making and are responsible for the code that AI generates. I am not claiming that these workflows are the right way, but they are the current best way of working for production code for me.
+
+Warning: Subagents consume more tokens than regular work. Workflows are not for "efficiency and speed", they're here for "validation, correctness and less hallucinations".
+
 ## Why this exists
 
 Too many teams use AI as a faster way to type. Prompt, accept the suggestion, ship. That works for small things.
