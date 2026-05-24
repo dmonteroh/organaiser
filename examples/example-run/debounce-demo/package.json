@@ -1,0 +1,9 @@
+{
+  "name": "debounce-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Tiny sample project used by the ai-workflows worked example.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
