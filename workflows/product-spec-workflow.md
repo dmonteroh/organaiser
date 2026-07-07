@@ -28,8 +28,8 @@ The output is a product specification decision, not code. A successful `specifie
 ### spec-challenger
 
 - Template: `subagents/spec-challenger-prompt.md`
-- Mode: adversarial review from engineering's perspective (read-only)
-- Gate type: structured (pass | gaps-found | needs-info)
+- Mode: adversarial review from engineering's perspective (read-only: may read the codebase, backlog, and ADRs to verify claims, must not modify files)
+- Gate type: tri-state (pass | gaps-found | needs-info)
 - Constraints:
   - Must challenge from buildability: can engineering actually implement this as specified?
   - Must check if acceptance criteria are testable and unambiguous
@@ -37,6 +37,8 @@ The output is a product specification decision, not code. A successful `specifie
   - Must identify hidden assumptions the problem-definer may have made
   - Must check for conflicts with existing scope (other tasks, ADRs, architectural constraints)
   - Must verify Non-Goals are actually non-goals (not deferred scope disguised as exclusions)
+  - Must flag forbidden vague claims (see Forbidden Claims under Completion) as gaps
+  - On `needs-info`, must name each missing item and its owner (orchestrator-context | operator | research | decision) so the orchestrator can route without guessing
 
 ## Local Capabilities
 
@@ -81,6 +83,7 @@ Every specification produced by this workflow must contain:
    - Current behavior: what happens today?
    - Desired change: what should be different for the user?
    - Evidence: what proves or suggests this is real?
+   - Context: existing notes, conversations, or related material the operator provides.
    - Constraints: timeline, business rules, dependencies, technical limits.
    - Known non-goals: what should this explicitly not cover?
 2. Gather existing project context:
@@ -88,28 +91,21 @@ Every specification produced by this workflow must contain:
    - Relevant ADRs or decision records
    - Related tasks, prior specs, research notes, or roadmap constraints
    - Existing architecture constraints that affect product feasibility
-3. Dispatch `problem-definer` with the operator input and project context:
-   - Frame the problem (User Truth, Business Invariants, Non-Goals)
-   - Separate evidence from assumptions and open questions
-   - Apply "So What?" filter: does this earn its engineering effort?
-   - Define acceptance criteria and success metrics
-   - Assess scope impact against existing backlog and ADRs
-   - Return one draft verdict: `proceed`, `shelve`, `needs-research`, `needs-decision`, or `needs-operator`
+3. Dispatch `problem-definer` with the operator input and project context (full text, not file references; missing items marked `unknown`). On revision passes, also include the prior draft and the challenger findings. The template owns the framing, evidence, "So What?", acceptance criteria, and scope impact duties.
 4. Orchestrator reviews the draft verdict:
    - If `shelve`: record the rationale and mark final state `shelved`
    - If `needs-research`: record missing evidence and mark final state `needs-research`
    - If `needs-decision`: record the blocking decision and mark final state `needs-decision`
-   - If `needs-operator`: escalate with full context and either re-dispatch `problem-definer` with the answer or mark final state `needs-operator`
+   - If `needs-operator`: escalate with full context. If the operator answers, re-dispatch `problem-definer` with the answer (return to step 3). If the operator defers or is unavailable, mark final state `needs-operator`.
    - If `proceed`: continue to the challenger gate
-5. Dispatch `spec-challenger` with the draft specification and existing project context:
-   - Challenge buildability
-   - Check acceptance criteria precision
-   - Check evidence and assumptions
-   - Identify hidden assumptions
-   - Check scope conflicts
-   - Audit Non-Goals
-6. If `spec-challenger` returns `needs-info`, escalate the missing context to the operator, then return to step 3 with the answer.
-7. If `spec-challenger` returns `gaps-found`, dispatch `problem-definer` with the challenger findings to revise, then return to step 4.
+5. Dispatch `spec-challenger` with the full draft specification and existing project context. The template owns the challenge checks: buildability, evidence and assumptions, acceptance criteria precision, hidden assumptions, scope conflicts, non-goals, forbidden claims.
+6. If `spec-challenger` returns `needs-info`, route by the missing item and owner it names:
+   - `orchestrator-context` (backlog, ADRs, architecture facts the orchestrator can gather): gather it and re-dispatch `spec-challenger` (return to step 5). Do not re-run the problem-definer for context that leaves the spec unchanged.
+   - `research` (missing research evidence): mark final state `needs-research`.
+   - `decision` (missing decision record): mark final state `needs-decision`.
+   - `operator` (missing product or business judgment): escalate to the operator. If the answer changes the spec, re-dispatch `problem-definer` with it (return to step 3); otherwise re-dispatch `spec-challenger` with the answer (return to step 5).
+   Maximum `needs-info` resolutions per run: 2. If the challenger still cannot complete the review, mark the non-spec final state matching the dominant missing item.
+7. If `spec-challenger` returns `gaps-found`, dispatch `problem-definer` with the prior draft and the challenger findings to revise, then return to step 4.
 8. If `spec-challenger` returns `pass`, finalize the product specification and mark final state `specified`.
 9. Determine next step:
    - If final state is `specified`: create or update the task entry and recommend task-refinement-workflow
@@ -119,17 +115,17 @@ Every specification produced by this workflow must contain:
 
 ### Post-all-tasks
 
-1. If multiple specs were produced: check for scope conflicts between them
-2. Verify no spec undermines an existing ADR without flagging it
+1. If multiple specs were produced: check for scope conflicts between them. If specs conflict, treat each affected spec as `gaps-found` (return to per-task step 7 for it; the revision cap applies), or escalate to the operator when the conflict is a priority call rather than a spec defect.
+2. Verify no spec undermines an existing ADR without flagging it. An unflagged ADR conflict is `gaps-found` for that spec.
 3. Update backlog or work index if new tasks were created
-4. Mark all produced specifications `integrated`
+4. Mark each spec whose final state is `specified` as `integrated`. Non-spec outcomes keep their recorded final state.
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - Operator context gathering is required, but incomplete answers are allowed. Missing context must be preserved as `unknown`, not invented.
 - The "So What?" gate is a legitimate kill point. Not every idea deserves a specification. Shelving is a valid outcome.
-- Maximum revision loops from challenger findings back to `problem-definer`: 2. If a spec cannot pass the challenger after 2 revisions, stop and return `needs-operator`, `needs-research`, or `needs-decision`.
+- Maximum revision loops from challenger findings back to `problem-definer`: 2. Only `gaps-found` revisions count toward this cap; `needs-info` resolutions (capped separately in step 6) and operator-answer re-dispatches do not. If a spec cannot pass the challenger after 2 revisions, stop and return the non-spec state matching the dominant unresolved gap: `needs-research` for missing evidence, `needs-decision` for a blocking choice, otherwise `needs-operator`.
 - The problem-definer must never describe implementation. "Use PostgreSQL JSONB" is not a spec; "structured data must be queryable by field" is.
 - Acceptance criteria must be testable. "Users should have a good experience" is not a criterion. "User can complete X in under Y steps" is.
 - Unsupported product claims are not allowed. If a User Truth or "So What?" claim rests on weak evidence, record it as an assumption and choose the appropriate non-spec state unless the operator explicitly accepts it.
@@ -197,6 +193,8 @@ Before marking a specification as complete, the orchestrator must verify:
 5. Non-Goals are genuine exclusions, not deferred features disguised as non-goals.
 6. Acceptance criteria can be turned into test cases without further clarification.
 7. No forbidden claims appear in the specification.
+
+If any self-check item fails, do not finalize: treat the failure as `gaps-found` and return to per-task step 7 (counts toward the revision cap). If the cap is exhausted, mark `needs-operator` with the unresolved items.
 
 ## Related Workflows
 

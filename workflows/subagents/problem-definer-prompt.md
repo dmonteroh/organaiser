@@ -18,14 +18,19 @@ Task: Produce a product specification decision for the following idea or need.
 
 ## Existing Project Context
 
-- Current backlog: <summary or link to work_index.md>
+- Current backlog: <summary or link>
 - Relevant ADRs: <list>
 - Related tasks: <list>
 - Relevant research or decision records: <list>
 
+## Prior Draft and Challenger Findings (revision passes only)
+
+- Prior draft: <paste the previous Product Specification Decision; omit this section on the first pass>
+- Challenger findings: <paste the Spec Challenge Report>
+
 ## Your Job
 
-You are a problem definer. Your deliverable is either a precise product specification draft or a clear non-spec verdict. You do NOT produce implementation details, architecture, or code.
+You are a problem definer. Your deliverable is either a precise product specification draft or a clear non-spec verdict. You do NOT produce implementation details, architecture, or code. You may read the repository, ADRs, and project records for context; you never create or modify files.
 
 **HARD CONSTRAINT: Do not describe HOW to build it. "Use JSONB columns" is implementation. "Data must be queryable by individual fields" is specification. Stay on the "What" side of the line.**
 
@@ -107,6 +112,7 @@ Return exactly one:
 - Do not invent user evidence. If evidence is missing, say so and choose the correct verdict.
 - Do not bury uncertainty in prose. Put it in Assumptions or Open Questions.
 - For non-`proceed` verdicts, fill the product specification fields as far as evidence allows. Mark fields `N/A` or `unknown` with rationale instead of forcing a fake spec.
+- On revision passes, revise the prior draft instead of rebuilding it: address every challenger finding, keep unaffected sections unchanged, and record each finding with the change made (or a reasoned rebuttal) under Revisions Applied.
 
 ## Output Format
 
@@ -138,5 +144,6 @@ Product Specification Decision:
   - Affects: <existing tasks, ADRs>
   - Conflicts: <if any>
   - De-prioritizes: <if any>
-- Recommended Next Step: <task-refinement-workflow | decision-workflow | research-workflow | operator-input | shelved>
+- Revisions Applied (revision passes only):
+  - <challenger finding: change made, or reasoned rebuttal>
 ```
