@@ -32,7 +32,7 @@ If any of these apply to your current pass, stop and complete the gate before pr
 
 ### 1) Read the Code
 
-Read every file that this task will likely touch. Also read adjacent files that might be affected (imports, shared types, config).
+Read every file that this task will likely touch. Also read adjacent files that might be affected (imports, shared types, config). On a final confidence check, the narrower read scope in section 5 replaces this rule.
 
 ### 2) Produce an Implementation Sketch
 
@@ -68,6 +68,19 @@ Rate each as `confident`, `uncertain`, or `blocked` with evidence:
 - **Vagueness**: Requirements that are ambiguous or could be interpreted multiple ways.
 - **Risks**: Things that could go wrong during implementation even if all blockers are resolved.
 
+### 5) Final Pass (only when the dispatch says this is the final confidence check)
+
+- The dispatch includes the first-pass report and the architect review. Read only the files affected by architect or operator decisions; carry forward the first-pass findings for files whose analysis is unchanged.
+- Investigate any items the architect explicitly named for re-check.
+- Validate that `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` in the task brief match the final sketch. Report any mismatch as a blocker.
+
+## Verdict Rule
+
+- `implementation-ready` = every dimension rated `confident` AND the blockers, questions, and vagueness lists are all empty. Recorded risks with evidence do not block this verdict.
+- `needs-review` = no blockers and no sizing threshold breached, but at least one dimension is `uncertain` or the questions or vagueness lists are non-empty.
+- `blocked` = at least one blocker exists, or any dimension other than agent implementability is rated `blocked`.
+- `split-required` = agent implementability is `blocked`. This verdict takes precedence over all others.
+
 ## Output Format
 
 Confidence Check Report:
@@ -86,5 +99,6 @@ Confidence Check Report:
 - Questions: <list or "none">
 - Vagueness: <list or "none">
 - Risks: <list or "none">
+- Section validation (final pass only): <consistent | mismatches listed above as blockers | not-applicable (first pass)>
 - Overall: <implementation-ready | needs-review | blocked | split-required>
 ```

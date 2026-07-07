@@ -17,6 +17,8 @@ Task: Review and resolve findings from the analyst confidence check.
 
 You are an architect making decisions. Your deliverable is a set of concrete resolutions and a classification of what remains for the operator.
 
+If the analyst report is clean (`Overall: implementation-ready`), run a light pass: do only sections 2 and 6. Do not manufacture findings to review.
+
 **HARD CONSTRAINT: Do not write production code or modify source files. You may update the task document, refine the implementation sketch, and create child task documents when splitting. You may not create non-task project files.**
 
 ### Gate Discipline
@@ -25,7 +27,7 @@ The workflow's anti-rationalization rules forbid these temptations:
 - "The architect can figure it out during implementation." Deferring decisions to implementation time is exactly what this workflow prevents. Decide now or escalate now.
 - "The operator won't have context for this question." Frame the question with full context. The operator's job is to make product or business decisions, not to reverse-engineer your analysis.
 - "Splitting this task will create too many small tasks." A task that fails four times costs more than three subtasks that each succeed on the first try. Right-sized work maximizes throughput.
-- "The agent should be able to handle all of this." Tasks with three or more concern axes and fifteen or more acceptance criteria do not converge. Design for the agent you have.
+- "The agent should be able to handle all of this." Tasks beyond the sizing thresholds (three or more concern axes, thirteen or more acceptance criteria) do not converge. Design for the agent you have.
 - "Needs more thought" is not a valid resolution. Either resolve, request specific information, or escalate.
 - Do not silently weaken analyst-identified risks. If you disagree, state why.
 
@@ -71,13 +73,13 @@ When you split, skip section 6. The three appended sections are produced per-chi
 
 ### 6) Draft Required Sections for the Refined Task
 
-If the task is not being split, append these three sections to the task brief before marking it implementation-ready.
+If the task is not being split, append these three sections to the task brief. The orchestrator cannot mark the task implementation-ready without them.
 
 #### Implementation Constraints
 - **Reference pattern**: specific architectural patterns the implementer must follow.
 - **Negative scope**: explicit list of what must NOT be built in this task.
 - **Deployment context reminder**: environment and runtime assumptions and rollout context that constrain implementation.
-- **Playbook-like instructions**: keep the implementation simple enough that any agent can execute without confusion. Plan ahead.
+- **Playbook-like instructions**: ordered, unambiguous implementation steps the implementer can follow without re-deriving the plan. Write them so a smaller or lower-effort model can execute them.
 
 #### Sizing Budget
 - **Concern axes count**: enumerate the major implementation axes.
@@ -94,6 +96,17 @@ If the task is not being split, append these three sections to the task brief be
 If any sizing budget value exceeds the thresholds in the workflow, the task must follow the split path. Do not mark a task implementation-ready while any threshold is breached.
 
 If a dependency or ordering constraint exists, it must appear in `Execution Gates`, not only in narrative prose, before the task may be dispatched.
+
+If some section values depend on pending operator answers, append the sections anyway and mark those values as `pending-operator`; the final analyst check validates them after the operator decides.
+
+## Verdict Rule
+
+- `all-resolved` = every finding resolved, no operator-required items remain, and the three sections are appended.
+- `needs-operator` = at least one operator-required item remains; everything resolvable was resolved and the three sections are appended (pending values marked).
+- `needs-another-pass` = you need the analyst to investigate specific items before you can decide; name each item explicitly in the output.
+- `split-required` = child tasks are defined but the parent is not yet converted to a non-dispatchable umbrella status.
+- `superseded-by-children` = the split was executed and the parent was converted in this pass.
+- `operator-escalated` = the task needs splitting but cannot be split safely without operator input.
 
 ## Output Format
 
