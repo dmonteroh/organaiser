@@ -30,7 +30,7 @@ Structured investigation that proves root cause before any fix is attempted. Rep
   - Must independently trace the execution path the investigator claims is faulty
   - Must check if the root cause explains ALL reported symptoms, not just some
   - Must look for alternative explanations the investigator may have missed
-  - If the root cause is confirmed, must verify the proposed fix scope is sufficient
+  - If the root cause is confirmed, must verify the proposed fix scope is sufficient and supply an amended fix scope when it is not (fix scope gaps do not block confirmation)
 
 ## Diagnostic Standards
 
@@ -52,44 +52,38 @@ Every root cause claim must meet these evidence requirements:
    - Steps to reproduce (if known)
    - Relevant logs, error messages, stack traces
    - Environment details
-2. Dispatch `investigator` for reproduction + diagnosis:
-   - Reproduce the issue first (or document reproduction failure)
-   - Narrow the fault boundary through elimination
-   - Trace the causal chain from trigger to symptom
-   - Produce root cause hypothesis with evidence
-   - Assess blast radius (what else is affected)
-   - Propose fix scope (which files need to change)
-3. Barrier: confirm the investigator session exited and that no temporary instrumentation remains in the tree (the investigator removes their own before reporting; the orchestrator verifies)
-4. Dispatch `verifier` with the bug report + investigator's diagnosis:
-   - Independently trace the claimed faulty path
-   - Check if root cause explains all symptoms
-   - Look for alternative explanations
-   - Assess if proposed fix scope is sufficient
-5. If verifier returns `alternative-hypothesis`:
-   - Dispatch `investigator` to evaluate the alternative, then return to step 3
-6. If verifier returns `insufficient-evidence`:
-   - Dispatch `investigator` with specific evidence gaps to fill, then return to step 3
-7. If verifier returns `confirmed`:
+2. Dispatch `investigator` with the bug report per its template. The template owns the duties: reproduce, isolate, trace the causal chain, assess blast radius, propose fix scope.
+3. Barrier: confirm the investigator session exited and that no temporary instrumentation remains in the tree (the investigator removes their own before reporting; the orchestrator verifies by diffing the tree against its pre-investigation state). If leftover instrumentation is found, revert it (or re-dispatch `investigator` to remove only that residue) before continuing. If the report flags instrumentation as justified to retain, decide keep-or-remove now and record the decision.
+4. Route on the `Reproduction` field of the investigator's report:
+   - `reproduced`: continue to step 5.
+   - `not reproducible` but the report contains an evidence-cited causal chain (from logs, traces, or code reading): continue to step 5; the verifier weighs the missing reproduction under its Verdict Rule.
+   - `not reproducible` with no cited causal chain: do not dispatch the verifier (it could only return `insufficient-evidence`). Escalate to the operator with the documented reproduction attempts.
+5. Dispatch `verifier` with the bug report + the investigator's full report per its template.
+6. If verifier returns `alternative-hypothesis`:
+   - Dispatch `investigator` in follow-up mode to evaluate the alternative, then return to step 3. This consumes one follow-up round.
+7. If verifier returns `insufficient-evidence`:
+   - Dispatch `investigator` in follow-up mode with the specific evidence gaps to fill, then return to step 3. This consumes one follow-up round.
+8. If verifier returns `confirmed`:
    - Root cause is proven. Create a fix task under dev-workflow with:
      - Proven root cause and causal chain
-     - Proposed fix scope
+     - Proposed fix scope (use the verifier's amended fix scope when one is provided)
      - Regression test requirement (the fix must include a test that reproduces the bug and passes after the fix)
-8. Mark investigation task `ready`
+9. Mark investigation task `ready`
 
 ### Post-all-tasks
 
 1. If multiple bugs investigated: check for shared root causes across investigations
-2. If shared root cause found: consolidate into a single fix task
-3. Mark all tasks `integrated`
+2. If shared root cause found: consolidate into a single fix task, close the per-investigation fix tasks it supersedes, and carry every regression test requirement from the superseded tasks into the consolidated task
+3. Mark all `ready` tasks `integrated` (tasks escalated to the operator stay `blocked` until resolved)
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - The investigator must NEVER apply a fix. Diagnosis and repair are separate concerns. Mixing them causes incomplete root cause analysis.
 - Reproduction comes before investigation. If you can't reproduce it, document that. Don't skip ahead to guessing.
-- Maximum follow-up rounds: 2. If the root cause cannot be confirmed after 2 rounds, escalate to the operator with all evidence and any competing hypotheses.
-- The fix task created at step 7 runs under dev-workflow, not this workflow. This workflow produces the diagnosis; dev-workflow produces the fix.
-- Temporary instrumentation (debug logging, assertions) must be removed before the investigation is complete.
+- Maximum follow-up rounds: 2. A follow-up round is one investigator re-dispatch triggered by a non-`confirmed` verdict (steps 6-7). If the root cause is still not confirmed after 2 rounds, stop dispatching, mark the task `blocked`, and escalate to the operator with all evidence and any competing hypotheses.
+- The fix task created at step 8 runs under dev-workflow, not this workflow. This workflow produces the diagnosis; dev-workflow produces the fix.
+- Temporary instrumentation (debug logging, assertions) must be removed before the investigation is complete. The only exception is instrumentation the investigator explicitly flags as justified to retain; the orchestrator decides at the step 3 barrier and records the decision.
 
 ## Anti-Rationalization Rules
 
@@ -117,7 +111,7 @@ Every root cause claim must meet these evidence requirements:
   - Proven root cause reference
   - Proposed fix scope
   - Regression test requirement
-- All temporary instrumentation removed
+- All temporary instrumentation removed (or retention approved and recorded at the step 3 barrier)
 
 ### Forbidden Claims
 
@@ -129,7 +123,7 @@ The following phrases may never appear in debugging completion reports:
 - "I think the root cause is"
 - "the fix worked when I tried it" (without formal verification)
 - "can't reproduce but fixed anyway"
-- "the stack trace points to"  (as sole evidence, without causal chain)
+- "the stack trace points to" (as sole evidence, without causal chain)
 
 ### Completion Self-Check
 
@@ -140,6 +134,14 @@ Before marking a debugging investigation as complete, the orchestrator must veri
 3. The verifier confirmed the root cause AFTER the investigator completed (not concurrently).
 4. The blast radius assessment was performed (not just the immediate symptom).
 5. The fix task references the proven root cause and requires a regression test.
-6. No temporary instrumentation remains in the codebase.
+6. No temporary instrumentation remains in the codebase (except retentions the orchestrator approved and recorded at the step 3 barrier).
 7. No forbidden claims appear in the report.
+
+If any check fails, return to the step that produces the missing artifact and rerun from there. Do not mark the task `ready` with a failed check.
+
+## Related Workflows
+
+- **dev-workflow**: Downstream. The fix task created at step 8 runs there; the proven root cause, fix scope, and regression test requirement travel in the task packet.
+- **task-refinement-workflow**: Downstream alternative. When the confirmed fix scope is large or ambiguous enough to need decomposition, refine the fix task there before dev-workflow.
+- **decision-workflow**: Use when the confirmed root cause exposes a significant architectural or strategic choice about how to fix it, rather than a straightforward repair.
 

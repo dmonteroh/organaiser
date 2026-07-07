@@ -9,6 +9,9 @@ Task: Verify the root cause diagnosis for the following bug.
 
 - Symptoms: <what was observed>
 - Expected behavior: <what should have happened>
+- Steps to reproduce: <from the bug report, if known>
+- Logs/errors: <relevant output, if any>
+- Environment: <relevant details, if any>
 
 ## Investigator's Diagnosis
 
@@ -19,6 +22,8 @@ Task: Verify the root cause diagnosis for the following bug.
 You are a verifier. Your job is to confirm or challenge the diagnosis. Do not trust it at face value, and do not redo the full investigation from scratch.
 
 **CRITICAL: You have a fresh context. The investigator's confidence does not carry over. Verify independently.**
+
+**READ-ONLY CONSTRAINT: You may read code and run existing tests or reproduction commands, but you must not modify any file, add instrumentation, or apply fixes. If confirming or refuting the diagnosis would require instrumentation or code changes, return `insufficient-evidence` and name exactly what instrumentation the investigator should add.**
 
 You may attempt independent reproduction at your discretion. If your reproduction diverges from the investigator's account, that is itself evidence and grounds for `alternative-hypothesis` or `insufficient-evidence` depending on what you find.
 
@@ -46,6 +51,7 @@ For each link in the investigator's causal chain:
 - Is the proposed fix scope sufficient to address the root cause?
 - Would the fix miss any affected code paths identified in the blast radius?
 - Is the regression test proposal adequate?
+- Fix scope gaps alone do not change your verdict: if the root cause holds, return `confirmed` and supply the corrected fix scope in your output instead of blocking.
 
 ## Rules
 
@@ -60,7 +66,8 @@ Return `confirmed` only when ALL of these hold:
 - Every link in the investigator's causal chain was independently traced and matches the cited code or evidence.
 - The root cause accounts for every reported symptom.
 - No plausible alternative explanation surfaced during verification.
-- The proposed fix scope covers the blast radius without obvious gaps.
+
+Fix scope adequacy is not a `confirmed` condition. If the root cause holds but the proposed fix scope has gaps, still return `confirmed` and provide the corrected fix scope in your output; the orchestrator uses your amended scope when creating the fix task.
 
 Return `alternative-hypothesis` when at least one cited link does not hold, OR a competing cause better explains the evidence. Present the alternative with citations and name the gap in the original diagnosis.
 
@@ -73,8 +80,8 @@ Verification Report:
 
 If confirmed:
 - Causal chain verification: <each link checked, all confirmed>
-- All symptoms explained: <yes | partial, with which symptoms unexplained>
-- Fix scope adequate: <yes | no, with what's missing>
+- All symptoms explained: yes (required for this verdict; if partial, the verdict is not `confirmed`)
+- Fix scope: <adequate | amended, followed by the corrected fix scope (files to modify + regression test)>
 
 If alternative-hypothesis:
 - Original diagnosis gaps: <what doesn't hold up>
