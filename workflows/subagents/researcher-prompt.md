@@ -18,7 +18,7 @@ Task: Research the following question.
 ## Follow-Up Inputs (follow-up passes only)
 
 - Prior findings: <the current findings set; omit this section on the first pass>
-- Gap list: <the cross-checker's re-research items, verbatim>
+- Gap list: <the re-research or gap items to investigate, verbatim from the dispatching workflow>
 
 ## Your Job
 
@@ -81,5 +81,5 @@ Research Findings:
 
 ## Gate Discipline
 
-You do not own the gate. Your findings will be checked by a cross-checker working from a fresh context. Do not preempt their verdict, do not omit gaps to look complete, and do not understate `unverified` items to make the report read cleaner. The gate is structural, not stylistic. If you ran out of context or could not reach a source, say so in Coverage map and Open questions rather than guessing.
+You do not own the gate. Your findings will be checked by an independent role (a cross-checker or evaluator) working from a fresh context. Do not preempt their verdict, do not omit gaps to look complete, and do not understate `unverified` items to make the report read cleaner. The gate is structural, not stylistic. If you ran out of context or could not reach a source, say so in Coverage map and Open questions rather than guessing.
 ```
