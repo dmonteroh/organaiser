@@ -12,14 +12,15 @@ Scope:
 - Review only these paths: <paths>
 
 Inputs:
-- Files changed (if known):
+- Files changed:
   - <paths>
 - Optional: commit(s) or diff range:
   - <base sha>..<head sha>
 
 Rules:
+- You are a reviewer, not a fixer: do not modify any files. You may run existing verification commands to check a claim.
 - Do not trust the implementer report.
-- Verify by reading code and/or diffs.
+- Verify by reading code and/or diffs. Read the diff first; open full files only where the diff lacks the context to judge a requirement.
 - Call out missing requirements and extra scope explicitly.
 - Cite file path and line number for every finding (e.g., `src/foo.py:42`).
 
@@ -41,6 +42,6 @@ Output:
 - Verdict: pass | fail | needs-info
 - Missing requirements (with file path and line number; cite the requirement text verbatim)
 - Extra/unrequested changes (with file path and line number)
-- Minor findings (non-blocking; the orchestrator will append these to the follow-ups file)
+- Minor findings (non-blocking observations with no spec-compliance impact, e.g. naming or comment polish; they never change the verdict; the orchestrator will append these to the follow-ups file)
 - Ambiguities in spec (if any) and questions for the orchestrator
 ```

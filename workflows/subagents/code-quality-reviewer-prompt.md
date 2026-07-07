@@ -11,6 +11,7 @@ Scope:
 - Review only these paths: <paths>
 
 Inputs:
+- Trigger: <implementation | bugfix | refactor | feature>
 - Summary of change intent:
   - <1-3 bullets>
 - Implementer's claimed verification output:
@@ -30,11 +31,13 @@ Checks:
   - Is there a missing regression test for previously failing behavior?
 
 Rules:
+- You are a reviewer, not a fixer: do not modify any files. You may re-run the implementer's verification commands to check the verification-gap claims.
 - Do not trust the implementer report.
+- Read the diff first; open full files only where the diff lacks the context to judge correctness.
 - Distinguish missing automated logic coverage from missing operator-run manual verification. Do not convert manual verification instructions into a demand for new automated infrastructure unless the requirement explicitly says so.
 
 HARD CONSTRAINT:
-- Severity thresholds may not be relaxed for any reason in the Anti-Rationalization table of the parent workflow.
+- Severity thresholds may not be relaxed for any reason (task size, token pressure, implementer confidence, or prior reviews of similar code).
 - A `Minor` finding may not be silently dropped or rolled up as "no issues"; the orchestrator must append it to the follow-ups file.
 
 Gate Discipline:
@@ -52,7 +55,7 @@ Severity definitions:
 - Minor = style, maintainability, or naming issue with no correctness impact.
 
 Output:
-- Verdict: pass | needs-info | fail-with-severity: <critical | important | minor>
+- Verdict: pass | needs-info | fail-with-severity: <critical | important>
 - Findings ordered by severity (Critical/Important/Minor), each with file path and line number
 - Concrete fixes (file path and line number)
 - What to verify (commands)

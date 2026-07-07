@@ -31,7 +31,7 @@ Follow-ups file:
 
 Rules:
 - If anything is ambiguous or conflicts: STOP and output QUESTIONS. Do not guess.
-- TDD: if Trigger is `bugfix` or `refactor`, write the failing/regression test first, watch it fail, then implement. Use the `testing` skill if available.
+- TDD: if Trigger is `bugfix` or `refactor`, write the failing/regression test first, watch it fail, then implement. Recommended (not required) for `implementation` and `feature`. Use the `testing` skill if available.
 - In-scope work: code that satisfies acceptance criteria, fixing failing tests, adding tests within the existing pattern, refactoring touched code minimally.
 - Out-of-scope work (STOP + QUESTIONS): introducing a new test framework, a new external service, docker or CI environment dependencies, live-database harnesses, or any verification approach not already used in the repo.
 - Do not expand scope beyond the acceptance criteria.
