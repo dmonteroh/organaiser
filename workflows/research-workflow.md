@@ -27,9 +27,10 @@ Structured investigation process that produces evidence-backed findings. Researc
 - Gate type: structured (pass | fail-with-gaps)
 - Constraints:
   - Must not trust the researcher's report; verify key claims independently
-  - Must check for missing sources the researcher didn't consult
+  - Must check for missing sources within the dispatched scope; sources outside that scope are suggestions for the orchestrator, not gaps
   - Must identify unsupported conclusions (claims without cited evidence)
   - Must flag contradictions the researcher may have glossed over
+  - Must tag every failing item in Recommendations as `re-research` or `downgrade` so the orchestrator can route it
 
 ## Evidence Standards
 
@@ -48,39 +49,32 @@ The cross-checker flags any `verified` or `corroborated` claim that lacks suffic
 
 ### Per-task
 
-1. Dispatch `researcher` with research question and scope:
+1. Dispatch `researcher` per its template with the research question and scope:
    - Define what sources to consult (codebase, web, documentation, specific files)
+   - Define what is out of scope
    - Define what the deliverable looks like (comparison table, findings list, recommendation, etc.)
-2. Researcher produces findings report with:
-   - Evidence-level tags on every claim
-   - Coverage map (what was searched, what wasn't)
-   - Contradictions section (or "none found")
-   - Open questions and leads not yet pursued
-3. Dispatch `cross-checker` with the research question + researcher's report:
-   - Independently verify key claims
-   - Check for missing sources
-   - Identify unsupported conclusions
-   - Flag gaps in the coverage map
-4. If cross-checker returns `fail-with-gaps`:
-   - Re-dispatch `researcher` on the named gaps only
-   - When researcher returns, re-run step 3 against the updated findings
-   - Bounded by the loop cap in the Rules below
-5. If cross-checker returns `pass`:
-   - Orchestrator synthesizes the final report from verified findings (consolidate and trim, do not add new claims)
-6. Mark task `ready`
+2. Researcher returns the findings report defined in its template: evidence-tagged findings with citations, contradictions, coverage map, and open questions and leads.
+3. Dispatch `cross-checker` per its template with the research question, the dispatched scope, and the researcher's findings and citations. On a re-check, also pass the cross-checker's own prior report; the re-check covers only new or changed findings plus previously flagged items.
+4. If cross-checker returns `fail-with-gaps`, resolve each Recommendations item by its tag:
+   - `downgrade`: relabel the named claim `unverified` in the findings. Relabels add no new claims, so they need no researcher dispatch and no re-check.
+   - `re-research`: re-dispatch `researcher` in follow-up mode on the named items only, passing the current findings and the item list. Merge the returned delta into the findings, then re-run step 3 as a re-check.
+   - If every item was `downgrade`, apply them and proceed to step 5.
+   - If the follow-up cap (Rules below) is reached and items still fail, relabel each remaining failing item `unverified` with an explicit "not confirmed" note and proceed to step 5.
+5. When the cross-checker returns `pass`, or step 4 resolved all remaining items by downgrade or cap: orchestrator synthesizes the final report from the findings (consolidate and trim, do not add new claims, carry all evidence labels and "not confirmed" notes).
+6. Mark task `ready`.
 
 ### Post-all-tasks
 
-1. If multiple research tasks: check for contradictions across task findings
-2. Produce consolidated research summary with cross-references
-3. Mark all tasks `integrated`
+1. If multiple research tasks: check for contradictions across task findings. Document each in the consolidated summary with both positions and their citations; do not silently pick a side. If a cross-task contradiction undermines a `verified` or `corroborated` claim, downgrade that claim to `unverified` and list the conflict as an open question.
+2. Produce consolidated research summary with cross-references.
+3. Mark all `ready` tasks `integrated`.
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
-- Maximum follow-up rounds: 2. If gaps persist after 2 rounds, include remaining gaps as `unverified` items in the final report with explicit "not confirmed" labels.
+- Maximum follow-up rounds: 2. A round is one scoped researcher re-dispatch plus one cross-checker re-check; downgrade-only resolutions do not count against the cap. If gaps persist after 2 rounds, include them as `unverified` items with explicit "not confirmed" notes; the task still completes.
 - The researcher must never modify project files. Research output goes into the report, not the codebase.
-- The cross-checker operates with a fresh context: do not pass the researcher's reasoning, only their findings and citations.
+- The cross-checker operates with a fresh context: pass the dispatched scope and the researcher's findings and citations, never the researcher's reasoning. On re-checks, also pass the cross-checker's own prior report for scoping.
 
 ## Anti-Rationalization Rules
 
@@ -101,7 +95,7 @@ The cross-checker flags any `verified` or `corroborated` claim that lacks suffic
 ### Required
 
 - All research tasks have findings with evidence-level tags
-- Cross-checker has verified key claims and returned `pass`
+- Cross-checker verified key claims and returned `pass`, or the follow-up cap was reached and every remaining flagged item is labeled `unverified` with a "not confirmed" note
 - Coverage map is complete (what was searched and what wasn't)
 - All `verified` and `corroborated` claims have citations
 - Open questions and unverified items are explicitly labeled
@@ -123,8 +117,17 @@ The following phrases may never appear in research completion reports:
 Before reporting research complete, the orchestrator must verify:
 
 1. Every factual claim has a citation or is explicitly marked `inferred`/`unverified`.
-2. The cross-checker ran AFTER the final researcher output (not on an earlier draft).
+2. The cross-checker ran AFTER the final researcher output (not on an earlier draft). Orchestrator relabels (downgrades and cap-exhaustion notes) add no claims and do not require a re-check.
 3. The coverage map reflects what was actually searched, not what was planned to be searched.
 4. Contradictions between sources are documented, not silently resolved.
 5. No forbidden claims appear in the report.
 
+If check 2 fails, re-run the cross-checker as a re-check scoped to the findings it has not seen. If any other check fails, fix it during synthesis (labels, citations, phrasing) without adding new claims, then re-run this self-check.
+
+## Related Workflows
+
+- **product-spec-workflow**: Upstream. Specs that end `needs-research` route their missing user, domain, or market evidence here.
+- **gap-analysis-workflow**: Upstream. Investigate classifications route here when coverage cannot be determined from the map.
+- **roadmap-health-workflow**: Upstream. Investigate actions on roadmap items route here.
+- **decision-workflow**: Parent or downstream. May invoke this workflow to gather evidence on individual options; research findings feed decision records.
+- **spike-workflow**: Sibling. Use a spike when the question needs hands-on experimentation rather than reading sources; a spike left inconclusive after its pass cap may be restructured as a research task here.
