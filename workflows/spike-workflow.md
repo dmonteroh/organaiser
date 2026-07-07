@@ -51,42 +51,39 @@ Every spike must define these up front before exploration begins:
 ### Per-task
 
 1. Define the spike contract (question, hypothesis, scope/time box, success/failure signals)
-2. Dispatch `explorer` with the spike contract:
-   - Work within scope box
-   - Document findings incrementally
-   - Stop at scope boundary or when the question is answered, whichever comes first
-3. Barrier: confirm explorer session exited
-4. Dispatch `spike-reviewer` to assess findings:
-   - Did the spike answer the question?
-   - What was learned?
-   - What remains unknown?
-   - Is there enough evidence for the decision gate?
-   - Route on the verdict: `question-answered` goes to the decision gate (step 7); `inconclusive` goes to step 5; `needs-more-exploration` goes to step 6.
+2. Dispatch `explorer` with the spike contract. Duties and output format are defined in the template.
+3. Barrier: confirm the explorer session exited, then diff the repository against its pre-spike state. Changes outside the scope box are a contract violation: report them to the operator before dispatching the reviewer, and do not revert or delete anything without operator approval.
+4. Dispatch `spike-reviewer` with the spike contract and the explorer's report (on a follow-up pass, include all prior reports). Duties and output format are defined in the template. Route on the verdict:
+   - `question-answered` goes to the decision gate (step 7)
+   - `inconclusive` goes to step 5
+   - `needs-more-exploration` goes to step 6
 5. If spike-reviewer returns `inconclusive`:
-   - Orchestrator reviews: is a second exploration pass worth the cost?
-   - If yes: narrow the question, dispatch `explorer` for targeted follow-up, then go to step 3
+   - If the exploration-pass cap is already reached: proceed to the decision gate (step 7) with partial findings.
+   - Otherwise the orchestrator reviews: is a second exploration pass worth the cost?
+   - If yes: dispatch `explorer` in follow-up mode targeting the reviewer's `Missing for decision` items (same contract, same scope box, narrowed target), then go to step 3
    - If no: proceed to decision gate with partial findings
-6. If spike-reviewer returns `needs-more-exploration`:
-   - Escalate to operator: extend the time box or proceed with current findings?
+6. If spike-reviewer returns `needs-more-exploration`, escalate to operator: extend the time box or proceed with current findings?
+   - Extend: update the time box in the spike contract, dispatch `explorer` in follow-up mode targeting the reviewer's `Missing for decision` items, then go to step 3. Each operator extension authorizes exactly one additional pass beyond the cap.
+   - Proceed: go to the decision gate (step 7) with current findings.
 7. Decision gate: orchestrator (or operator) decides:
    - **Adopt**: Findings are positive. Create a follow-up task, refine it through task-refinement-workflow, then build it under dev-workflow. Spike code is reference only, not promoted directly.
    - **Adapt**: Findings are partially positive. Adjust the approach based on what was learned, then create a follow-up task with the adapted design, refine it through task-refinement-workflow, and build it under dev-workflow.
-   - **Abandon**: Findings disprove the hypothesis or reveal unacceptable costs. Document what was learned for future reference. Propose deleting the spike code and wait for explicit operator approval before deleting anything.
+   - **Abandon**: Findings disprove the hypothesis, reveal unacceptable costs, or the question remains unanswered after the exploration-pass cap. Document what was learned for future reference. If the question still matters, create a follow-up task under research-workflow. Propose deleting the spike code and wait for explicit operator approval before deleting anything.
 8. Record decision with rationale and link to findings
 9. Resolve spike artifacts: propose which scratch code to keep as reference and which to delete, then delete only after explicit operator approval. Never delete spike code unilaterally.
 10. Mark task `ready`
 
 ### Post-all-tasks
 
-1. If multiple spikes: check for contradictory findings across spikes
+1. If multiple spikes: check for contradictory findings across spikes. If a contradiction is found, surface it to the operator with both spike records; the affected tasks stay `ready` (not `integrated`) until the operator resolves which finding stands or spawns a decision-workflow task.
 2. Confirm every spike artifact is resolved: each scratch directory is either retained as marked reference or deleted with operator approval. Do not delete without approval.
-3. Mark all tasks `integrated`
+3. Mark all remaining `ready` tasks `integrated`
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - The decision gate (step 7) is mandatory. Every spike ends with adopt, adapt, or abandon. "Let's keep exploring" is not a valid outcome. Either extend the time box explicitly or decide.
-- Maximum exploration passes: 2. If two passes can't answer the question, the spike is inconclusive. Document findings and abandon or restructure as a research task.
+- Maximum exploration passes: 2, unless the operator explicitly extends the time box at step 6; each extension authorizes exactly one additional pass. If the cap is reached and the question is still unanswered, proceed to the decision gate with partial findings; the usual outcome is abandon, with a research-workflow follow-up task if the question still matters.
 - Spike code must NEVER be promoted to production directly. "Adopt" means "create a new task to build it properly," not "merge the spike."
 - The spike-reviewer does NOT review code quality. Spike code is throwaway. Reviewing its quality wastes the time the spike was designed to save.
 - Spike code is never deleted without explicit operator approval. The orchestrator proposes what to delete; the operator decides. Until approved, retain the code and label it as throwaway.
@@ -115,7 +112,7 @@ Every spike must define these up front before exploration begins:
 - Decision gate produced an explicit adopt/adapt/abandon with rationale
 - Findings documented (what was learned, what remains unknown)
 - Spike artifacts resolved (code marked as reference-only, or deleted only with explicit operator approval)
-- If adopt/adapt: follow-up task created (refined via task-refinement-workflow, built under dev-workflow)
+- If adopt/adapt: follow-up task created and routed into task-refinement-workflow (built under dev-workflow after refinement)
 
 ### Forbidden Claims
 
@@ -136,6 +133,8 @@ Before marking a spike as complete, the orchestrator verifies:
 2. If adopt/adapt: a follow-up task exists and references the spike findings.
 3. Any spike-code deletion was explicitly approved by the operator.
 4. No forbidden claims appear in the completion report.
+
+If a check fails, do not mark the task `ready`. Route back to the owning step: missing documentation or rationale to step 8, missing follow-up task to step 7's outcome actions, unapproved deletion or unresolved artifacts to step 9, forbidden claims to rewriting the completion report.
 
 ## Related Workflows
 

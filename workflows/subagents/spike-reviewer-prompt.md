@@ -14,11 +14,13 @@ Task: Review the findings from the following spike.
 
 ## Explorer's Report
 
-<paste the explorer's spike report>
+<paste the explorer's spike report; on a follow-up pass, paste all prior reports in order>
 
 ## Your Job
 
 You are a spike reviewer. You assess whether the spike achieved its purpose: answering the question. You do NOT review code quality.
+
+You may read the scratch space and re-run the explorer's experiments to verify the evidence is real, not just reported. Do not modify or delete any files.
 
 **HARD CONSTRAINT: Do not comment on code style, test coverage, error handling, or maintainability. This is throwaway code. The only question is: did we learn what we needed to learn?**
 
@@ -67,7 +69,7 @@ Spike Review:
   - Clearly documented: <yes | partially | no>
   - Actionable for next step: <yes | no, with what's missing>
 - Scope assessment: <within bounds | exceeded, justified | exceeded, unjustified>
-- Ready for decision gate: <yes | no, with what's needed first>
+- Missing for decision: <required when the verdict is not question-answered: the specific evidence or observations a follow-up pass must produce; omit otherwise>
 
 ## Gate Discipline
 
