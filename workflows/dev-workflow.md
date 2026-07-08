@@ -19,7 +19,8 @@ Two-stage review pipeline with strict gate ordering: spec compliance first, then
 - Constraints:
   - Must write the failing test first when TDD is active (follow the testing skill's iron laws if that skill is available)
   - Must commit work before reporting back
-  - Must run the verification commands listed in the task packet and include the output verbatim in the report
+  - Must run the verification commands listed in the task packet, write the full raw output to the verification log file, and quote failures plus the final summary lines verbatim in the report
+  - Must rebuild any failed file edit from a fresh read of the target file; edits are never reconstructed from memory of an earlier read
   - Must include self-review checklist results in the report
   - If blocked or ambiguous: STOP and output QUESTIONS, do not guess
   - In-scope work: code that satisfies acceptance criteria, fixing failing tests, adding tests within the existing pattern, refactoring touched code minimally
@@ -48,7 +49,7 @@ Two-stage review pipeline with strict gate ordering: spec compliance first, then
 - Constraints:
   - Only dispatched after spec compliance passes
   - Reviews correctness, maintainability, safety, test quality, and verification gaps
-  - Verification-gap check must confirm the implementer's claimed verification actually ran and the output matches the code as shipped
+  - Verification-gap check must confirm the implementer's claimed verification actually ran (reading the verification log against the report summary, re-running commands when in doubt) and the output matches the code as shipped
   - Minor findings are recorded but do not block the gate; they must be written to the follow-ups file (see Sequence)
   - Must distinguish missing automated logic coverage from missing operator-run manual verification; do not convert manual verification instructions into a demand for new automated infrastructure unless the requirement explicitly says so
 
@@ -56,14 +57,14 @@ Two-stage review pipeline with strict gate ordering: spec compliance first, then
 
 ### Per-task
 
-1. Dispatch `implementer` with task packet (full requirements text, not file references; include the verification commands the implementer must run and the follow-ups file path).
+1. Dispatch `implementer` with the task packet. Inline verbatim the parts that must never be lossy: acceptance criteria, hard constraints, and the verification commands the implementer must run. Pass the task brief by path as the canonical source for everything else (a path can be re-read after context loss; inlined prose cannot). Include the follow-ups file path and the verification log path.
 2. If implementer returns QUESTIONS: answer clearly, then re-dispatch from step 1.
-3. Verification barrier: wait for the implementer subagent to finish and exit, confirm no in-flight tool calls remain, confirm the implementer's report includes self-review checklist results and verbatim verification output. If either artifact is missing, re-dispatch `implementer` to supply only the missing artifacts (no re-implementation), then repeat this step.
+3. Verification barrier: wait for the implementer subagent to finish and exit, confirm no in-flight tool calls remain, confirm the implementer's report includes self-review checklist results and the verification summary (failures plus final summary lines), and confirm the full output was written to the verification log. If any artifact is missing, re-dispatch `implementer` to supply only the missing artifacts (no re-implementation), then repeat this step.
 4. If the implementer-reported verification failed: re-dispatch `implementer` with failure evidence and narrowed scope, return to step 3.
 5. Dispatch `spec-reviewer` with requirements + changed files (and diff range when available).
 6. If spec-reviewer returns `needs-info`: escalate the ambiguity to the operator and resolve it explicitly. If the resolution changes the acceptance criteria or requires code changes, restart from step 1 with the clarified packet; otherwise re-dispatch `spec-reviewer` with the clarified requirements (return to step 5). Do not re-run the implementer for a clarification that leaves the code untouched.
 7. If spec-reviewer returns `fail`: re-dispatch `implementer` with spec-reviewer findings, return to step 3.
-8. Dispatch `quality-reviewer` with change intent + trigger + changed files + implementer's claimed verification output.
+8. Dispatch `quality-reviewer` with change intent + trigger + changed files + implementer's verification summary + the verification log path.
 9. If quality-reviewer returns `needs-info`: escalate the ambiguity to the operator and resolve it explicitly. If the resolution changes the acceptance criteria or requires code changes, restart from step 1 with the clarified packet; otherwise re-dispatch `quality-reviewer` with the clarified context (return to step 8).
 10. If quality-reviewer returns `fail-with-severity: critical` or `fail-with-severity: important`: re-dispatch `implementer` with quality-reviewer findings, return to step 3.
 11. Append any `minor` findings from either reviewer to the follow-ups file (see Follow-ups). Each entry must include source subagent, file path with line number, finding text, and suggested fix.
@@ -73,7 +74,7 @@ Two-stage review pipeline with strict gate ordering: spec compliance first, then
 
 1. Orchestrator runs full project verification (all tests, linting, type checks).
 2. If full project verification fails: dispatch `implementer` with the failure evidence for targeted fixes, return to Post-all-tasks step 1.
-3. If multi-task execution: dispatch `quality-reviewer` with full implementation scope (all tasks combined). Reuses the per-task `quality-reviewer` template; dispatch with all changed paths and a combined `Summary of change intent` listing every task.
+3. If multi-task execution, or if any `implementer` fix was dispatched during this Post-all-tasks sequence: dispatch `quality-reviewer` with full implementation scope (all tasks combined, plus any post-all-tasks fixes). Reuses the per-task `quality-reviewer` template; dispatch with all changed paths and a combined `Summary of change intent` listing every task and fix. No implementer change may reach `integrated` without passing quality review, regardless of task count.
 4. If the cross-task quality-reviewer returns `needs-info`: escalate to the operator, resolve explicitly, re-dispatch from Post-all-tasks step 3.
 5. If the cross-task quality-reviewer finds issues at blocking severity: dispatch `implementer` for targeted fixes, return to Post-all-tasks step 1.
 6. Reconcile any conflicts across task outputs.
@@ -87,12 +88,19 @@ Two-stage review pipeline with strict gate ordering: spec compliance first, then
 - Content: append-only. One entry per minor finding, dated. Required fields: source subagent (`spec-reviewer` | `quality-reviewer`), file path with line number, finding text, suggested fix.
 - The orchestrator must not roll minor findings into the completion report as resolved. The follow-ups file is the canonical record for operator review later.
 
+### Verification log
+
+- Path: default is `<task-brief-name>-verification.log` in the same directory as the task brief, unless the operator supplies a different path in the task packet.
+- Content: append-only. The implementer writes the full raw output of every verification command there, under a dated header per dispatch. The report quotes only failures and the final summary lines verbatim; the log holds the rest.
+- Purpose: keeps bulky command output out of subagent transcripts (where it accelerates context compaction) while preserving the raw evidence for the quality-reviewer's verification-gap check.
+
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - Re-dispatch loops that follow an implementer fix (per-task steps 4, 7, 10) resume from the verification barrier (step 3) to ensure fresh state.
+- Every re-dispatch is a fresh subagent context carrying the full original task packet plus the new findings or failure evidence, never a continuation of a prior subagent conversation. A fresh context re-reads current file state instead of trusting stale memory of it.
 - The orchestrator does not interpret "close enough": a gate either passes or it doesn't.
-- Maximum loop iterations per gate: 3. If a gate fails 3 times, escalate to the operator with full context including all prior findings and fix attempts. This cap also applies to the post-all-tasks verification loop and the cross-task review gate.
+- Maximum loop iterations per gate: 3. If a gate fails 3 times, escalate to the operator with full context including all prior findings and fix attempts. This cap also applies to the post-all-tasks verification loop and the cross-task review gate. The QUESTIONS loop (per-task step 2) and the missing-artifacts barrier loop (per-task step 3) carry the same cap: after 3 rounds each, escalate to the operator instead of re-dispatching.
 - Spec compliance must pass before code quality review starts. Never reverse this order.
 - A task cannot move to `ready` while any review has open blocking findings.
 - The orchestrator must not resolve verification-scope ambiguity by assumption. If a requirement or review comment could reasonably mean either automated coverage or operator-run manual verification, ask the operator before widening the packet.
@@ -122,9 +130,9 @@ Two-stage review pipeline with strict gate ordering: spec compliance first, then
 
 - All tasks marked `integrated`
 - All per-task gate sequences completed with `pass` verdicts for every gate
-- Post-all-tasks sequence completed (including cross-task review for multi-task executions)
+- Post-all-tasks sequence completed (including cross-task review whenever Post-all-tasks step 3 requires it)
 - Final verification commands executed with fresh output AFTER the last change
-- All verification output captured and included in the final report
+- All verification output captured: failures and final summary lines in the final report, full raw output in the verification log
 - All minor findings written to the follow-ups file with required fields
 
 ### Forbidden Claims
@@ -155,7 +163,7 @@ Before reporting completion, the orchestrator must verify:
 
 ## Related Workflows
 
-- **task-refinement-workflow**: Upstream. Implementation-ready briefs and task packets arrive from there; the follow-ups file convention travels with the packet.
+- **task-refinement-workflow**: Upstream. Implementation-ready briefs and task packets arrive from there; the follow-ups file convention travels with the packet. This workflow assumes briefs that respect task-refinement's sizing budget; an oversized brief is a reason to send the task back for splitting, not to dispatch it.
 - **spike-workflow**: Upstream. Adopt/adapt spike outcomes are refined through task-refinement before arriving here; spike code is reference only, never promoted directly.
 - **debugging-workflow**: Upstream for unexplained bugs. When a bugfix task's root cause is unknown, prove it there first; the confirmed diagnosis becomes this workflow's task packet evidence.
 - **decision-workflow**: Use when a `needs-info` escalation turns out to hinge on a significant architectural or strategic decision rather than a scope clarification.

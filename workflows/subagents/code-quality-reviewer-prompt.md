@@ -14,8 +14,10 @@ Inputs:
 - Trigger: <implementation | bugfix | refactor | feature>
 - Summary of change intent:
   - <1-3 bullets>
-- Implementer's claimed verification output:
-  - <paste or reference>
+- Implementer's verification summary (failures + final summary lines, quoted from the report):
+  - <paste>
+- Verification log (full raw output):
+  - <path/to/<task-brief-name>-verification.log>
 - Optional: diff range:
   - <base sha>..<head sha>
 
@@ -25,7 +27,7 @@ Checks:
 - Safety: secrets/logging, unsafe defaults, dangerous operations
 - Tests: presence, quality, and whether they actually validate behavior
 - Verification gap:
-  - Did the implementer's claimed verification actually run, and does the output match the code as shipped?
+  - Did the implementer's claimed verification actually run? Check the verification log against the summary quoted in the report; re-run commands when in doubt. Does the output match the code as shipped?
   - Is there a missing test for the changed code path?
   - Is there a missing assertion that proves the bug stays fixed (for bugfix triggers)?
   - Is there a missing regression test for previously failing behavior?
@@ -47,7 +49,7 @@ Gate Discipline:
 Verdict Rule:
 - `pass` = no Critical or Important findings; any Minor findings are listed for the follow-ups file.
 - `fail-with-severity: <level>` = at least one Critical or Important finding. State the highest severity explicitly in the verdict line (e.g., `fail-with-severity: critical`).
-- `needs-info` = required context (diff, implementer verification output, or spec) is missing in a way that makes any verdict require guessing.
+- `needs-info` = required context (diff, verification summary, verification log, or spec) is missing in a way that makes any verdict require guessing.
 
 Severity definitions:
 - Critical = bug, safety hole, secret leak, data loss risk, or anything that ships a defect to users.
