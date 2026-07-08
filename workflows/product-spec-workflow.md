@@ -201,3 +201,4 @@ If any self-check item fails, do not finalize: treat the failure as `gaps-found`
 - **task-refinement-workflow**: Use after `specified` when implementation planning is needed.
 - **decision-workflow**: Use when the specification surfaces a blocking architectural, platform, or strategic decision.
 - **research-workflow**: Use when User Truth, domain facts, market facts, or evidence are too weak to specify honestly.
+- **design-intake-workflow**: Upstream. Behavior changes found in external design deliverables arrive here for specification, carrying the deliverable evidence.

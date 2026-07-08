@@ -263,6 +263,7 @@ If any check fails, implementation dispatch is forbidden.
 - **product-spec-workflow**: Upstream. A `specified` product intent arrives here for implementation planning.
 - **spike-workflow**: Upstream. Adopt/adapt decisions create follow-up tasks refined here before implementation.
 - **gap-analysis-workflow**: Upstream. Newly created tasks from gap analysis are made implementation-ready here.
+- **design-intake-workflow**: Upstream. Presentation-scoped raw tasks drafted from external design deliverables are made implementation-ready here.
 - **dev-workflow**: Downstream. Implementation-ready briefs are built there; the three appended sections travel with the task packet. The refinement log does not travel: it is an operator-facing record, not implementer input.
 - **decision-workflow**: Use when an operator-required item is a significant architectural or strategic decision that deserves its own decision record.
 
