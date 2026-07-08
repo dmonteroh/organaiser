@@ -33,6 +33,7 @@ This workflow produces enriched task documents, not code. It is a pre-implementa
   - Must classify remaining items as operator-required or self-resolvable
   - Must not weaken analyst-identified risks without explicit justification
   - Owns the three required task-brief sections: must append `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` on every non-split pass
+  - Owns brief hygiene: must move refinement narrative to the refinement log on every non-split pass (see Brief hygiene)
 
 ## Confidence Dimensions
 
@@ -51,12 +52,23 @@ A task is **implementation-ready** when all dimensions are `confident`, zero blo
 
 ## Task Sizing Rules
 
-A task that passes all confidence dimensions can still fail if it exceeds agent working capacity. The analyst must flag `agent implementability` as `blocked` if **any** of these hold:
+A task that passes all confidence dimensions can still fail if it exceeds agent working capacity. Each sizing measure has a **target** (the size that converges reliably) and a **hard cap** (the size past which tasks do not converge):
 
-- The task spans **more than 2 concern axes** (e.g., schema + service + server + routes is 4 axes, too many)
-- The acceptance criteria list exceeds **12 items**
-- The implementation sketch requires creating or modifying **more than 10 files**
-- The task requires the agent to hold **multiple independent failure classes** in context simultaneously (e.g., auth wiring + date parsing + MCP protocol compliance)
+| Measure                     | Target | Hard cap     |
+| --------------------------- | ------ | ------------ |
+| Concern axes                | 1      | more than 2 (e.g., schema + service + server + routes is 4 axes, over cap)                       |
+| Acceptance criteria         | 8      | more than 12 |
+| Files created or modified   | 6      | more than 10 |
+| Independent failure classes | 1      | more than 2 (e.g., auth wiring + date parsing + MCP protocol compliance is 3 classes, over cap)  |
+| Files in the read set       | 10     | more than 20 |
+
+Read-set numbers are recorded, not estimated: the analyst counts the files it actually read during the confidence check and notes their approximate line counts.
+
+The analyst rates `agent implementability` from these measures:
+
+- Any hard cap breached: rate `blocked`.
+- Over target on any measure but under every cap, with no recorded acceptance: rate `uncertain`. The architect must either split anyway or record a one-line acceptance in the `Sizing Budget` (e.g., "10 ACs accepted: single axis, all files under 100 lines").
+- Every measure within target, or over-target only on measures whose recorded acceptance still matches the final sketch: rate `confident`, absent other evidence against it.
 
 When `agent implementability` is `blocked`, the architect **must split the task** into subtasks, each with a single primary concern. Splitting is not a failure; it is the correct resolution. A well-scoped subtask that an agent can finish is worth more than an ambitious task that fails 4 times.
 
@@ -68,7 +80,7 @@ When `agent implementability` is `blocked`, the architect **must split the task*
 
 ### Splitting guidelines
 
-- Each subtask should ideally have **one concern axis** (e.g., "schema + migrations", "service layer", "server composition + routes"). The sizing rule above allows up to 2 axes, but a single axis reduces convergence risk.
+- Each subtask should ideally have **one concern axis** (e.g., "schema + migrations", "service layer", "server composition + routes"). The hard cap allows up to 2 axes, but a single axis is the target and reduces convergence risk.
 - Subtasks may depend on each other; document the dependency order
 - Shared test infrastructure can be a separate subtask
 - Prefer 6–10 ACs per subtask over 18+ ACs in one task
@@ -84,7 +96,7 @@ Append this section to the refined task brief before marking it implementation-r
 - **Reference pattern**: specific architectural patterns the implementer must follow
 - **Negative scope**: explicit list of what must NOT be built in this task
 - **Deployment context reminder**: environment/runtime assumptions and rollout context that constrain implementation
-- **Playbook-like instructions**: ordered, unambiguous implementation steps the implementer can follow without re-deriving the plan. Write them so a smaller or lower-effort model can execute them.
+- **Playbook-like instructions**: ordered, unambiguous implementation steps the implementer can follow without re-deriving the plan. Write them so a smaller or lower-effort model can execute them. For any file in the read set over roughly 500 lines, name the specific functions or regions to read and modify, not just the file path, so the implementer never has to hold the whole file in context.
 
 If this section is missing, the task is not implementation-ready and may not be dispatched to an implementing agent.
 
@@ -96,8 +108,10 @@ Append this section to the refined task brief before marking it implementation-r
 - **Acceptance criteria count**: total AC count after refinement
 - **Estimated file touch count**: files expected to be created or modified
 - **Independent failure classes**: distinct areas that could fail separately during implementation
+- **Read scope**: number of files in the implementer's read set and the largest file's approximate line count, taken from the analyst's Files Read list, not estimated
+- **Band per measure**: mark each value `within-target` or `over-target` against the sizing table. Every `over-target` value carries the architect's one-line acceptance
 
-If any budget exceeds the sizing thresholds in this workflow, the task is not implementation-ready and must follow the split path.
+If any measure breaches its hard cap, the task is not implementation-ready and must follow the split path. Over-target values under the cap are allowed only with a recorded acceptance.
 
 ### Required section in the task brief: `Execution Gates`
 
@@ -109,6 +123,14 @@ Append this section to the refined task brief before marking it implementation-r
 - **Follow-up tasks**: child tasks created by splitting, if any
 
 Dependency findings may not remain only in narrative prose. If a dependency or ordering constraint is real enough to affect implementation, it must be recorded in `Execution Gates` and reflected in task metadata/order before the workflow completes.
+
+### Brief hygiene: the refinement log
+
+The refined brief is dispatched to the implementer verbatim, so it must contain only implementer-facing content: task description, acceptance criteria, the final implementation sketch, the three required sections, and decisions stated as terse constraints (e.g., "trailing-edge; returns undefined; no cancel()").
+
+The refinement trail moves to a companion file `<task-brief-name>-refinement-log.md` next to the brief: analyst reports, architect review rationale, operator Q&A, and superseded alternatives. The brief may reference the log; it may not inline it. If a decision needs justification in the brief, one sentence is the limit; the full rationale lives in the log.
+
+The architect owns brief hygiene on every non-split pass. A brief that still carries refinement narrative is not implementation-ready.
 
 ## Sequence
 
@@ -122,8 +144,9 @@ Dependency findings may not remain only in narrative prose. If a dependency or o
    - Return an `Overall` verdict per the analyst template's Verdict Rule
 2. Dispatch `architect` with the full analyst report. The architect always runs, even on a clean report, because the architect owns the three required task-brief sections. Scope the pass by the analyst verdict:
    - `split-required`: go to step 3 before drafting any sections
-   - `needs-review` or `blocked`: full review. Answer questions where codebase signal is sufficient, decide ambiguous scope boundaries, classify remaining unresolved items as `operator-required` or `resolved`, update the task document with decisions and rationale, then append `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` to the task brief
+   - `needs-review` or `blocked`: full review. Answer questions where codebase signal is sufficient, decide ambiguous scope boundaries, classify remaining unresolved items as `operator-required` or `resolved`, record decisions in the task document as terse constraints with the rationale in the refinement log, then append `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` to the task brief
    - `implementation-ready`: light pass. Validate the sketch, then draft and append the three sections. Do not manufacture findings to review
+   - On every non-split pass, finish by applying brief hygiene: move any refinement narrative out of the brief into the refinement log
 3. Split branch (only when `agent implementability` is `blocked`):
    - Create child tasks sized to fit the sizing rules
    - Update the parent task to `umbrella`/`superseded-by-children` status so it is non-dispatchable
@@ -133,15 +156,16 @@ Dependency findings may not remain only in narrative prose. If a dependency or o
 4. If the architect returned `needs-operator` or `operator-escalated`: escalate to operator with full context
    - Present each item with the architect's analysis of why it couldn't be self-resolved
    - Operator provides answers/decisions
-   - Update the task document with operator decisions
+   - Update the task document with operator decisions as terse constraints; record the full exchange in the refinement log
    - If an operator decision requires a split, return to step 2 so the architect executes it
-5. Dispatch `analyst` for final confidence check, unless the fast path applies. Fast path: skip this step only when the first analyst pass returned `implementation-ready`, the architect changed nothing beyond appending the three sections, and no operator-required items existed. The fast path never applies when the architect returned `needs-another-pass`; in that case include the architect's named investigation items in the dispatch.
+5. Dispatch `analyst` for final confidence check, unless the fast path applies. Fast path: skip this step only when the first analyst pass returned `implementation-ready`, the architect changed nothing beyond appending the three sections and applying brief hygiene, and no operator-required items existed. The fast path never applies when the architect returned `needs-another-pass`; in that case include the architect's named investigation items in the dispatch.
    - Include the first-pass analyst report and the architect review in the dispatch, and state that this is the final confidence check
    - The analyst re-reads only the files affected by architect/operator decisions and carries forward unchanged first-pass findings
    - Verify all dimensions are now `confident`
    - Verify implementation sketch is still valid after decisions
    - Confirm zero blockers and no unanswered questions remain
-   - Validate `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` against the final sketch
+   - Validate `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` against the final sketch, including the sizing bands and any over-target acceptances
+   - Verify brief hygiene: the brief contains only implementer-facing content and the refinement trail is in the refinement log
 6. If the final confidence check fails: go to step 2 with the new findings (see loop cap in Rules)
 7. Orchestrator runs the Completion Self-Check and marks the task `implementation-ready`. This is an orchestrator action; no new subagent dispatch is needed.
 
@@ -173,8 +197,9 @@ Dependency findings may not remain only in narrative prose. If a dependency or o
 | "The operator won't have context for this question"     | Frame the question with full context. The operator's job is to make product/business decisions, not to reverse-engineer your analysis.                                | operator escalation      |
 | "The implementation sketch is obvious, I'll skip it"    | If it's obvious, it takes 2 minutes to write. If it's not, you just proved why it's needed.                                                                           | analyst confidence check |
 | "Splitting this task will create too many small tasks"  | A task that fails 4 times costs more than 3 subtasks that each succeed on the first try. Agent throughput is maximized by right-sized work, not by ambitious scoping. | agent implementability   |
-| "The agent should be able to handle all of this"        | Past evidence shows tasks beyond the sizing thresholds (3+ concern axes, 13+ ACs) do not converge. Design for the agent you have, not the agent you wish you had.     | agent implementability   |
-| "The architect barely changed anything, skip the final check" | The fast path is defined precisely: clean first pass, no changes beyond the three appended sections, no operator items. Any decision, scope change, or operator answer invalidates it. Check the condition, not the vibe. | final confidence check   |
+| "The agent should be able to handle all of this"        | Past evidence shows tasks beyond the hard caps (3+ concern axes, 13+ ACs) do not converge. Over-target tasks need a recorded acceptance or a split. Design for the agent you have, not the agent you wish you had. | agent implementability   |
+| "The architect barely changed anything, skip the final check" | The fast path is defined precisely: clean first pass, no changes beyond the three appended sections and brief hygiene, no operator items. Any decision, scope change, or operator answer invalidates it. Check the condition, not the vibe. | final confidence check   |
+| "The rationale is useful context, leave it in the brief" | The implementer executes constraints; it does not re-litigate decisions. Narrative in the brief inflates the dispatch packet and buries the acceptance criteria. It belongs in the refinement log. | brief hygiene            |
 
 **Enforcement rule:** Before skipping any gate, the orchestrator must check this table. If any rule matches, the gate cannot be skipped.
 
@@ -186,8 +211,9 @@ Dependency findings may not remain only in narrative prose. If a dependency or o
 - All dispatchable tasks have a file-level implementation sketch
 - Zero blockers remain (all resolved by architect or operator)
 - All questions answered with recorded decisions and rationale
-- Task document updated with all findings, decisions, and the final implementation sketch
+- Task document updated with all decisions (as terse constraints) and the final implementation sketch; findings and rationale recorded in the refinement log
 - Task brief includes finalized `Implementation Constraints`, `Sizing Budget`, and `Execution Gates`
+- Task brief contains only implementer-facing content; the refinement trail lives in `<task-brief-name>-refinement-log.md`
 - Any task that was split has child task documents created, parent task status changed to non-dispatchable umbrella/superseded, and execution order updated accordingly
 - Any discovered dependency gate is reflected in structured task metadata/order, not only prose
 
@@ -211,10 +237,11 @@ Before marking a task as implementation-ready, the orchestrator must verify:
 2. Every confidence dimension has a recorded rating with supporting evidence.
 3. The implementation sketch names specific files and describes specific changes.
 4. All operator-required items were actually presented to and resolved by the operator.
-5. The final confidence check was run AFTER all decisions were made (not before), or the fast path condition was met: first analyst pass returned `implementation-ready`, the architect changed nothing beyond appending the three sections, and no operator-required items existed.
+5. The final confidence check was run AFTER all decisions were made (not before), or the fast path condition was met: first analyst pass returned `implementation-ready`, the architect changed nothing beyond appending the three sections and applying brief hygiene, and no operator-required items existed.
 6. `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` are appended to the task brief (not left in a separate refinement artifact).
-7. If the task exceeded sizing thresholds, the parent was not marked implementation-ready and was converted into a split-required or umbrella/superseded state.
+7. If the task breached a sizing hard cap, the parent was not marked implementation-ready and was converted into a split-required or umbrella/superseded state. Any over-target value under its cap carries a recorded acceptance.
 8. If the refinement identified dependency/order gates, those gates were reflected in task metadata/order before dispatch.
+9. The brief contains only implementer-facing content; analyst reports, rationale, and operator Q&A are in the refinement log, not the brief.
 
 ## Dispatch Gate
 
@@ -227,6 +254,7 @@ Before any implementing agent is dispatched, the orchestrator must verify all of
 5. Any child tasks referenced by the task brief actually exist as task documents.
 6. Any prerequisite tasks listed in `Execution Gates` are complete, or the operator has explicitly approved starting before they finish.
 7. Execution order metadata matches the refined task state; no parent umbrella task remains dispatchable while its child packets are the intended implementation path.
+8. The brief carries no refinement narrative (analyst reports, architect rationale, operator Q&A); those live in the refinement log.
 
 If any check fails, implementation dispatch is forbidden.
 
@@ -235,6 +263,6 @@ If any check fails, implementation dispatch is forbidden.
 - **product-spec-workflow**: Upstream. A `specified` product intent arrives here for implementation planning.
 - **spike-workflow**: Upstream. Adopt/adapt decisions create follow-up tasks refined here before implementation.
 - **gap-analysis-workflow**: Upstream. Newly created tasks from gap analysis are made implementation-ready here.
-- **dev-workflow**: Downstream. Implementation-ready briefs are built there; the three appended sections travel with the task packet.
+- **dev-workflow**: Downstream. Implementation-ready briefs are built there; the three appended sections travel with the task packet. The refinement log does not travel: it is an operator-facing record, not implementer input.
 - **decision-workflow**: Use when an operator-required item is a significant architectural or strategic decision that deserves its own decision record.
 

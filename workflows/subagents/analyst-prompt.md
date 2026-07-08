@@ -53,13 +53,14 @@ Rate each as `confident`, `uncertain`, or `blocked` with evidence:
 - **Scope boundaries**: Is it clear what's in and out of scope?
 - **Dependency identification**: Are prerequisites and shared code paths identified?
 - **Risk exposure**: Are failure modes and testing gaps identified?
-- **Agent implementability**: Can a single agent session realistically hold the full task in context and converge on a working implementation? Rate this `blocked` if ANY of the following hold:
-  - The task spans more than 2 concern axes (e.g., schema + service + server + routes is 4)
-  - The acceptance criteria list exceeds 12 items
-  - The implementation sketch requires creating or modifying more than 10 files
-  - The task requires holding multiple independent failure classes in context simultaneously (e.g., auth wiring + date parsing + protocol compliance)
+- **Agent implementability**: Can a single agent session realistically hold the full task in context and converge on a working implementation? Measure the task against the sizing table (target / hard cap):
+  - Concern axes: target 1, cap 2 (e.g., schema + service + server + routes is 4, over cap)
+  - Acceptance criteria: target 8, cap 12
+  - Files created or modified: target 6, cap 10
+  - Independent failure classes: target 1, cap 2 (e.g., auth wiring + date parsing + protocol compliance is 3, over cap)
+  - Files in the read set: target 10, cap 20. Record the count and approximate line counts from the files you actually read; do not estimate.
 
-  When this dimension is `blocked`, set `Overall: split-required`. Do not attempt to mark the task implementation-ready.
+  Rate `blocked` if ANY hard cap is breached; then set `Overall: split-required` and do not attempt to mark the task implementation-ready. Rate `uncertain` if any measure is over target but under every cap with no recorded architect acceptance; the architect decides whether to split or record one. Rate `confident` when every measure is within target, or when the only over-target measures carry a recorded acceptance that still matches the final sketch.
 
 ### 4) Record Issues (as separate lists)
 
@@ -72,12 +73,13 @@ Rate each as `confident`, `uncertain`, or `blocked` with evidence:
 
 - The dispatch includes the first-pass report and the architect review. Read only the files affected by architect or operator decisions; carry forward the first-pass findings for files whose analysis is unchanged.
 - Investigate any items the architect explicitly named for re-check.
-- Validate that `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` in the task brief match the final sketch. Report any mismatch as a blocker.
+- Validate that `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` in the task brief match the final sketch, including the band per measure and any over-target acceptances. Report any mismatch as a blocker.
+- Verify brief hygiene: the brief contains only implementer-facing content (task description, acceptance criteria, final sketch, the three sections, decisions as terse constraints). Report any refinement narrative still in the brief as a blocker; it belongs in the refinement log.
 
 ## Verdict Rule
 
 - `implementation-ready` = every dimension rated `confident` AND the blockers, questions, and vagueness lists are all empty. Recorded risks with evidence do not block this verdict.
-- `needs-review` = no blockers and no sizing threshold breached, but at least one dimension is `uncertain` or the questions or vagueness lists are non-empty.
+- `needs-review` = no blockers and no sizing hard cap breached, but at least one dimension is `uncertain` (including over-target sizing) or the questions or vagueness lists are non-empty.
 - `blocked` = at least one blocker exists, or any dimension other than agent implementability is rated `blocked`.
 - `split-required` = agent implementability is `blocked`. This verdict takes precedence over all others.
 
@@ -85,14 +87,14 @@ Rate each as `confident`, `uncertain`, or `blocked` with evidence:
 
 Confidence Check Report:
 - Task: <task name>
-- Files Read: <list of every file you opened during this analysis, including files you concluded were not impacted>
+- Files Read: <list of every file you opened during this analysis with approximate line counts, including files you concluded were not impacted>
 - Dimensions:
   - Requirements clarity: <rating>. Evidence: <evidence>
   - Technical feasibility: <rating>. Evidence: <evidence>
   - Scope boundaries: <rating>. Evidence: <evidence>
   - Dependency identification: <rating>. Evidence: <evidence>
   - Risk exposure: <rating>. Evidence: <evidence>
-  - Agent implementability: <rating>. Evidence: <evidence, including which sizing thresholds were checked>
+  - Agent implementability: <rating>. Evidence: <value and band (within-target | over-target | over-cap) for each sizing measure>
 - Implementation Sketch:
   - <ordered list of file changes>
 - Blockers: <list or "none">
