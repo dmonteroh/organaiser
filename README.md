@@ -48,8 +48,8 @@ The usage of subagents makes this work more token heavy than working a task end-
 The speed issue: when your work isn't meant to be parallel and the subagents need to run sequentially, the verifications and double checks definitely makes the process longer than before.
 I have found success in specifying the LLM, model and effort that is used for each step.
 
-For example: The task-refinement-workflow requires, in my opinion, higher effort models like Opus 4.7 or GPT-5.5 (High) in order to make the plan as high-quality and specific as possible. What this means is that the plan gets to be implemented by lower effort or smaller models without loss of quality. This is of course something that you need to experience yourself.
-Something else to consider: the "orchestrator" (the agent that you interact with directly) doesn't need a particularly big model to work correctly either. I have run automatic workflows (Ralph Loop) using Haiku and GPT-4.1-mini with very little issues, if the supporting context is good enough.
+For example: The task-refinement-workflow requires, in my opinion, higher effort models like Opus 4.8 or GPT-5.5 (High) in order to make the plan as high-quality and specific as possible. What this means is that the plan gets to be implemented by lower effort or smaller models without loss of quality. This is of course something that you need to experience yourself.
+Something else to consider: the "orchestrator" (the agent that you interact with directly) doesn't need a particularly big model to work correctly either. I have run automatic workflows (Ralph Loop) using Haiku and GPT mini with very little issues, if the supporting context is good enough.
 
 ## Works well with
 
