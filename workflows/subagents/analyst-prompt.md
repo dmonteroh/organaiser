@@ -60,7 +60,7 @@ Rate each as `confident`, `uncertain`, or `blocked` with evidence:
   - Independent failure classes: target 1, cap 2 (e.g., auth wiring + date parsing + protocol compliance is 3, over cap)
   - Files in the read set: target 10, cap 20. Record the count and approximate line counts from the files you actually read; do not estimate.
 
-  Rate `blocked` if ANY hard cap is breached; then set `Overall: split-required` and do not attempt to mark the task implementation-ready. Rate `uncertain` if any measure is over target but under every cap with no recorded architect acceptance; the architect decides whether to split or record one. Rate `confident` when every measure is within target, or when the only over-target measures carry a recorded acceptance that still matches the final sketch.
+  Rate `blocked` if ANY hard cap is breached; then set `Overall: split-required` and do not attempt to mark the task implementation-ready. Otherwise rate `confident`, absent other evidence against it: over-target values under every cap are facts to record with their band, not review triggers. The Sizing Budget carries a one-line justification per over-target measure; the architect may still choose to split when the combination looks risky.
 
 ### 4) Record Issues (as separate lists)
 
@@ -73,13 +73,13 @@ Rate each as `confident`, `uncertain`, or `blocked` with evidence:
 
 - The dispatch includes the first-pass report and the architect review. Read only the files affected by architect or operator decisions; carry forward the first-pass findings for files whose analysis is unchanged.
 - Investigate any items the architect explicitly named for re-check.
-- Validate that `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` in the task brief match the final sketch, including the band per measure and any over-target acceptances. Report any mismatch as a blocker.
+- Validate that `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` in the task brief match the final sketch, including the band per measure and any over-target justifications. Report any mismatch as a blocker.
 - Verify brief hygiene: the brief contains only implementer-facing content (task description, acceptance criteria, final sketch, the three sections, decisions as terse constraints). Report any refinement narrative still in the brief as a blocker; it belongs in the refinement log.
 
 ## Verdict Rule
 
 - `implementation-ready` = every dimension rated `confident` AND the blockers, questions, and vagueness lists are all empty. Recorded risks with evidence do not block this verdict.
-- `needs-review` = no blockers and no sizing hard cap breached, but at least one dimension is `uncertain` (including over-target sizing) or the questions or vagueness lists are non-empty.
+- `needs-review` = no blockers and no sizing hard cap breached, but at least one dimension is `uncertain` or the questions or vagueness lists are non-empty. Over-target sizing under the caps does not by itself cause `needs-review`.
 - `blocked` = at least one blocker exists, or any dimension other than agent implementability is rated `blocked`.
 - `split-required` = agent implementability is `blocked`. This verdict takes precedence over all others.
 

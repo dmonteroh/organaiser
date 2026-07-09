@@ -27,7 +27,8 @@ The workflow's anti-rationalization rules forbid these temptations:
 - "The architect can figure it out during implementation." Deferring decisions to implementation time is exactly what this workflow prevents. Decide now or escalate now.
 - "The operator won't have context for this question." Frame the question with full context. The operator's job is to make product or business decisions, not to reverse-engineer your analysis.
 - "Splitting this task will create too many small tasks." A task that fails four times costs more than three subtasks that each succeed on the first try. Right-sized work maximizes throughput.
-- "The agent should be able to handle all of this." Tasks beyond the hard caps (three or more concern axes, thirteen or more acceptance criteria) do not converge; tasks over target need a recorded acceptance or a split. Design for the agent you have.
+- "The agent should be able to handle all of this." Tasks beyond the hard caps (three or more concern axes, thirteen or more acceptance criteria) do not converge; over-cap tasks split, over-target values are recorded with a one-line justification. Design for the agent you have.
+- "Better to confirm this default with the operator." A confirmed default changes nothing and costs an interaction. If the item fails the operator question bar, decide it and record the decision.
 - "The rationale is useful context, leave it in the brief." The implementer executes constraints; it does not re-litigate decisions. Narrative belongs in the refinement log.
 - "Needs more thought" is not a valid resolution. Either resolve, request specific information, or escalate.
 - Do not silently weaken analyst-identified risks. If you disagree, state why.
@@ -36,7 +37,13 @@ The workflow's anti-rationalization rules forbid these temptations:
 
 For every blocker, question, vagueness item, and risk the analyst identified:
 - Can you resolve it from the codebase and project context? → Resolve it with a concrete decision and rationale.
-- Do you need the operator's input (product decision, priority call, business context)? → Classify as `operator-required` and frame the question with full context so the operator can answer without reverse-engineering your analysis.
+- Do you need the operator's input? → Apply the operator question bar first. An item is `operator-required` only when at least one of these criteria holds:
+  1. It is product, permission, or business-policy judgment (who may do what, what ships, relative priority).
+  2. It commits a new externally visible capability or contract (new endpoint, schema field, or API behavior) not already in the task's scope.
+  3. A wrong default would be expensive to reverse after implementation (data migration, published contract, user-visible workflow change).
+  4. It contradicts a recorded operator decision, spec assumption, or ADR.
+
+  If no criterion holds, the item is yours to decide: record a defaulted decision (terse constraint in the brief, rationale in the refinement log). Do not convert decisions into questions for reassurance. For items that meet the bar, frame the question with full context, options, impact, and a stated default when a safe one exists, so the operator can answer without reverse-engineering your analysis; with a safe default, also write it into the brief as a constraint marked `defaulted-pending-operator` so refinement continues.
 
 ### 2) Validate the Implementation Sketch
 
@@ -49,7 +56,7 @@ For every blocker, question, vagueness item, and risk the analyst identified:
 For each analyst question:
 - If the codebase provides sufficient signal: answer it directly.
 - If it requires a judgment call within your authority: make the call and document the rationale.
-- If it requires operator input: frame it clearly.
+- If it passes the operator question bar (section 1): frame it clearly, with a stated default when a safe one exists.
 
 ### 4) Assess Risks
 
@@ -88,7 +95,7 @@ If the task is not being split, append these three sections to the task brief. T
 - **Estimated file touch count**: files expected to be created or modified.
 - **Independent failure classes**: distinct areas that could fail separately during implementation.
 - **Read scope**: number of files in the implementer's read set and the largest file's approximate line count, taken from the analyst's Files Read list, not estimated.
-- **Band per measure**: mark each value `within-target` or `over-target` against the workflow's sizing table. Every `over-target` value carries your one-line acceptance (e.g., "10 ACs accepted: single axis, all files under 100 lines") or the task follows the split path instead.
+- **Band per measure**: mark each value `within-target` or `over-target` against the workflow's sizing table. Every `over-target` value carries your one-line justification (e.g., "10 ACs: single axis, all files under 100 lines"). The band label alone never blocks readiness; split only when a hard cap is breached or the combination of over-target measures looks risky.
 
 #### Execution Gates
 - **Blocked by**: prerequisite tasks or concrete repo states that must exist first.
@@ -96,11 +103,11 @@ If the task is not being split, append these three sections to the task brief. T
 - **Dispatchability**: `dispatchable`, `blocked`, or `umbrella`.
 - **Follow-up tasks**: child tasks created by splitting, if any.
 
-If any sizing budget value breaches its hard cap, the task must follow the split path. Do not mark a task implementation-ready while any cap is breached. Over-target values under the cap are allowed only with your recorded acceptance.
+If any sizing budget value breaches its hard cap, the task must follow the split path. Do not mark a task implementation-ready while any cap is breached. Over-target values under the cap are allowed; each carries your one-line justification.
 
 If a dependency or ordering constraint exists, it must appear in `Execution Gates`, not only in narrative prose, before the task may be dispatched.
 
-If some section values depend on pending operator answers, append the sections anyway and mark those values as `pending-operator`; the final analyst check validates them after the operator decides.
+If some section values depend on pending operator answers, append the sections anyway and mark those values as `defaulted-pending-operator`; the task completes refinement on the stated default and the answer is processed after the run.
 
 #### Brief hygiene
 
@@ -123,7 +130,7 @@ Architect Review:
   - <item>: <decision and rationale>
 - Implementation sketch updates: <changes or "no changes">
 - Operator-required items:
-  - <item>. Context: <why this needs operator input>. Options: <if applicable>
+  - <item>. Bar criterion: <1-4>. Context: <why this needs operator input>. Options: <if applicable>. Stated default: <default the task proceeds on, or "none safe">
 - Resolved items: <list>
 - Remaining confidence gaps: <list or "none">
 - Split decision (only if agent implementability was blocked):
@@ -132,7 +139,7 @@ Architect Review:
   - Execution order update: <description of order change, or "not-applicable">
 - Appended sections (only if task not split):
   - Implementation Constraints: <present | not-applicable>
-  - Sizing Budget: <present, with band per measure and any over-target acceptances | not-applicable>
+  - Sizing Budget: <present, with band per measure and any over-target justifications | not-applicable>
   - Execution Gates: <present | not-applicable>
 - Brief hygiene (only if task not split): <clean | narrative moved to refinement log | not-applicable>
 - Status: <all-resolved | needs-operator | needs-another-pass | split-required | superseded-by-children | operator-escalated>

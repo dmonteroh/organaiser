@@ -91,6 +91,7 @@ Return exactly one:
 - If the spec is solid, say so. Don't manufacture gaps.
 - Do not propose solutions. That's the problem-definer's job.
 - Do not turn missing product evidence into an engineering preference. Classify it as evidence risk or `needs-info`.
+- Do not return `needs-info` with owner `operator` for an item that already carries a named assumption with a stated default. Assess the spec as written on that default and note the dependency; the operator reviews defaulted questions in an end-of-run batch.
 
 ## Output Format
 

@@ -54,7 +54,18 @@ Each workflow run must end in exactly one state:
 | `shelved` | The idea does not justify specification or engineering effort now. | Record rationale and stop. |
 | `needs-research` | User truth, domain facts, market facts, or evidence are too weak. | Route to research-workflow. |
 | `needs-decision` | An architectural, platform, or strategic choice blocks the spec. | Route to decision-workflow. |
-| `needs-operator` | Product or business judgment is required before the spec can proceed. | Escalate to the operator with options and context. |
+| `needs-operator` | Product or business judgment with no safe default blocks the spec. | Record the question in the run's open-questions file; it joins the end-of-run batch. |
+
+## Operator Question Bar
+
+Most judgment calls surfaced while specifying resolve as recorded assumptions with stated defaults, not operator questions. An item may be routed to the operator only when at least one of these criteria holds:
+
+1. It is product, permission, or business-policy judgment (who may do what, what ships, relative priority).
+2. It commits a new externally visible capability or contract (new endpoint, schema field, or API behavior) not already in the task's scope.
+3. A wrong default would be expensive to reverse after implementation (data migration, published contract, user-visible workflow change).
+4. It contradicts a recorded operator decision, spec assumption, or ADR.
+
+Items that meet the bar and carry a safe stated default do not block the spec: the spec proceeds with the default as a named assumption, and the question is recorded in one run-level open-questions file with context, options, impact, and the default. The operator reviews the batch once, at the end of the run; a confirmed default is bookkeeping only, a changed answer re-enters as an operator-answer re-dispatch. Only an item that meets the bar and has no safe default makes the spec `needs-operator`.
 
 ## Specification Structure
 
@@ -96,14 +107,14 @@ Every specification produced by this workflow must contain:
    - If `shelve`: record the rationale and mark final state `shelved`
    - If `needs-research`: record missing evidence and mark final state `needs-research`
    - If `needs-decision`: record the blocking decision and mark final state `needs-decision`
-   - If `needs-operator`: escalate with full context. If the operator answers, re-dispatch `problem-definer` with the answer (return to step 3). If the operator defers or is unavailable, mark final state `needs-operator`.
+   - If `needs-operator`: check each item against the Operator Question Bar. Items that fail the bar go back to the `problem-definer` as assumptions to name and proceed on (return to step 3). Items that meet the bar with a safe stated default: record them in the run's open-questions file and re-dispatch `problem-definer` to proceed on the defaults as named assumptions (return to step 3). Only when an item meets the bar and has no safe default: mark final state `needs-operator` and continue with any other specs; the question joins the end-of-run batch.
    - If `proceed`: continue to the challenger gate
 5. Dispatch `spec-challenger` with the full draft specification and existing project context. The template owns the challenge checks: buildability, evidence and assumptions, acceptance criteria precision, hidden assumptions, scope conflicts, non-goals, forbidden claims.
 6. If `spec-challenger` returns `needs-info`, route by the missing item and owner it names:
    - `orchestrator-context` (backlog, ADRs, architecture facts the orchestrator can gather): gather it and re-dispatch `spec-challenger` (return to step 5). Do not re-run the problem-definer for context that leaves the spec unchanged.
    - `research` (missing research evidence): mark final state `needs-research`.
    - `decision` (missing decision record): mark final state `needs-decision`.
-   - `operator` (missing product or business judgment): escalate to the operator. If the answer changes the spec, re-dispatch `problem-definer` with it (return to step 3); otherwise re-dispatch `spec-challenger` with the answer (return to step 5).
+   - `operator` (missing product or business judgment): apply the Operator Question Bar. With a safe stated default, record the question in the open-questions file and re-dispatch `spec-challenger` instructed to assess the spec on the default as a named assumption (return to step 5). Without a safe default, mark final state `needs-operator`; the question joins the end-of-run batch.
    Maximum `needs-info` resolutions per run: 2. If the challenger still cannot complete the review, mark the non-spec final state matching the dominant missing item.
 7. If `spec-challenger` returns `gaps-found`, dispatch `problem-definer` with the prior draft and the challenger findings to revise, then return to step 4.
 8. If `spec-challenger` returns `pass`, finalize the product specification and mark final state `specified`.
@@ -115,10 +126,12 @@ Every specification produced by this workflow must contain:
 
 ### Post-all-tasks
 
-1. If multiple specs were produced: check for scope conflicts between them. If specs conflict, treat each affected spec as `gaps-found` (return to per-task step 7 for it; the revision cap applies), or escalate to the operator when the conflict is a priority call rather than a spec defect.
+1. If multiple specs were produced: check for scope conflicts between them. If specs conflict, treat each affected spec as `gaps-found` (return to per-task step 7 for it; the revision cap applies). When the conflict is a priority call rather than a spec defect, record it in the open-questions file for the end-of-run batch; the affected specs keep their states and the answer is processed per step 6 below.
 2. Verify no spec undermines an existing ADR without flagging it. An unflagged ADR conflict is `gaps-found` for that spec.
 3. Update backlog or work index if new tasks were created
 4. Mark each spec whose final state is `specified` as `integrated`. Non-spec outcomes keep their recorded final state.
+5. Present the batched operator items once: every open question across all specs, each with context, options, impact, and its stated default. The run completes without waiting for answers; the run report lists `specified` specs separately from `needs-operator` ones so downstream refinement can start while the operator works the batch.
+6. Process operator answers when they arrive (typically after the run): a confirmed default is orchestrator bookkeeping only (mark the question resolved, the assumption stands). A changed answer re-enters as an operator-answer re-dispatch scoped to the affected spec (it does not count toward the revision cap).
 
 ### Rules
 
@@ -129,6 +142,8 @@ Every specification produced by this workflow must contain:
 - The problem-definer must never describe implementation. "Use PostgreSQL JSONB" is not a spec; "structured data must be queryable by field" is.
 - Acceptance criteria must be testable. "Users should have a good experience" is not a criterion. "User can complete X in under Y steps" is.
 - Unsupported product claims are not allowed. If a User Truth or "So What?" claim rests on weak evidence, record it as an assumption and choose the appropriate non-spec state unless the operator explicitly accepts it.
+- Operator questions are batched, never synchronous. No step may wait mid-run on an operator answer; the open-questions file plus the end-of-run presentation is the only escalation channel.
+- The run report must count defaulted assumptions recorded and operator questions asked, and, once answers arrive, how many defaults the operator changed. If across recent runs roughly 9 in 10 questions come back confirmed unchanged, the Operator Question Bar is being applied too loosely: tighten classification instead of asking more.
 
 ## Anti-Rationalization Rules
 
@@ -142,6 +157,7 @@ Every specification produced by this workflow must contain:
 | "We need to move fast, skip the challenger" | Specs that fail the challenger fail harder during implementation. 30 minutes of challenge saves days of rework. | spec-challenger |
 | "The engineering team can figure out the details" | That's implementation details (task-refinement). But acceptance criteria, invariants, and non-goals are YOUR job. Don't delegate the "What." | problem-definer |
 | "We know users want this" | Claims about users need evidence, a named assumption, or operator ownership. Do not smuggle guesses into User Truth. | problem-definer |
+| "Better to confirm this with the operator" | A confirmed default changes nothing and costs an interaction. If the item fails the Operator Question Bar, name the assumption and proceed; if it passes with a safe default, record the question and still proceed. | operator question bar |
 
 **Enforcement rule:** Before skipping any gate, the orchestrator must check this table. If any rule matches, the gate cannot be skipped.
 
@@ -168,7 +184,7 @@ Every specification produced by this workflow must contain:
 - `shelved`: rationale documents why the idea does not justify specification or engineering effort now
 - `needs-research`: missing evidence is specific enough to route into research-workflow
 - `needs-decision`: blocking decision is specific enough to route into decision-workflow
-- `needs-operator`: operator question is framed with context, options, and impact
+- `needs-operator`: operator question is framed with context, options, and impact, recorded in the run's open-questions file, and had no safe default to proceed on
 
 ### Forbidden Claims
 

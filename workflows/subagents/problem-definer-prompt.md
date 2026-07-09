@@ -101,7 +101,7 @@ Return exactly one:
 - Use `shelve` when the "So What?" test fails.
 - Use `needs-research` when the missing information is factual and discoverable.
 - Use `needs-decision` when the missing information is a choice between options.
-- Use `needs-operator` when the missing information is product priority, business judgment, or acceptable risk.
+- Use `needs-operator` only when the missing information is product priority, business judgment, or acceptable risk AND no safe default exists. When a safe default exists, proceed on it instead: record the default as a named assumption, list the item under Open Questions (owner: operator, with the default and the impact of changing it), and use `proceed`. The operator reviews defaulted questions in an end-of-run batch; do not block the spec to ask.
 
 ## Rules
 
@@ -127,7 +127,7 @@ Product Specification Decision:
 - Assumptions:
   - <assumption and confidence: high | medium | low, or "none">
 - Open Questions:
-  - <question, owner: operator | research | decision-workflow, impact if unanswered>
+  - <question, owner: operator | research | decision-workflow, impact if unanswered, stated default if the spec proceeds on one>
 - Business Invariants: <rules that must never break>
 - Non-Goals: <what we are NOT solving, and why>
 - "So What?" Assessment:
