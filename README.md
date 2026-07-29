@@ -22,6 +22,8 @@ The workflows make no assumptions about your harness, skills or project, so adap
 
 Copy the workflows you want into your project, keep in mind that workflows have references to files inside the `subagents` folder. Each workflow is just markdown, ready to read. You don't install anything, and there is no runtime.
 
+Before editing a workflow or a subagent template (including adapting your own copies), read [workflows/conventions.md](workflows/conventions.md). It records which duplicated blocks are deliberate parity that must stay in sync across files, which rules live in exactly one place, and how the repeat-pass mechanisms are named.
+
 ## I have the files in my project, what now?
 
 Start a new thread and prompt your agent to use the workflow. I use this [subagent-orchestrator](https://github.com/dmonteroh/curated-agent-skills/tree/main/skills/subagent-orchestrator) skill to manage how subagents are handled by the main agent, and then let them do their work.
