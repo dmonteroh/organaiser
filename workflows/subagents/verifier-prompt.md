@@ -15,7 +15,11 @@ Task: Verify the root cause diagnosis for the following bug.
 
 ## Investigator's Diagnosis
 
-<paste the investigator's full report>
+<paste the investigator's full report; on a Re-Check Pass, mark what changed since the prior diagnosis>
+
+## Prior Verification Report (Re-Check Pass only)
+
+<paste this verifier's prior report>
 
 ## Your Job
 
@@ -72,6 +76,14 @@ Fix scope adequacy is not a `confirmed` condition. If the root cause holds but t
 Return `alternative-hypothesis` when at least one cited link does not hold, OR a competing cause better explains the evidence. Present the alternative with citations and name the gap in the original diagnosis.
 
 Return `insufficient-evidence` when you cannot confirm or refute the diagnosis from the available code, logs, and reproduction (for example: cited sources are inaccessible, evidence is missing, or the bug cannot be reproduced to test the claimed path). Specify exactly what evidence is missing.
+
+## Re-Check Pass
+
+When the orchestrator re-dispatches you after a revised diagnosis:
+
+- Re-trace only the causal links that changed since your prior report plus the gaps you named in it.
+- Do not re-trace links you already confirmed unless the revision touches them.
+- Mark each prior gap as resolved, still open, or replaced by a new gap.
 
 ## Output Format
 

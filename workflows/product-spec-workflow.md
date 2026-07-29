@@ -39,6 +39,7 @@ The output is a product specification decision, not code. A successful `specifie
   - Must verify Non-Goals are actually non-goals (not deferred scope disguised as exclusions)
   - Must flag forbidden vague claims (see Forbidden Claims under Completion) as gaps
   - On `needs-info`, must name each missing item and its owner (orchestrator-context | operator | research | decision) so the orchestrator can route without guessing
+  - Supports a Re-Check Pass: on a re-dispatch after a revision, challenges only the revised sections plus its prior findings instead of re-challenging the full spec
 
 ## Local Capabilities
 
@@ -109,7 +110,7 @@ Every specification produced by this workflow must contain:
    - If `needs-decision`: record the blocking decision and mark final state `needs-decision`
    - If `needs-operator`: check each item against the Operator Question Bar. Items that fail the bar go back to the `problem-definer` as assumptions to name and proceed on (return to step 3). Items that meet the bar with a safe stated default: record them in the run's open-questions file and re-dispatch `problem-definer` to proceed on the defaults as named assumptions (return to step 3). Only when an item meets the bar and has no safe default: mark final state `needs-operator` and continue with any other specs; the question joins the end-of-run batch.
    - If `proceed`: continue to the challenger gate
-5. Dispatch `spec-challenger` with the full draft specification and existing project context. The template owns the challenge checks: buildability, evidence and assumptions, acceptance criteria precision, hidden assumptions, scope conflicts, non-goals, forbidden claims.
+5. Dispatch `spec-challenger` with the full draft specification and existing project context. The template owns the challenge checks: buildability, evidence and assumptions, acceptance criteria precision, hidden assumptions, scope conflicts, non-goals, forbidden claims. On a re-dispatch after a revision, dispatch it as a Re-Check Pass: include its prior report and mark the revised sections.
 6. If `spec-challenger` returns `needs-info`, route by the missing item and owner it names:
    - `orchestrator-context` (backlog, ADRs, architecture facts the orchestrator can gather): gather it and re-dispatch `spec-challenger` (return to step 5). Do not re-run the problem-definer for context that leaves the spec unchanged.
    - `research` (missing research evidence): mark final state `needs-research`.

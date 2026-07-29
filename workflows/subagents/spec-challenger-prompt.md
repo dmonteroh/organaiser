@@ -7,13 +7,17 @@ Task: Challenge the following product specification.
 
 ## Specification
 
-<paste the full product specification>
+<paste the full product specification; on a Re-Check Pass, mark the revised sections>
 
 ## Project Context
 
 - Current backlog: <summary or link>
 - Relevant ADRs: <list>
 - Existing architecture: <relevant constraints>
+
+## Prior Report (Re-Check Pass only)
+
+<paste this challenger's prior challenge report>
 
 ## Your Job
 
@@ -83,6 +87,14 @@ Return exactly one:
 - `pass`: the final spec is buildable, evidence and assumptions are honest, acceptance criteria are testable, scope impact is clear, non-goals are genuine, and no forbidden claims remain.
 - `gaps-found`: the spec has fixable gaps that the problem-definer can revise without new operator input.
 - `needs-info`: you cannot complete the review because required project context, operator judgment, research evidence, or a decision record is missing. Name each missing item and its owner (`orchestrator-context` for backlog/ADR/architecture facts, `operator` for product or business judgment, `research` for missing evidence, `decision` for a missing decision record) so the orchestrator can route without guessing.
+
+## Re-Check Pass
+
+When the orchestrator re-dispatches you after a spec revision:
+
+- Challenge only the revised sections plus the gaps you flagged in your prior report.
+- Do not re-challenge sections you already passed.
+- Mark each prior gap as resolved, still open, or replaced by a new gap.
 
 ## Rules
 

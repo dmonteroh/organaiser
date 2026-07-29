@@ -31,6 +31,7 @@ Structured investigation that proves root cause before any fix is attempted. Rep
   - Must check if the root cause explains ALL reported symptoms, not just some
   - Must look for alternative explanations the investigator may have missed
   - If the root cause is confirmed, must verify the proposed fix scope is sufficient and supply an amended fix scope when it is not (fix scope gaps do not block confirmation)
+  - Supports a Re-Check Pass: on a re-dispatch after a follow-up round, re-traces only the changed causal links plus its prior gaps instead of re-verifying the full diagnosis
 
 ## Diagnostic Standards
 
@@ -58,7 +59,7 @@ Every root cause claim must meet these evidence requirements:
    - `reproduced`: continue to step 5.
    - `not reproducible` but the report contains an evidence-cited causal chain (from logs, traces, or code reading): continue to step 5; the verifier weighs the missing reproduction under its Verdict Rule.
    - `not reproducible` with no cited causal chain: do not dispatch the verifier (it could only return `insufficient-evidence`). Escalate to the operator with the documented reproduction attempts.
-5. Dispatch `verifier` with the bug report + the investigator's full report per its template.
+5. Dispatch `verifier` with the bug report + the investigator's full report per its template. On a re-dispatch after a follow-up round, dispatch it as a Re-Check Pass: include its prior verification report and mark what changed in the diagnosis.
 6. If verifier returns `alternative-hypothesis`:
    - Dispatch `investigator` in follow-up mode to evaluate the alternative, then return to step 3. This consumes one follow-up round.
 7. If verifier returns `insufficient-evidence`:
@@ -83,7 +84,6 @@ Every root cause claim must meet these evidence requirements:
 - Reproduction comes before investigation. If you can't reproduce it, document that. Don't skip ahead to guessing.
 - Maximum follow-up rounds: 2. A follow-up round is one investigator re-dispatch triggered by a non-`confirmed` verdict (steps 6-7). If the root cause is still not confirmed after 2 rounds, stop dispatching, mark the task `blocked`, and escalate to the operator with all evidence and any competing hypotheses.
 - The fix task created at step 8 runs under dev-workflow, not this workflow. This workflow produces the diagnosis; dev-workflow produces the fix.
-- Temporary instrumentation (debug logging, assertions) must be removed before the investigation is complete. The only exception is instrumentation the investigator explicitly flags as justified to retain; the orchestrator decides at the step 3 barrier and records the decision.
 
 ## Anti-Rationalization Rules
 
