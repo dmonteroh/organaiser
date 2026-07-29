@@ -62,7 +62,7 @@ The progress-assessor evaluates the roadmap on these axes:
    - `orchestrator-context`: supply the missing roadmap sections or project context and re-dispatch the auditor only.
    - `progress-data`: re-dispatch the progress-assessor in a Follow-Up Pass on the named items, then re-dispatch the auditor with the delta.
    - `operator`: escalate. Record the answer and re-dispatch the auditor with it.
-   - Auditor re-dispatches after a needs-info resolution run as a Scoped Re-Audit and do not count against the audit cap.
+   - Auditor re-dispatches after a needs-info resolution run as a Scoped Re-Audit.
 5. If the assumption-auditor returns `plan-sound`, skip to step 7.
 6. If the assumption-auditor returns `corrections-needed`, the orchestrator reviews each recommendation and classifies it:
    - **Resequence**: order needs to change (recommend the new order; the reordering itself is an operator call)
@@ -88,10 +88,9 @@ The progress-assessor evaluates the roadmap on these axes:
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
-- The progress-assessor must check actual codebase state, not just task status labels. A task marked "approved" that has no code written has a different meaning than one with a half-finished PR.
-- Maximum assumption-auditor passes: 1 full audit. Scoped Re-Audits after a needs-info resolution or a self-check failure complete the original pass and do not count. This is a diagnostic workflow, not a fix workflow. It identifies problems and routes them elsewhere.
+- Maximum assumption-auditor passes: 1 full audit. Scoped Re-Audits after a needs-info resolution or a self-check failure complete the original pass and do not count.
 - "Stay the course" is a valid and valuable outcome, but it must be evidence-backed, not assumed.
-- Course corrections route to other workflows (product-spec, research) or to the operator (reordering, removal). This workflow diagnoses; it does not fix.
+- Course corrections route to other workflows (product-spec, research) or to the operator (reordering, removal).
 
 ## Anti-Rationalization Rules
 
@@ -138,7 +137,7 @@ Before marking a health check as complete, the orchestrator must verify:
 4. "Stay the course" findings have evidence, not just absence of counter-evidence.
 5. No forbidden claims appear in the report.
 
-If check 1 fails, re-dispatch the progress-assessor in a Follow-Up Pass on the unverified items, then the assumption-auditor as a Scoped Re-Audit if the delta changes any assumption's evidence. If check 2 or 4 fails, re-dispatch the assumption-auditor as a Scoped Re-Audit on the affected items; this completes the original pass and does not count against the audit cap. If check 3 or 5 fails, the orchestrator fixes the report directly (classification, routing, phrasing) without new dispatches. After any fix, re-run this self-check.
+If check 1 fails, re-dispatch the progress-assessor in a Follow-Up Pass on the unverified items, then the assumption-auditor as a Scoped Re-Audit if the delta changes any assumption's evidence. If check 2 or 4 fails, re-dispatch the assumption-auditor as a Scoped Re-Audit on the affected items. If check 3 or 5 fails, the orchestrator fixes the report directly (classification, routing, phrasing) without new dispatches. After any fix, re-run this self-check.
 
 ## Related Workflows
 

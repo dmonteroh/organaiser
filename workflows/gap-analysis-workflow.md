@@ -64,16 +64,15 @@ Each capability gets a coverage rating. `excess` is a task classification, not a
    - What constraints apply? (Timeline, dependencies, must-not-break guarantees)
    - What is explicitly OUT of the target? (Future phases, nice-to-haves)
 2. Dispatch `coverage-mapper` per its template with the target definition, the existing task list, and project context (ADRs, architecture, completed work). If the mapper reports missing inputs, fix the target definition or supply the missing context and re-dispatch; do not let it guess.
-3. Orchestrator reviews the coverage map: does the capability decomposition match the target definition, and is each capability at the right level? Fix miscategorized levels by relabeling directly. For wrong or missing decomposition, re-dispatch the mapper in a Revision Pass naming the capabilities to fix. Pre-challenge corrections do not count against the revision cap.
+3. Orchestrator reviews the coverage map: does the capability decomposition match the target definition, and is each capability at the right level? Fix miscategorized levels by relabeling directly. For wrong or missing decomposition, re-dispatch the mapper in a Revision Pass naming the capabilities to fix.
 4. Dispatch `gap-challenger` per its template with the coverage map, the target definition, and the task list. On a repeat pass, dispatch as a Re-Check Pass, adding the challenger's own prior report and the revised map with changed rows marked.
 5. If the challenger returns `needs-info`, resolve each Missing For Review item by owner:
    - `orchestrator-context`: supply the missing files or map sections and re-dispatch the challenger only.
    - `operator`: escalate. If the answer changes the target definition, update it and re-dispatch the mapper in a Revision Pass on the affected capabilities before re-challenging.
-   - Neither resolution counts against the revision cap.
 6. If the challenger returns `gaps-found`, resolve each finding by type:
    - Rating challenges the orchestrator accepts (`covered` to `partial` or `uncovered`, `excess` to needed, or the reverse): relabel directly in the map, carrying the challenger's gap details. Relabels add no new analysis, so they need no mapper dispatch and no re-check.
    - Rating challenges the orchestrator rejects: record the rejection rationale; it goes into the report for operator visibility.
-   - Missing capabilities (including broken flow steps and operational gaps that name a capability nobody mapped): re-dispatch the mapper in a Revision Pass on the named capabilities only, merge the returned delta into the map, then return to step 4 as a Re-Check Pass. This is one revision round.
+   - Missing capabilities (including broken flow steps and operational gaps that name a capability nobody mapped): re-dispatch the mapper in a Revision Pass on the named capabilities only, merge the returned delta into the map, then return to step 4 as a Re-Check Pass.
 7. When the challenger returns `coverage-sufficient`, or every remaining finding was resolved by relabel or recorded rejection, classify each capability rated `partial` or `uncovered` and each confirmed excess task:
    - **New task needed**: capability is uncovered. Route to product-spec-workflow.
    - **Scope expansion**: capability is partial. Recommend the specific scope addition on the existing task; route the updated task to task-refinement-workflow.
@@ -155,7 +154,7 @@ Before marking a gap analysis as complete, the orchestrator must verify:
 6. Every gap has a specific, routed action, not a vague "needs work."
 7. No forbidden claims appear in the report.
 
-If check 1, 2, or 5 fails, re-dispatch the coverage-mapper in a Revision Pass naming the affected capabilities or unread tasks, then the gap-challenger as a Re-Check Pass; this does not count against the revision cap. If check 3 or 4 fails, re-dispatch the gap-challenger as a Re-Check Pass scoped to what it has not seen. If check 6 or 7 fails, the orchestrator fixes the report directly (classification, routing, phrasing) without new dispatches. After any fix, re-run this self-check.
+If check 1, 2, or 5 fails, re-dispatch the coverage-mapper in a Revision Pass naming the affected capabilities or unread tasks, then the gap-challenger as a Re-Check Pass. If check 3 or 4 fails, re-dispatch the gap-challenger as a Re-Check Pass scoped to what it has not seen. If check 6 or 7 fails, the orchestrator fixes the report directly (classification, routing, phrasing) without new dispatches. After any fix, re-run this self-check.
 
 ## Related Workflows
 

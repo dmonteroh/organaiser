@@ -113,20 +113,19 @@ The investigator assigns these levels when reporting evidence, the mapper carrie
    - Reliability expectations or operating assumptions, if known; when expectations are unknown, record the assumptions used in their place
    - Explicit exclusions
 2. Dispatch `reliability-investigator` per its template with the scope. If the investigator reports missing inputs, fix the scope definition or supply the missing context and re-dispatch; do not let it guess.
-3. Orchestrator reviews the investigator output for coverage: are the critical journeys complete, are major dependencies and background flows represented, and are there obvious blind spots before synthesis begins? For gaps, re-dispatch the investigator in a Follow-Up Pass naming the journeys, dependencies, or evidence gaps to close, and merge the returned delta. Pre-synthesis corrections do not count against the revision cap.
+3. Orchestrator reviews the investigator output for coverage: are the critical journeys complete, are major dependencies and background flows represented, and are there obvious blind spots before synthesis begins? For gaps, re-dispatch the investigator in a Follow-Up Pass naming the journeys, dependencies, or evidence gaps to close, and merge the returned delta.
 4. Dispatch `failure-mapper` per its template with the scope and investigator output. On a repeat pass, dispatch as a Revision Pass naming the failure modes to re-map and supplying the prior matrix plus any new evidence; merge the returned delta into the matrix.
 5. Dispatch `resiliency-challenger` per its template with the scope, investigator output, and failure matrix. On a repeat pass, dispatch as a Re-Check Pass, adding the challenger's own prior report and the revised matrix with changed rows marked.
 6. If the challenger returns `needs-info`, resolve each Missing For Review item by owner:
    - `orchestrator-context`: supply the missing report sections, matrix rows, or cited files and re-dispatch the challenger only.
    - `operator`: escalate. If the answer changes the assessment scope, update it and resume at the affected step (2 for evidence, 4 for the matrix).
-   - Neither resolution counts against the revision cap.
 7. If the challenger returns `gaps-found`, resolve each finding by type:
    - Overstated ratings the orchestrator accepts: downgrade the contested dimension directly in the matrix, carrying the challenger's reasoning as the evidence note. Downgrades add no new analysis, so they need no mapper dispatch and no re-check.
    - Challenges the orchestrator rejects: record the rejection rationale; it goes into the final report for operator visibility.
    - Analytical gaps (missing failure modes, missing operational concerns, or scenario challenges answerable from existing evidence): re-dispatch the mapper in a Revision Pass on the named modes only, then return to step 5 as a Re-Check Pass.
    - Evidence gaps (a rating or scenario cannot be judged from current evidence): re-dispatch the investigator in a Follow-Up Pass on the named gaps, then the mapper in a Revision Pass on the affected modes, then return to step 5 as a Re-Check Pass.
 8. If operator input is needed (scope boundaries, reliability expectations, acceptance of residual risk): escalate with the current matrix and the specific question. Record the answer and resume at the step that raised the escalation.
-9. When the challenger returns `assessment-holds`, or every remaining finding was resolved by downgrade or recorded rejection, or the revision cap was reached (still-contested dimension ratings set to `unknown` with the disagreement listed under unknowns), produce the final reliability report with:
+9. When the challenger returns `assessment-holds`, or every remaining finding was resolved by downgrade or recorded rejection, or the revision cap was reached, produce the final reliability report with:
    - System scope and critical journeys
    - Coverage map of what was inspected and what was not
    - Failure-mode matrix with ratings and citations
@@ -148,7 +147,6 @@ The investigator assigns these levels when reporting evidence, the mapper carrie
 - Maximum revision rounds: 2. A round is one pass through step 7 that ends in a challenger Re-Check Pass. Orchestrator downgrades, recorded rejections, needs-info resolutions, and pre-synthesis corrections do not count against the cap. At cap exhaustion, set each still-contested dimension rating to `unknown`, list the disagreement under explicit unknowns rather than pretending confidence, and run no further challenger pass.
 - The assessment must begin with critical journeys and dependency boundaries, not with isolated files or services. Reliability is cross-boundary by default.
 - "No issue found" is valid only when the assessor looked for specific failure classes and found evidence-backed controls.
-- Reliability claims must be grounded in actual code/config/tests/docs or explicitly labeled as assumptions.
 
 ## Priority Model
 
@@ -186,9 +184,9 @@ Priority must not be assigned from intuition alone. The report must name the aff
 - Relevant dependencies and background flows identified
 - Investigator coverage map completed
 - Failure-mode matrix produced with ratings across all reliability dimensions
-- Resiliency challenger returned `assessment-holds` on the final matrix, or every remaining finding was resolved by downgrade or recorded rejection, or the revision cap was reached and contested ratings are preserved as `unknown`
+- Resiliency challenger outcome resolved per per-task step 9, with contested ratings preserved as `unknown` when the revision cap was reached
 - Final report distinguishes verified facts from inferred and unverified items
-- Prioritized findings include user impact, trigger, weak control, and remediation direction
+- Prioritized findings satisfy the Priority Model and include remediation direction
 - Explicit unknowns and exclusions documented
 
 ### Forbidden Claims
@@ -216,7 +214,7 @@ Before marking a reliability assessment as complete, the orchestrator must verif
 6. Every priority finding identifies the affected journey, likely trigger, and weak or missing control.
 7. No forbidden claims appear in the report.
 
-If check 1 fails, fix the scope definition, then re-dispatch the investigator in a Follow-Up Pass on the journeys the scoring missed. If check 2 or 3 fails, re-dispatch the investigator in a Follow-Up Pass on the uninspected failure paths or unruled dependency categories. If check 4 fails, re-dispatch the mapper in a Revision Pass on the stale rows, then the challenger as a Re-Check Pass. If check 5 fails, dispatch the challenger as a Re-Check Pass scoped to what it has not seen. If check 6 or 7 fails, the orchestrator fixes the report directly (finding fields, phrasing) without new dispatches. None of these fixes count against the revision cap. After any fix, re-run this self-check.
+If check 1 fails, fix the scope definition, then re-dispatch the investigator in a Follow-Up Pass on the journeys the scoring missed. If check 2 or 3 fails, re-dispatch the investigator in a Follow-Up Pass on the uninspected failure paths or unruled dependency categories. If check 4 fails, re-dispatch the mapper in a Revision Pass on the stale rows, then the challenger as a Re-Check Pass. If check 5 fails, dispatch the challenger as a Re-Check Pass scoped to what it has not seen. If check 6 or 7 fails, the orchestrator fixes the report directly (finding fields, phrasing) without new dispatches. After any fix, re-run this self-check.
 
 ## Output Contract
 

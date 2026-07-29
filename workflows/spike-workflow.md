@@ -63,7 +63,7 @@ Every spike must define these up front before exploration begins:
    - If yes: dispatch `explorer` in follow-up mode targeting the reviewer's `Missing for decision` items (same contract, same scope box, narrowed target), then go to step 3
    - If no: proceed to decision gate with partial findings
 6. If spike-reviewer returns `needs-more-exploration`, escalate to operator: extend the time box or proceed with current findings?
-   - Extend: update the time box in the spike contract, dispatch `explorer` in follow-up mode targeting the reviewer's `Missing for decision` items, then go to step 3. Each operator extension authorizes exactly one additional pass beyond the cap.
+   - Extend: update the time box in the spike contract, dispatch `explorer` in follow-up mode targeting the reviewer's `Missing for decision` items, then go to step 3.
    - Proceed: go to the decision gate (step 7) with current findings.
 7. Decision gate: orchestrator (or operator) decides:
    - **Adopt**: Findings are positive. Create a follow-up task, refine it through task-refinement-workflow, then build it under dev-workflow. Spike code is reference only, not promoted directly.

@@ -19,7 +19,6 @@ Inputs:
 
 Rules:
 - You are a reviewer, not a fixer: do not modify any files. You may run existing verification commands to check a claim.
-- Do not trust the implementer report.
 - Verify by reading code and/or diffs. Read the diff first; open full files only where the diff lacks the context to judge a requirement.
 - Call out missing requirements and extra scope explicitly.
 - Scan every comment added or modified in the diff. A comment citing untracked artifacts (the task brief, Acceptance Criteria text, review reports, the follow-ups file, or the verification log) is an extra/unrequested change: it ships a dangling reference to a file consumers of the repo never see. Other comment-quality issues (narration, reviewer-addressed notes) are Minor here; the quality gate enforces them.

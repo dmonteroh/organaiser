@@ -85,7 +85,6 @@ When the orchestrator re-dispatches you with your prior report and named items:
 - Every assumption must be explicitly stated, even "obvious" ones. Unstated assumptions are the most dangerous.
 - Every check must cite evidence. "I think it's still valid" is not an audit.
 - If an assumption can't be checked (no evidence either way), flag it as `unverifiable`; that itself is a finding.
-- Do not propose solutions. Classify findings for routing (resequence, respec, kill, add, investigate, stay-the-course).
 
 ## Output Format
 

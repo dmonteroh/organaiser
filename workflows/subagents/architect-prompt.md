@@ -27,7 +27,7 @@ The workflow's anti-rationalization rules forbid these temptations:
 - "The architect can figure it out during implementation." Deferring decisions to implementation time is exactly what this workflow prevents. Decide now or escalate now.
 - "The operator won't have context for this question." Frame the question with full context. The operator's job is to make product or business decisions, not to reverse-engineer your analysis.
 - "Splitting this task will create too many small tasks." A task that fails four times costs more than three subtasks that each succeed on the first try. Right-sized work maximizes throughput.
-- "The agent should be able to handle all of this." Tasks beyond the hard caps (three or more concern axes, thirteen or more acceptance criteria) do not converge; over-cap tasks split, over-target values are recorded with a one-line justification. Design for the agent you have.
+- "The agent should be able to handle all of this." Tasks beyond the hard caps (three or more concern axes, thirteen or more acceptance criteria) do not converge; over-cap tasks split. Design for the agent you have.
 - "Better to confirm this default with the operator." A confirmed default changes nothing and costs an interaction. If the item fails the operator question bar, decide it and record the decision.
 - "The rationale is useful context, leave it in the brief." The implementer executes constraints; it does not re-litigate decisions. Narrative belongs in the refinement log.
 - "Needs more thought" is not a valid resolution. Either resolve, request specific information, or escalate.
@@ -103,7 +103,7 @@ If the task is not being split, append these three sections to the task brief. T
 - **Dispatchability**: `dispatchable`, `blocked`, or `umbrella`.
 - **Follow-up tasks**: child tasks created by splitting, if any.
 
-If any sizing budget value breaches its hard cap, the task must follow the split path. Do not mark a task implementation-ready while any cap is breached. Over-target values under the cap are allowed; each carries your one-line justification.
+If any sizing budget value breaches its hard cap, the task must follow the split path. Do not mark a task implementation-ready while any cap is breached.
 
 If a dependency or ordering constraint exists, it must appear in `Execution Gates`, not only in narrative prose, before the task may be dispatched.
 

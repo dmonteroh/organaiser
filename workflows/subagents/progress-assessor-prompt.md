@@ -73,7 +73,6 @@ When the orchestrator re-dispatches you with your prior report and named items:
 
 ## Rules
 
-- Read the actual code, not just status labels.
 - Be specific about gaps. "Behind schedule" is not useful. "S03 database schema is 60% complete, blocking S04-S09" is.
 - Report honestly. If progress is ahead of plan, say so. If it's behind, say so with evidence, not spin.
 - Do not propose solutions. You are diagnosing, not prescribing.

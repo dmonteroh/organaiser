@@ -124,7 +124,7 @@ Append this section to the refined task brief before marking it implementation-r
 - **Read scope**: number of files in the implementer's read set and the largest file's approximate line count, taken from the analyst's Files Read list, not estimated
 - **Band per measure**: mark each value `within-target` or `over-target` against the sizing table. Every `over-target` value carries a one-line justification
 
-If any measure breaches its hard cap, the task is not implementation-ready and must follow the split path. Over-target values under the cap are allowed; each carries its one-line justification in the `Sizing Budget`, and the band label alone never blocks readiness or triggers a review loop.
+If any measure breaches its hard cap, the task is not implementation-ready and must follow the split path.
 
 ### Required section in the task brief: `Execution Gates`
 
@@ -161,7 +161,7 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
    - `split-required`: go to step 3 before drafting any sections
    - `needs-review` or `blocked`: full review. Answer questions where codebase signal is sufficient, decide ambiguous scope boundaries, classify remaining unresolved items as `operator-required` or `resolved`, record decisions in the task document as terse constraints with the rationale in the refinement log, then append `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` to the task brief
    - `implementation-ready`: light pass. Validate the sketch, then draft and append the three sections. Do not manufacture findings to review
-   - On every non-split pass, finish by applying brief hygiene: move any refinement narrative out of the brief into the refinement log
+   - On every non-split pass, finish by applying brief hygiene (see Brief hygiene: the refinement log)
 3. Split branch (only when `agent implementability` is `blocked`):
    - Create child tasks sized to fit the sizing rules
    - Update the parent task to `umbrella`/`superseded-by-children` status so it is non-dispatchable
@@ -179,7 +179,7 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
    - Verify implementation sketch is still valid after decisions
    - Confirm zero blockers and no unanswered questions remain
    - Validate `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` against the final sketch, including the sizing bands and any over-target justifications
-   - Verify brief hygiene: the brief contains only implementer-facing content and the refinement trail is in the refinement log
+   - Verify brief hygiene per the Brief hygiene section
 6. If the final confidence check fails: go to step 2 with the new findings (see loop cap in Rules)
 7. Orchestrator runs the Completion Self-Check and marks the task `implementation-ready`. This is an orchestrator action; no new subagent dispatch is needed.
 
@@ -219,7 +219,7 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
 | "The operator is available, just ask now"               | Mid-run synchronous questions stall every other task and force answers without reading time. Questions batch to the end of the run; the operator answers while dispatchable tasks are already being implemented. | batched escalation       |
 | "The implementation sketch is obvious, I'll skip it"    | If it's obvious, it takes 2 minutes to write. If it's not, you just proved why it's needed.                                                                           | analyst confidence check |
 | "Splitting this task will create too many small tasks"  | A task that fails 4 times costs more than 3 subtasks that each succeed on the first try. Agent throughput is maximized by right-sized work, not by ambitious scoping. | agent implementability   |
-| "The agent should be able to handle all of this"        | Past evidence shows tasks beyond the hard caps (3+ concern axes, 13+ ACs) do not converge. Over-cap tasks split; over-target values are recorded with a one-line justification. Design for the agent you have, not the agent you wish you had. | agent implementability   |
+| "The agent should be able to handle all of this"        | Past evidence shows tasks beyond the hard caps (3+ concern axes, 13+ ACs) do not converge. Over-cap tasks split. Design for the agent you have, not the agent you wish you had. | agent implementability   |
 | "The architect barely changed anything, skip the final check" | The fast path is defined precisely: clean first pass, no changes beyond the three appended sections and brief hygiene, no operator items. Any decision, scope change, or operator answer invalidates it. Check the condition, not the vibe. | final confidence check   |
 | "The rationale is useful context, leave it in the brief" | The implementer executes constraints; it does not re-litigate decisions. Narrative in the brief inflates the dispatch packet and buries the acceptance criteria. It belongs in the refinement log. | brief hygiene            |
 
@@ -260,7 +260,7 @@ Before marking a task as implementation-ready, the orchestrator must verify:
 2. Every confidence dimension has a recorded rating with supporting evidence.
 3. The implementation sketch names specific files and describes specific changes.
 4. Every operator-required item passed the operator question bar and is either resolved with the answer applied, or recorded in the batched open-questions file with its task gated accordingly. No item was escalated mid-run.
-5. The final confidence check was run AFTER all decisions were made (not before), or the fast path condition was met: first analyst pass returned `implementation-ready`, the architect changed nothing beyond appending the three sections and applying brief hygiene, and no operator-required items existed.
+5. The final confidence check was run AFTER all decisions were made (not before), or the step 5 fast path condition was met.
 6. `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` are appended to the task brief (not left in a separate refinement artifact).
 7. If the task breached a sizing hard cap, the parent was not marked implementation-ready and was converted into a split-required or umbrella/superseded state. Any over-target value under its cap carries a one-line justification in the `Sizing Budget`.
 8. If the refinement identified dependency/order gates, those gates were reflected in task metadata/order before dispatch.

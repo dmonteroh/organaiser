@@ -97,15 +97,12 @@ Two-stage review pipeline with strict gate ordering: spec compliance first, then
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
-- Re-dispatch loops that follow an implementer fix (per-task steps 4, 7, 10) resume from the verification barrier (step 3) to ensure fresh state.
 - Every re-dispatch is a fresh subagent context carrying the full original task packet plus the new findings or failure evidence, never a continuation of a prior subagent conversation. A fresh context re-reads current file state instead of trusting stale memory of it.
 - The orchestrator does not interpret "close enough": a gate either passes or it doesn't.
 - Maximum loop iterations per gate: 3. If a gate fails 3 times, escalate to the operator with full context including all prior findings and fix attempts. This cap also applies to the post-all-tasks verification loop and the cross-task review gate. The QUESTIONS loop (per-task step 2) and the missing-artifacts barrier loop (per-task step 3) carry the same cap: after 3 rounds each, escalate to the operator instead of re-dispatching.
 - Spec compliance must pass before code quality review starts. Never reverse this order.
 - A task cannot move to `ready` while any review has open blocking findings.
 - The orchestrator must not resolve verification-scope ambiguity by assumption. If a requirement or review comment could reasonably mean either automated coverage or operator-run manual verification, ask the operator before widening the packet.
-- Manual verification instructions/results and automated test coverage are separate proof surfaces. Reviewers may require both when the task says so, but they may not silently translate manual verification into a requirement for new automated infrastructure.
-- Self-review is required hygiene, not a substitute for any gate. It surfaces obvious issues before external review.
 
 ## Anti-Rationalization Rules
 
