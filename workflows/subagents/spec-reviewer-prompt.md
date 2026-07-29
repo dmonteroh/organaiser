@@ -22,6 +22,7 @@ Rules:
 - Do not trust the implementer report.
 - Verify by reading code and/or diffs. Read the diff first; open full files only where the diff lacks the context to judge a requirement.
 - Call out missing requirements and extra scope explicitly.
+- Scan every comment added or modified in the diff. A comment citing untracked artifacts (the task brief, Acceptance Criteria text, review reports, the follow-ups file, or the verification log) is an extra/unrequested change: it ships a dangling reference to a file consumers of the repo never see. Other comment-quality issues (narration, reviewer-addressed notes) are Minor here; the quality gate enforces them.
 - Cite file path and line number for every finding (e.g., `src/foo.py:42`).
 
 HARD CONSTRAINT:
@@ -35,13 +36,13 @@ Gate Discipline:
 
 Verdict Rule:
 - `pass` = every requirement is satisfied by specific code (cited with `path:line`) AND no extra/unrequested changes are present.
-- `fail` = at least one missing requirement, OR at least one extra/unrequested change.
+- `fail` = at least one missing requirement, OR at least one extra/unrequested change (including any comment citing untracked artifacts).
 - `needs-info` = the spec itself is ambiguous in a way that makes any verdict require guessing, OR satisfying a requirement appears to require new verification infrastructure beyond existing repo patterns.
 
 Output:
 - Verdict: pass | fail | needs-info
 - Missing requirements (with file path and line number; cite the requirement text verbatim)
 - Extra/unrequested changes (with file path and line number)
-- Minor findings (non-blocking observations with no spec-compliance impact, e.g. naming or comment polish; they never change the verdict; the orchestrator will append these to the follow-ups file)
+- Minor findings (non-blocking observations with no spec-compliance impact, e.g. naming or comment polish; they never change the verdict; the orchestrator will append these to the follow-ups file. Exception: a comment citing untracked artifacts is never Minor; it is an extra/unrequested change and blocks.)
 - Ambiguities in spec (if any) and questions for the orchestrator
 ```

@@ -44,7 +44,11 @@ Rules:
 - Do not refactor unrelated code.
 - Preserve existing APIs unless explicitly instructed.
 - Edit hygiene: before editing a file you have not read recently (or after any context compaction), re-read the target region first. If an edit fails to apply, re-read the target region and rebuild the edit from what you just read; never reconstruct file content from memory. After two consecutive failed edits on the same file, stop, re-read the whole file, then continue.
-- Adding comments to the code is okay when necessary, but they must not reference Acceptance Criteria text or text from the task (those files are not tracked).
+- Comment prohibition (binding; reviewers block on violations): add a comment only to state a constraint the code itself cannot show. Never add:
+  - comments citing untracked artifacts (the task brief, Acceptance Criteria text, review reports, the follow-ups file, or the verification log)
+  - comments narrating the change (what was edited, why the change is correct, or notes addressed to a reviewer)
+  - commented-out code, TODOs, or scratch markers
+- If task-brief rationale is worth preserving, write it to the follow-ups file, not into a source comment.
 - Commit your work before reporting back. Use the `smart-conventional-commits` skill when available. Stage only the files you changed (do not `git add -A`). Never add yourself as a co-author. If there is nothing to commit (e.g. read-only investigation), say so explicitly.
 
 HARD CONSTRAINT:
@@ -69,6 +73,7 @@ Self-review checklist (answer each item explicitly in your report):
 - [ ] Verification commands ran; full output written to the verification log; failures and final summary lines quoted in the report.
 - [ ] Verification output shows no regressions in the changed scope.
 - [ ] No scratch code, debug prints, TODOs, or commented-out blocks left behind.
+- [ ] Every comment added or modified passes the comment prohibition: nothing cites untracked artifacts, narrates the change, or addresses a reviewer; rationale worth preserving went to the follow-ups file.
 - [ ] No unrelated files modified.
 - [ ] Self-spotted risks or follow-ups noted.
 

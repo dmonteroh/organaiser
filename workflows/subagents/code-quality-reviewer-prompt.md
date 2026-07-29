@@ -24,6 +24,7 @@ Inputs:
 Checks:
 - Correctness: edge cases, error handling, concurrency, idempotency (if relevant)
 - Maintainability: naming, structure, duplication, complexity
+- Comments: scan every comment added or modified in the diff against the comment prohibition: comments citing untracked artifacts (the task brief, Acceptance Criteria text, review reports, the follow-ups file, or the verification log); comments narrating the change (what was edited, why the change is correct, or notes addressed to a reviewer); commented-out code, TODOs, or scratch markers
 - Safety: secrets/logging, unsafe defaults, dangerous operations
 - Tests: presence, quality, and whether they actually validate behavior
 - Verification gap:
@@ -53,8 +54,8 @@ Verdict Rule:
 
 Severity definitions:
 - Critical = bug, safety hole, secret leak, data loss risk, or anything that ships a defect to users.
-- Important = correctness or test-quality gap that would ship a defect under foreseeable conditions; missing regression test for a fixed bug; missing assertion for new behavior.
-- Minor = style, maintainability, or naming issue with no correctness impact.
+- Important = correctness or test-quality gap that would ship a defect under foreseeable conditions; missing regression test for a fixed bug; missing assertion for new behavior; any comment violating the comment prohibition (see Checks).
+- Minor = style, maintainability, or naming issue with no correctness impact and no comment-prohibition violation.
 
 Output:
 - Verdict: pass | needs-info | fail-with-severity: <critical | important>
