@@ -27,7 +27,7 @@ function claudeProfile(overrides: Partial<VendorProfile> = {}): VendorProfile {
   return codexProfile({ runner: "claude", ...overrides });
 }
 
-// ── command building: codex delivers via stdin, claude now also delivers via stdin ──
+// ── command building: both vendors deliver the packet via stdin ──
 test("buildCodexCommand: codex reads the packet from stdin (input)", () => {
   const cmd = buildCodexCommand(codexProfile(), "PACKET");
   assert.equal(cmd.command, "codex");
@@ -53,7 +53,7 @@ test("buildClaudeCommand: claude carries the packet on stdin, not in argv", () =
   const cmd = buildClaudeCommand(claudeProfile(), "PACKET");
   assert.equal(cmd.command, "claude");
   assert.equal(cmd.input, "PACKET", "claude packet is delivered via stdin");
-  assert.ok(!cmd.args.includes("-p"), "claude no longer takes -p");
+  assert.ok(!cmd.args.includes("-p"), "claude does not take -p");
   for (const arg of cmd.args) {
     assert.ok(!arg.includes("PACKET"), "the packet must not appear anywhere in args");
   }
@@ -63,6 +63,14 @@ test("buildClaudeCommand: claude carries the packet on stdin, not in argv", () =
   const ofIdx = cmd.args.indexOf("--output-format");
   assert.ok(ofIdx >= 0 && cmd.args[ofIdx + 1] === "stream-json", "defaults to stream-json output");
   assert.ok(cmd.args.includes("--verbose"), "stream-json requires --verbose");
+});
+
+test("buildClaudeCommand: claudeBypass gates --dangerously-skip-permissions", () => {
+  const withBypass = buildClaudeCommand(claudeProfile({ claudeBypass: true }), "P");
+  assert.ok(withBypass.args.includes("--dangerously-skip-permissions"));
+
+  const withoutBypass = buildClaudeCommand(claudeProfile({ claudeBypass: false }), "P");
+  assert.ok(!withoutBypass.args.includes("--dangerously-skip-permissions"));
 });
 
 test("buildClaudeCommand: claudeStreamJson=false restores buffered text output", () => {
