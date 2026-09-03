@@ -24,6 +24,8 @@ Every runnable workflow's contract is authored across three layers: policy markd
 
 Authoring rule: a verdict enum is authored once, in the result schema, and copied verbatim into the template's `Verdict Rule` and the manifest's `verdicts` list. CI diffs the copies.
 
+Some notes below cite planning codes from this project's own planning process: `P<n>` names a phase number and `D<n>` names a decision record. They are historical annotations, not part of any workflow's contract.
+
 ### Workflow ids
 
 Twelve workflow ids, recorded verbatim as authored in each file's frontmatter:
