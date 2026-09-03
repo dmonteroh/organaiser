@@ -2,6 +2,11 @@
 id: dev-workflow
 name: Development Workflow
 triggers: [implementation, bugfix, refactor, feature]
+contractVersion: 2.0.0
+runnerManifest: manifests/development.v1.yaml
+resultSchema: schemas/stage-result.schema.json
+manualMode: supported
+runnerMode: supported
 ---
 
 # Development Workflow Contract

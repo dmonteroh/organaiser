@@ -2,6 +2,11 @@
 id: task-refinement
 name: Task Refinement Workflow
 triggers: [task-refinement, planning, spec-writing]
+contractVersion: 2.0.0
+runnerManifest: manifests/task-refinement.v1.yaml
+resultSchema: schemas/stage-result.schema.json
+manualMode: supported
+runnerMode: supported
 ---
 
 # Task Refinement Workflow Contract

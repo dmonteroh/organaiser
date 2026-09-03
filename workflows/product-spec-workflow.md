@@ -2,6 +2,11 @@
 id: product-spec-workflow
 name: Product Specification Workflow
 triggers: [specification, product-spec, problem-statement, feature-definition]
+contractVersion: 2.0.0
+runnerManifest: manifests/product-spec.v1.yaml
+resultSchema: schemas/stage-result.schema.json
+manualMode: supported
+runnerMode: supported
 ---
 
 # Product Specification Workflow Contract
