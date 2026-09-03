@@ -37,7 +37,7 @@ function withTempDir<T>(prefix: string, fn: (dir: string) => T): T {
 
 const ctx = { cwd: process.cwd(), env: process.env };
 
-// ── verify-artifacts.test.mjs:83 ───────────────────────────────────────────
+// ── legacy mode imposes no parity obligation ─────────────────────────────────
 test("legacy mode imposes no parity obligation", () => {
   const result = computeClaimsParity(null, path.join(os.tmpdir(), "no-such-claims.tsv"), "legacy");
   assert.equal(result.parity, true);
@@ -45,7 +45,7 @@ test("legacy mode imposes no parity obligation", () => {
   assert.deepEqual(result.mismatches, []);
 });
 
-// ── verify-artifacts.test.mjs:95 ───────────────────────────────────────────
+// ── declared mode parity passes when report matches controller TSV ───────────
 test("declared mode parity PASSES when the report matches controller TSV", () => {
   withTempDir("rv03-parity-pass-", (dir) => {
     const tsv = path.join(dir, "verify.claims.tsv");
@@ -58,7 +58,7 @@ test("declared mode parity PASSES when the report matches controller TSV", () =>
   });
 });
 
-// ── verify-artifacts.test.mjs:111 ──────────────────────────────────────────
+// ── declared mode parity is rejected on a report/TSV divergence ──────────────
 test("declared mode parity is REJECTED when a report field diverges from controller TSV", () => {
   withTempDir("rv03-parity-mismatch-", (dir) => {
     const tsv = path.join(dir, "verify.claims.tsv");
@@ -74,7 +74,7 @@ test("declared mode parity is REJECTED when a report field diverges from control
   });
 });
 
-// ── verify-artifacts.test.mjs:131 ──────────────────────────────────────────
+// ── declared mode parity rejects a missing controller TSV ────────────────────
 test("declared mode parity rejects a missing controller TSV", () => {
   const report = declaredReport({ build: "pass", typecheck: "pass", test: "pass", lint: "pass" });
   const result = computeClaimsParity(report, "/nonexistent/verify.claims.tsv", "declared");
@@ -82,14 +82,14 @@ test("declared mode parity rejects a missing controller TSV", () => {
   assert.ok(result.mismatches.some((m) => /missing/.test(m)));
 });
 
-// ── verify-artifacts.test.mjs:138 ──────────────────────────────────────────
+// ── invalid-mixed mode rejects parity ────────────────────────────────────────
 test("invalid-mixed mode rejects parity", () => {
   const result = computeClaimsParity({}, "/whatever", "invalid-mixed");
   assert.equal(result.parity, false);
   assert.ok(result.mismatches.length > 0);
 });
 
-// ── verify-artifacts.test.mjs:145 ──────────────────────────────────────────
+// ── writeClaimsTsv / parseClaimsTsv round-trip ───────────────────────────────
 test("writeClaimsTsv / parseClaimsTsv round-trip", () => {
   withTempDir("rv03-tsv-", (dir) => {
     const tsv = path.join(dir, "verify.claims.tsv");
@@ -99,7 +99,7 @@ test("writeClaimsTsv / parseClaimsTsv round-trip", () => {
   });
 });
 
-// ── verify-artifacts.test.mjs:158 ──────────────────────────────────────────
+// ── runChecks / runCheck pass, fail, and skipped classification ──────────────
 test("runChecks classifies pass/fail from exit codes, and runCheck reports skipped for an absent or declared-skipped check", async () => {
   const checks: VerificationCheck[] = [
     normalizeCheck({ id: "build", argv: [process.execPath, "-e", "process.exit(0)"] }),
@@ -119,7 +119,7 @@ test("runChecks classifies pass/fail from exit codes, and runCheck reports skipp
   assert.deepEqual(skippedDeclared, { id: "typecheck", status: "skipped", exitCode: null });
 });
 
-// ── verify-artifacts.test.mjs:384 ──────────────────────────────────────────
+// ── parseClaimsTsv last-wins semantics ───────────────────────────────────────
 test("parseClaimsTsv last-wins: a later row for the same check_id overwrites an earlier one", () => {
   withTempDir("rv03-last-wins-", (dir) => {
     const tsv = path.join(dir, "verify.claims.tsv");
