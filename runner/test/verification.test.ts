@@ -177,3 +177,22 @@ test("an echo check with a metacharacter-bearing argument runs with no shell int
   assert.equal(result.status, "pass");
   assert.equal(result.exitCode, 0);
 });
+
+// ── a shell: true check is interpreted by /bin/sh -c ─────────────────────────
+test("a shell: true check is interpreted by /bin/sh -c", async () => {
+  const check = normalizeCheck({ id: "shell-check", shell: true, command: "echo hello; exit 7" });
+  const result = await runCheck(check.id, check, ctx);
+  assert.equal(result.status, "fail");
+  assert.equal(result.exitCode, 7);
+});
+
+// ── a check reading stdin completes cleanly instead of hanging ───────────────
+test("a check reading stdin gets a closed stdin and completes cleanly well under a generous timeout, not by expiring it", async () => {
+  const check = normalizeCheck({ id: "stdin-check", argv: ["cat"], timeoutSecs: 5 });
+  const start = Date.now();
+  const result = await runCheck(check.id, check, ctx);
+  const elapsedMs = Date.now() - start;
+  assert.ok(elapsedMs < 2000, `expected completion well under the 5s timeout, took ${elapsedMs}ms`);
+  assert.equal(result.status, "pass");
+  assert.equal(result.exitCode, 0);
+});

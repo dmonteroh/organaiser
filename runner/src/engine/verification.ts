@@ -140,7 +140,7 @@ function execFileAsync(
   options: { cwd: string; env: NodeJS.ProcessEnv; timeout?: number },
 ): Promise<{ exitCode: number | null }> {
   return new Promise((resolve) => {
-    execFile(file, args, { ...options, encoding: "utf8" }, (error) => {
+    const child = execFile(file, args, { ...options, encoding: "utf8" }, (error) => {
       if (!error) {
         resolve({ exitCode: 0 });
         return;
@@ -148,6 +148,7 @@ function execFileAsync(
       const code = error.code;
       resolve({ exitCode: typeof code === "number" ? code : null });
     });
+    child.stdin?.end();
   });
 }
 
