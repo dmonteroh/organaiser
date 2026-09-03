@@ -18,6 +18,7 @@ spec:
     qualityReviewGate: 3
     questionsLoop: 3
     artifactRepair: 3
+    taskChecksGate: 3
   stages:
     - id: implement
       kind: agent
