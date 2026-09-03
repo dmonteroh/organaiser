@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-workflows.dev/schemas/task-brief.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taskId",
+    "title",
+    "briefPath",
+    "task",
+    "why",
+    "acceptanceCriteria",
+    "implementationConstraints",
+    "sizingBudget",
+    "executionGates"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "briefPath": {
+      "type": "string"
+    },
+    "task": {
+      "type": "string"
+    },
+    "why": {
+      "type": "string"
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "implementationConstraints": {
+      "$ref": "#/$defs/implementationConstraints"
+    },
+    "sizingBudget": {
+      "$ref": "#/$defs/sizingBudget"
+    },
+    "executionGates": {
+      "$ref": "#/$defs/executionGates"
+    },
+    "refinementLogPath": {
+      "type": "string"
+    },
+    "verificationLogPath": {
+      "type": "string"
+    },
+    "verificationCommands": {
+      "type": "array",
+      "items": {
+        "$ref": "board.schema.json#/$defs/verificationCheck"
+      }
+    }
+  },
+  "$defs": {
+    "implementationConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["referencePattern", "negativeScope", "deploymentContext", "playbook"],
+      "properties": {
+        "referencePattern": {
+          "type": "string"
+        },
+        "negativeScope": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "deploymentContext": {
+          "type": "string"
+        },
+        "playbook": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "description": "Ordered implementation steps."
+        }
+      }
+    },
+    "sizingBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "concernAxes",
+        "acceptanceCriteriaCount",
+        "fileTouchCount",
+        "failureClasses",
+        "readScope",
+        "bands"
+      ],
+      "properties": {
+        "concernAxes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "acceptanceCriteriaCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fileTouchCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "failureClasses": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "readScope": {
+          "type": "object",
+          "required": ["fileCount", "largestFileLines", "largestFilePath"],
+          "properties": {
+            "fileCount": {
+              "type": "integer"
+            },
+            "largestFileLines": {
+              "type": "integer"
+            },
+            "largestFilePath": {
+              "type": "string"
+            }
+          }
+        },
+        "bands": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "concernAxes",
+            "acceptanceCriteriaCount",
+            "fileTouchCount",
+            "failureClasses",
+            "readScope"
+          ],
+          "properties": {
+            "concernAxes": {
+              "$ref": "#/$defs/band"
+            },
+            "acceptanceCriteriaCount": {
+              "$ref": "#/$defs/band"
+            },
+            "fileTouchCount": {
+              "$ref": "#/$defs/band"
+            },
+            "failureClasses": {
+              "$ref": "#/$defs/band"
+            },
+            "readScope": {
+              "$ref": "#/$defs/band"
+            }
+          }
+        }
+      }
+    },
+    "band": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["band"],
+      "properties": {
+        "band": {
+          "type": "string",
+          "enum": ["within-target", "over-target"]
+        },
+        "justification": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["band"],
+            "properties": {
+              "band": {
+                "const": "over-target"
+              }
+            }
+          },
+          "then": {
+            "required": ["justification"]
+          }
+        }
+      ]
+    },
+    "executionGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blockedBy", "orderConstraints", "dispatchability"],
+      "properties": {
+        "blockedBy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "orderConstraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dispatchability": {
+          "type": "string",
+          "enum": ["dispatchable", "blocked", "umbrella"]
+        },
+        "followUpTasks": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockedOnOperator": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

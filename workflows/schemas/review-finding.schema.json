@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-workflows.dev/schemas/review-finding.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "severity", "summary", "path"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "severity": {
+      "$ref": "#/$defs/severity"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "path": {
+      "type": "string",
+      "description": "Repo-relative path."
+    },
+    "line": {
+      "type": ["integer", "null"]
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "line", "snippet"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "snippet": {
+          "type": "string"
+        }
+      }
+    },
+    "suggestedFix": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["severity"],
+        "properties": {
+          "severity": {
+            "enum": ["critical", "important"]
+          }
+        }
+      },
+      "then": {
+        "required": ["proof"]
+      }
+    }
+  ],
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "important", "minor"]
+    }
+  }
+}
