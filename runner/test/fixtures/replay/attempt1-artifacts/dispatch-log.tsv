@@ -1,0 +1,3 @@
+seq	role	reason	commit_before	commit_after	packet_file	report_file
+1	implementer		6bdc3927d9acbff70f1abc520a74fcf160a804fe	28e4b57af89892895c02f17260ff5178232c541d		
+2	spec-reviewer					spec-review-result.txt
