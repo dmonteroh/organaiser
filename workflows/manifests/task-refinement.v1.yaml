@@ -12,7 +12,7 @@ spec:
       - superseded
     attention:
       - parked
-    neutral:
+    neutral: []
   caps:
     architectPasses: 2
   stages:
