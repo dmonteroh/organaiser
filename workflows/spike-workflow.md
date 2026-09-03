@@ -2,6 +2,9 @@
 id: spike-workflow
 name: Spike / Prototype Workflow
 triggers: [spike, prototype, proof-of-concept, exploration, time-boxed-experiment]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Spike / Prototype Workflow Contract

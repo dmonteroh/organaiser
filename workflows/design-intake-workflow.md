@@ -2,6 +2,9 @@
 id: design-intake-workflow
 name: Design Intake Workflow
 triggers: [design-intake, design-deliverables, design-to-tasks, mockup-intake]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Design Intake Workflow Contract

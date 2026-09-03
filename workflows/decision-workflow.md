@@ -2,6 +2,9 @@
 id: decision-workflow
 name: ADR / Decision Workflow
 triggers: [decision, architecture-decision, option-evaluation, technology-selection]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # ADR / Decision Workflow Contract

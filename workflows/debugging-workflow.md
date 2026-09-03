@@ -2,6 +2,9 @@
 id: debugging-workflow
 name: Debugging / Root-Cause Workflow
 triggers: [debugging, incident, root-cause-analysis, bug-investigation]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Debugging / Root-Cause Workflow Contract
