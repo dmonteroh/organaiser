@@ -1,4 +1,4 @@
-// Integration test for RV-08: a controller that dies (terminal close / Ctrl-C)
+// Integration test: a controller that dies (terminal close / Ctrl-C)
 // must reap the detached orchestrator group instead of orphaning it.
 //
 // Token-free and agent-free: the "orchestrator" is `sh -c 'echo $$; exec sleep N'`,

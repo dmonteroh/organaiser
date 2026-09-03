@@ -51,7 +51,7 @@ function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> 
   });
 }
 
-// ── Scenario (a): progress then stall → killed only after NO_PROGRESS_SECS ────
+// ── Progress then stall → killed only after NO_PROGRESS_SECS ──────────────────
 test('child that progresses then stalls is reaped only after the no-progress window', async () => {
   // Snapshot changes for the first ~120ms, then freezes. With NO_PROGRESS_SECS
   // 0.2s and POLL 0.02s, the watchdog must keep it alive through the progress
@@ -78,7 +78,7 @@ test('child that progresses then stalls is reaped only after the no-progress win
   assert.ok(elapsed >= 300, `killed too early at ${elapsed}ms`);
 });
 
-// ── Scenario (b) + AC6: progress forever → ceiling backstop fires ─────────────
+// ── Progress forever → ceiling backstop fires ──────────────────────────────────
 test('child that progresses forever is killed by the hard ceiling, not the stall path', async () => {
   let n = 0;
   const snapshot = () => n++; // changes every single poll → never stalls
@@ -94,7 +94,7 @@ test('child that progresses forever is killed by the hard ceiling, not the stall
   assert.equal(result.exitCode, null, 'ceiling_exceeded path must yield exitCode null');
 });
 
-// ── Scenario (c) + AC4: SIGTERM ignored → SIGKILL still reaps the child ───────
+// ── SIGTERM ignored → SIGKILL still reaps the child ────────────────────────────
 test('a child that ignores SIGTERM is still reaped by SIGKILL escalation', async () => {
   let childPid: number | null = null;
   const result = await superviseProcess({
@@ -115,7 +115,7 @@ test('a child that ignores SIGTERM is still reaped by SIGKILL escalation', async
   assert.equal(dead, true, `SIGTERM-ignoring child ${childPid} survived SIGKILL escalation`);
 });
 
-// ── Scenario (d) + AC1: process-group teardown reaps a grandchild ─────────────
+// ── Process-group teardown reaps a grandchild ──────────────────────────────────
 test('the entire process group is torn down — a grandchild is killed with the child', async () => {
   let grandchildPid: number | null = null;
   const result = await superviseProcess({
@@ -136,7 +136,7 @@ test('the entire process group is torn down — a grandchild is killed with the 
   assert.equal(dead, true, `grandchild ${grandchildPid} survived process-group teardown`);
 });
 
-// ── AC3: dispatch-growth regression guard ─────────────────────────────────────
+// ── Dispatch-growth liveness guard ─────────────────────────────────────────────
 // A child whose snapshot's dispatchLines field GROWS each poll while HEAD stays
 // FROZEN (no commit) must run to its natural clean exit. The only liveness kill
 // is stalled_killed (snapshot frozen) — which does not apply when dispatchLines
@@ -171,7 +171,7 @@ test('dispatch lines growing while HEAD stays frozen never triggers a kill — c
   assert.ok(elapsed >= 200, `child should have run well past the 0.1s no-progress window, only ran ${elapsed}ms`);
 });
 
-// ── AC8: report-mtime liveness guard ─────────────────────────────────────────
+// ── Report-mtime liveness guard ────────────────────────────────────────────────
 // A worker writing its report file advances artifactMtime in the snapshot even when
 // HEAD is frozen and no dispatch rows or streamed bytes change. This guards that the
 // artifactMtime signal alone resets the no-progress deadline.
@@ -241,9 +241,9 @@ test('a child that streams output but makes no structural progress is not reaped
   assert.ok(stdout.length > 0, 'the child actually streamed bytes');
 });
 
-// AC3 pairing partner: the SAME structural-only freeze WITHOUT a moving byte signal
-// (a genuinely silent child) is still stalled-killed — proving the byte field, not a
-// relaxed deadline, is what spared the streaming child above.
+// Pairs with the streamed-byte test above: the SAME structural-only freeze WITHOUT
+// a moving byte signal (a genuinely silent child) is still stalled-killed — proving
+// the byte field, not a relaxed deadline, is what spared the streaming child above.
 test('a genuinely silent child with frozen structural fields is still stalled-killed', async () => {
   const snapshot = () => ({ head: 'FROZEN', dispatchLines: 0, artifactMtime: 0, streamedBytes: 0 });
   const result = await superviseProcess({
@@ -256,7 +256,7 @@ test('a genuinely silent child with frozen structural fields is still stalled-ki
   assert.equal(result.exitCode, null);
 });
 
-// ── AC5: clean exit resolves exited_clean without killing ─────────────────────
+// ── Clean exit resolves exited_clean without killing ───────────────────────────
 test('a child that exits 0 on its own resolves exited_clean', async () => {
   const result = await superviseProcess({
     command: process.execPath,
@@ -267,7 +267,7 @@ test('a child that exits 0 on its own resolves exited_clean', async () => {
   assert.deepEqual(result, { outcome: 'exited_clean', exitCode: 0 });
 });
 
-// ── AC5: non-zero exit resolves exited_nonzero without killing ────────────────
+// ── Non-zero exit resolves exited_nonzero without killing ──────────────────────
 test('a child that exits non-zero on its own resolves exited_nonzero', async () => {
   const result = await superviseProcess({
     command: process.execPath,
@@ -279,10 +279,10 @@ test('a child that exits non-zero on its own resolves exited_nonzero', async () 
   assert.equal(result.exitCode, 3);
 });
 
-// ── AC6 (spawn-error path): non-existent binary → exited_nonzero ─────────────
-// This pins the child.on('error') → settle('exited_nonzero') mapping in
-// process-supervisor.ts which previously had zero direct test coverage (ENOENT
-// from spawn, not from a running process).
+// ── Spawn-error path: non-existent binary → exited_nonzero ─────────────────────
+// A spawn failure (ENOENT — the binary never starts) must resolve as
+// exited_nonzero with a null exit code, distinct from a running process exiting
+// non-zero on its own.
 test('spawning a non-existent binary resolves as exited_nonzero', async () => {
   const result = await superviseProcess({
     command: 'definitely-not-a-real-binary',
@@ -295,7 +295,7 @@ test('spawning a non-existent binary resolves as exited_nonzero', async () => {
   assert.equal(result.exitCode, null);
 });
 
-// ── AC7: stdout/stderr are forwarded to injected sinks ────────────────────────
+// ── stdout/stderr are forwarded to injected sinks ───────────────────────────────
 test('stdout and stderr chunks are forwarded to the provided sinks', async () => {
   let out = '';
   let err = '';
@@ -312,10 +312,10 @@ test('stdout and stderr chunks are forwarded to the provided sinks', async () =>
   assert.equal(err, 'oops');
 });
 
-// ── O3: stdin delivery — the packet reaches the child's stdin and is echoed back ─
-// Proves the codex delivery path: input is written to the child's stdin and the
-// child sees EOF (it reads to end, then echoes). Without the stdin write+close the
-// child would block forever on its read and the watchdog would have to kill it.
+// ── stdin delivery — the input reaches the child's stdin and is echoed back ────
+// Proves input is written to the child's stdin and the child sees EOF (it reads to
+// end, then echoes). Without the stdin write+close the child would block forever on
+// its read and the watchdog would have to kill it.
 test('input is delivered to the child stdin and the child sees EOF', async () => {
   let out = '';
   const child = `
@@ -357,10 +357,10 @@ test('omitting input still closes stdin so a reader sees empty EOF', async () =>
   assert.equal(out, 'GOT:[]');
 });
 
-// ── AC2: recordProcess is invoked before the returned promise settles ─────────
+// ── recordProcess is invoked synchronously, before the caller can even await ───
 test('recordProcess is called with the child pid and pgid before the supervise promise settles', async () => {
   let recorded: { pid: number; pgid: number } | null = null;
-  const result = await superviseProcess({
+  const promise = superviseProcess({
     command: process.execPath,
     args: ['-e', 'process.exit(0);'],
     snapshot: () => 'x',
@@ -370,8 +370,13 @@ test('recordProcess is called with the child pid and pgid before the supervise p
     budgets: { POLL_SECS: 0.02, NO_PROGRESS_SECS: 5, GRACE_SECS: 0.05, HARD_CEILING_SECS: 5 },
   });
 
-  assert.ok(recorded, 'recordProcess must have been called before the promise settled');
+  // recordProcess must run synchronously inside superviseProcess, before the
+  // caller can even await the returned promise — checked here, before any await,
+  // so a regression that defers the call to a later microtask/tick still fails.
+  assert.ok(recorded, 'recordProcess must run synchronously, before the caller can even await');
   assert.equal(typeof (recorded as { pid: number }).pid, 'number');
   assert.equal((recorded as { pid: number; pgid: number }).pgid, (recorded as { pid: number; pgid: number }).pid);
+
+  const result = await promise;
   assert.equal(result.outcome, 'exited_clean');
 });
