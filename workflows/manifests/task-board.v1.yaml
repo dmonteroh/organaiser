@@ -47,7 +47,6 @@ spec:
       transitions:
         skipped: task-refinement
         specified: task-refinement
-        specified-with-default: task-refinement
         shelved: reconcile-outcome
         needs-research: reconcile-outcome
         needs-decision: reconcile-outcome
@@ -57,52 +56,30 @@ spec:
       predicate: refinement-outcome
       transitions:
         skipped: implementation
-        implementation-ready: implementation
-        split-required: reconcile-outcome
-        operator-escalated: reconcile-outcome
+        ready-to-implement: implementation
+        superseded: reconcile-outcome
+        parked: reconcile-outcome
     - id: implementation
       kind: runner
       predicate: implementation-outcome
       transitions:
-        completed: runner-verification
-        questions: reconcile-outcome
-        failed: reconcile-outcome
-    - id: runner-verification
-      kind: runner
-      predicate: verification-passed
-      transitions:
-        "true": specification-review
-        "false": reconcile-outcome
-    - id: specification-review
-      kind: runner
-      predicate: spec-review-passed
-      transitions:
-        "true": code-quality-review
-        "false": reconcile-outcome
-    - id: code-quality-review
-      kind: runner
-      predicate: quality-review-passed
-      transitions:
-        "true": integration-candidate
-        "false": reconcile-outcome
+        integrating: integration-candidate
+        waiting-operator: reconcile-outcome
+        parked: reconcile-outcome
     - id: integration-candidate
       kind: runner
       predicate: integration-slot-available
       transitions:
-        "true": integration-verification
+        "true": integration
         "false": integration-candidate
-    - id: integration-verification
+    - id: integration
       kind: runner
-      predicate: candidate-verified
+      predicate: integration-outcome
       transitions:
-        "true": destination-advance
-        "false": reconcile-outcome
-    - id: destination-advance
-      kind: runner
-      predicate: destination-advanced
-      transitions:
-        "true": reconcile-outcome
-        "false": integration-candidate
+        integrated: reconcile-outcome
+        ready-to-implement: implementation
+        waiting-operator: reconcile-outcome
+        parked: reconcile-outcome
     - id: reconcile-outcome
       kind: runner
       predicate: terminal-disposition
