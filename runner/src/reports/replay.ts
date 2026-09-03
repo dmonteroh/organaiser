@@ -98,7 +98,7 @@ function resolveReportPath(
   if (path.isAbsolute(trimmed)) {
     return null;
   }
-  return path.resolve(attemptDir, trimmed);
+  return path.join(attemptDir, trimmed);
 }
 
 function recordReviewerEvidence(
