@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-workflows.dev/schemas/open-question.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "taskId", "owner", "question", "context", "impact", "blocks"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "taskId": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string",
+      "enum": ["operator", "orchestrator-context", "research", "decision"]
+    },
+    "question": {
+      "type": "string"
+    },
+    "context": {
+      "type": "string"
+    },
+    "impact": {
+      "type": "string"
+    },
+    "options": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "summary"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tradeoff": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "safeDefault": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "optionId": {
+          "type": "string"
+        }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

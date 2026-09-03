@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-workflows.dev/schemas/stage-result.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "workflowId",
+    "workflowVersion",
+    "runId",
+    "taskId",
+    "attemptId",
+    "stageId",
+    "roleId",
+    "status",
+    "summary"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "type": "string"
+    },
+    "workflowId": {
+      "type": "string"
+    },
+    "workflowVersion": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "taskId": {
+      "type": "string"
+    },
+    "attemptId": {
+      "type": "string"
+    },
+    "stageId": {
+      "type": "string"
+    },
+    "roleId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "questions", "failed"]
+    },
+    "verdict": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/evidenceEntry"
+      }
+    },
+    "questions": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "https://ai-workflows.dev/schemas/open-question.schema.json"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "https://ai-workflows.dev/schemas/review-finding.schema.json"
+      }
+    },
+    "taskProposals": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "https://ai-workflows.dev/schemas/task-proposal.schema.json"
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/blocker"
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/skipped"
+      }
+    },
+    "artifactChanges": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "changeType"],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "changeType": {
+            "type": "string",
+            "enum": ["created", "modified", "deleted"]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "source"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "skipped"]
+          },
+          "source": {
+            "type": "string",
+            "enum": ["worker", "runner"]
+          }
+        }
+      }
+    },
+    "continuityCandidates": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target", "summary"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": ["memory", "session-log", "docs"]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["summary", "severity"],
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "severity": {
+            "$ref": "https://ai-workflows.dev/schemas/review-finding.schema.json#/$defs/severity"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "analyst"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/analystVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "architect"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/architectVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "problem-definer"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/problemDefinerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "spec-challenger"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/specChallengerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "spec-reviewer"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/specReviewerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "code-quality-reviewer"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/codeQualityReviewerVerdict"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "evidenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["file", "command", "artifact"]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": ["integer", "null"]
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "scope", "evidence"],
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["stage", "task", "run"]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceEntry"
+          }
+        }
+      }
+    },
+    "skipped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item", "reason"],
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "blockerRef": {
+          "type": "string"
+        }
+      }
+    },
+    "analystVerdict": {
+      "type": "string",
+      "enum": ["implementation-ready", "needs-review", "blocked", "split-required"]
+    },
+    "architectVerdict": {
+      "type": "string",
+      "enum": [
+        "all-resolved",
+        "needs-operator",
+        "needs-another-pass",
+        "split-required",
+        "superseded-by-children",
+        "operator-escalated"
+      ]
+    },
+    "problemDefinerVerdict": {
+      "type": "string",
+      "enum": ["proceed", "shelve", "needs-research", "needs-decision", "needs-operator"]
+    },
+    "specChallengerVerdict": {
+      "type": "string",
+      "enum": ["pass", "gaps-found", "needs-info"]
+    },
+    "specReviewerVerdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "needs-info"]
+    },
+    "codeQualityReviewerVerdict": {
+      "type": "string",
+      "enum": ["pass", "needs-info", "fail-with-severity: critical", "fail-with-severity: important"]
+    }
+  }
+}
