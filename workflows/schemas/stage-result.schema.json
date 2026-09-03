@@ -61,21 +61,21 @@
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "open-question.schema.json"
+        "$ref": "https://ai-workflows.dev/schemas/open-question.schema.json"
       }
     },
     "findings": {
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "review-finding.schema.json"
+        "$ref": "https://ai-workflows.dev/schemas/review-finding.schema.json"
       }
     },
     "taskProposals": {
       "type": "array",
       "default": [],
       "items": {
-        "$ref": "task-proposal.schema.json"
+        "$ref": "https://ai-workflows.dev/schemas/task-proposal.schema.json"
       }
     },
     "blockers": {
@@ -165,7 +165,7 @@
             "type": "string"
           },
           "severity": {
-            "$ref": "review-finding.schema.json#/$defs/severity"
+            "$ref": "https://ai-workflows.dev/schemas/review-finding.schema.json#/$defs/severity"
           }
         }
       }

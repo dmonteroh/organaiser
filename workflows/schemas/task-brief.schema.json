@@ -62,7 +62,7 @@
     "verificationCommands": {
       "type": "array",
       "items": {
-        "$ref": "board.schema.json#/$defs/verificationCheck"
+        "$ref": "https://ai-workflows.dev/schemas/board.schema.json#/$defs/verificationCheck"
       }
     }
   },

@@ -38,7 +38,7 @@
       "type": "string"
     },
     "claims": {
-      "$ref": "board.schema.json#/$defs/claimSet"
+      "$ref": "https://ai-workflows.dev/schemas/board.schema.json#/$defs/claimSet"
     },
     "acceptanceCriteria": {
       "type": "array",
@@ -48,7 +48,7 @@
       }
     },
     "sizingBudget": {
-      "$ref": "task-brief.schema.json#/$defs/sizingBudget"
+      "$ref": "https://ai-workflows.dev/schemas/task-brief.schema.json#/$defs/sizingBudget"
     }
   }
 }
