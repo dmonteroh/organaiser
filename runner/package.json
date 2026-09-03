@@ -1,0 +1,20 @@
+{
+  "name": "organaiser",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "orga": "./bin/orga.ts"
+  },
+  "engines": {
+    "node": ">=24.16.0"
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/node": "24.13.3"
+  }
+}

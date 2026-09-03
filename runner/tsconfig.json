@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "target": "es2024",
+    "lib": ["es2024"],
+    "types": ["node"]
+  },
+  "include": ["bin/**/*.ts", "test/**/*.ts"]
+}
