@@ -2,6 +2,9 @@
 id: reliability-resiliency-workflow
 name: Reliability / Resiliency Analysis Workflow
 triggers: [reliability-analysis, resiliency-analysis, resilience-review, failure-mode-analysis, operational-readiness]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Reliability / Resiliency Analysis Workflow Contract

@@ -2,6 +2,9 @@
 id: gap-analysis-workflow
 name: Gap Analysis Workflow
 triggers: [gap-analysis, milestone-check, mva-readiness, completeness-audit]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Gap Analysis Workflow Contract

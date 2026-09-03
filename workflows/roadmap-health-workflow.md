@@ -2,6 +2,9 @@
 id: roadmap-health-workflow
 name: Roadmap Health Check Workflow
 triggers: [roadmap-review, milestone-check, progress-assessment, course-correction]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Roadmap Health Check Workflow Contract

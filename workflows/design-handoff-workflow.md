@@ -2,6 +2,9 @@
 id: design-handoff-workflow
 name: Design Handoff Workflow
 triggers: [design-handoff, redesign-brief, ui-handoff, design-prompt]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Design Handoff Workflow Contract

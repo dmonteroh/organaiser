@@ -2,6 +2,9 @@
 id: research-workflow
 name: Research Workflow
 triggers: [research, analysis, investigation, comparison]
+contractVersion: 1.0.0
+manualMode: supported
+runnerMode: unsupported
 ---
 
 # Research Workflow Contract
