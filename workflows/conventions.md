@@ -47,15 +47,13 @@ Twelve workflow ids, recorded verbatim as authored in each file's frontmatter:
 
 Seven role ids, one per runnable template:
 
-| Role id | Template | Owning workflow |
-|---|---|---|
-| `implementer` | `subagents/implementer-prompt.md` | `dev-workflow` |
-| `spec-reviewer` | `subagents/spec-reviewer-prompt.md` | `dev-workflow` |
-| `code-quality-reviewer` | `subagents/code-quality-reviewer-prompt.md` | `dev-workflow` |
-| `analyst` | `subagents/analyst-prompt.md` | `task-refinement-workflow` |
-| `architect` | `subagents/architect-prompt.md` | `task-refinement-workflow` |
-| `problem-definer` | `subagents/problem-definer-prompt.md` | `product-spec-workflow` |
-| `spec-challenger` | `subagents/spec-challenger-prompt.md` | `product-spec-workflow` |
+- `implementer`, template `subagents/implementer-prompt.md`, owned by `dev-workflow`.
+- `spec-reviewer`, template `subagents/spec-reviewer-prompt.md`, owned by `dev-workflow`.
+- `code-quality-reviewer`, template `subagents/code-quality-reviewer-prompt.md`, owned by `dev-workflow`.
+- `analyst`, template `subagents/analyst-prompt.md`, owned by `task-refinement-workflow`.
+- `architect`, template `subagents/architect-prompt.md`, owned by `task-refinement-workflow`.
+- `problem-definer`, template `subagents/problem-definer-prompt.md`, owned by `product-spec-workflow`.
+- `spec-challenger`, template `subagents/spec-challenger-prompt.md`, owned by `product-spec-workflow`.
 
 Alias: `quality-reviewer` is the current `dev-workflow` Roles heading for `code-quality-reviewer`; `renamed-in: P3`.
 
@@ -65,15 +63,13 @@ Role ids are scoped to these seven runnable templates. `decision-workflow.md` us
 
 Each role's verdict values, copied verbatim from its template's `Verdict Rule`:
 
-| Role id | Verdict values |
-|---|---|
-| `analyst` | `implementation-ready`, `needs-review`, `blocked`, `split-required` |
-| `architect` | `all-resolved`, `needs-operator`, `needs-another-pass`, `split-required`, `superseded-by-children`, `operator-escalated` |
-| `problem-definer` | `proceed`, `shelve`, `needs-research`, `needs-decision`, `needs-operator` |
-| `spec-challenger` | `pass`, `gaps-found`, `needs-info` |
-| `spec-reviewer` | `pass`, `fail`, `needs-info` |
-| `code-quality-reviewer` | `pass`, `fail-with-severity: <level>`, `needs-info` |
-| `implementer` | `verdicts: none` |
+- `analyst`: `implementation-ready`, `needs-review`, `blocked`, `split-required`.
+- `architect`: `all-resolved`, `needs-operator`, `needs-another-pass`, `split-required`, `superseded-by-children`, `operator-escalated`.
+- `problem-definer`: `proceed`, `shelve`, `needs-research`, `needs-decision`, `needs-operator`.
+- `spec-challenger`: `pass`, `gaps-found`, `needs-info`.
+- `spec-reviewer`: `pass`, `fail`, `needs-info`.
+- `code-quality-reviewer`: `pass`, `fail-with-severity: <level>`, `needs-info`.
+- `implementer`: `verdicts: none`.
 
 `implementer` is a producer role with no verdict enum. Its outcome is decided by the runner-owned verification barrier and the two review gates, and its `status` field is owned by the stage-result schema authored in P2.
 
