@@ -4,3 +4,4 @@ AGENTS.md
 CLAUDE.md
 .orga/
 runner/node_modules/
+.worktrees/
