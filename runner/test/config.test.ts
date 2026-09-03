@@ -103,6 +103,7 @@ test("loadConfig with no sources resolves defaults and reads no file path it was
 test("loadConfig returns a frozen object", () => {
   const config = loadConfig();
   assert.equal(Object.isFrozen(config), true);
+  assert.equal(Object.isFrozen(config.budgets), true);
 });
 
 // ── loadConfig: precedence, one case per layer boundary ──────────────────────
@@ -151,8 +152,7 @@ test("loadConfig.budgets defaults every field from DEFAULT_BUDGETS", () => {
   assert.equal(config.budgets.HARD_CEILING_SECS, DEFAULT_BUDGETS.HARD_CEILING_SECS);
 });
 
-// ── Ported from orchestrator.test.mjs:432 ─────────────────────────────────────
-test("loadConfig fails loudly on an invalid RUNNER (ported from orchestrator.test.mjs:432)", () => {
+test("loadConfig fails loudly on an invalid RUNNER", () => {
   assert.throws(
     () => loadConfig({ env: { ORGA_RUNNER: "gemini" } }),
     /invalid RUNNER: gemini \(must be one of codex\|claude\)/,

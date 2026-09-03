@@ -84,7 +84,7 @@ export interface ConfigSources {
 
 export interface ResolvedConfig {
   runner: RunnerId;
-  budgets: Budgets;
+  budgets: Readonly<Budgets>;
 }
 
 // Parses and validates the configuration surface. Collects every invalid
@@ -130,6 +130,7 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
     throw new Error(`invalid organaiser config:\n  - ${errors.join("\n  - ")}`);
   }
 
+  Object.freeze(config.budgets);
   return Object.freeze(config);
 }
 
