@@ -9,6 +9,74 @@ Subagent prompt files under `subagents/` are copy/paste templates. They are disp
 - Every rule a subagent must obey lives inline in its template. Never replace template text with a reference to another file.
 - Rules that both the orchestrator enforces and the subagent obeys exist twice on purpose: once in the workflow (the enforcement side) and once in the template (the behavior side). That duplication is a feature. It is called parity here, and it is verified, never deleted.
 
+## Contract Layers
+
+Every runnable workflow's contract is authored across three layers: policy markdown (the workflow file and its subagent templates), a YAML manifest (stage topology and orchestration), and a JSON Schema (result and artifact syntax). Each layer is authoritative for a different concern.
+
+| Concern | Authority |
+|---|---|
+| Meaning and rationale | Markdown workflow |
+| Stage topology | Manifest |
+| Result syntax | JSON Schema |
+| Role field semantics | Role prompt |
+| Runtime state | Runner database |
+| Human status view | Generated board |
+
+Authoring rule: a verdict enum is authored once, in the result schema, and copied verbatim into the template's `Verdict Rule` and the manifest's `verdicts` list. CI diffs the copies.
+
+### Workflow ids
+
+Twelve workflow ids, recorded verbatim as authored in each file's frontmatter:
+
+- `debugging-workflow`
+- `decision-workflow`
+- `design-handoff-workflow`
+- `design-intake-workflow`
+- `dev-workflow`
+- `gap-analysis-workflow`
+- `product-spec-workflow`
+- `reliability-resiliency-workflow`
+- `research-workflow`
+- `roadmap-health-workflow`
+- `spike-workflow`
+- `task-refinement`
+
+`task-refinement` is declared in `task-refinement-workflow.md` and does not match its filename stem; the manifest name `task-refinement.v1.yaml` already depends on that spelling. All twelve ids are unique. No id is renamed by this register.
+
+### Role ids
+
+Seven role ids, one per runnable template:
+
+| Role id | Template | Owning workflow |
+|---|---|---|
+| `implementer` | `subagents/implementer-prompt.md` | `dev-workflow` |
+| `spec-reviewer` | `subagents/spec-reviewer-prompt.md` | `dev-workflow` |
+| `code-quality-reviewer` | `subagents/code-quality-reviewer-prompt.md` | `dev-workflow` |
+| `analyst` | `subagents/analyst-prompt.md` | `task-refinement-workflow` |
+| `architect` | `subagents/architect-prompt.md` | `task-refinement-workflow` |
+| `problem-definer` | `subagents/problem-definer-prompt.md` | `product-spec-workflow` |
+| `spec-challenger` | `subagents/spec-challenger-prompt.md` | `product-spec-workflow` |
+
+Alias: `quality-reviewer` is the current `dev-workflow` Roles heading for `code-quality-reviewer`; `renamed-in: P3`.
+
+Role ids are scoped to these seven runnable templates. `decision-workflow.md` uses the bare id `architect` for an orchestrator-side role with no `Template:` line; this is outside the register's uniqueness scope while `decision-workflow` has no manifest, and any later manifest for it must qualify the id.
+
+### Verdict enums
+
+Each role's verdict values, copied verbatim from its template's `Verdict Rule`:
+
+| Role id | Verdict values |
+|---|---|
+| `analyst` | `implementation-ready`, `needs-review`, `blocked`, `split-required` |
+| `architect` | `all-resolved`, `needs-operator`, `needs-another-pass`, `split-required`, `superseded-by-children`, `operator-escalated` |
+| `problem-definer` | `proceed`, `shelve`, `needs-research`, `needs-decision`, `needs-operator` |
+| `spec-challenger` | `pass`, `gaps-found`, `needs-info` |
+| `spec-reviewer` | `pass`, `fail`, `needs-info` |
+| `code-quality-reviewer` | `pass`, `fail-with-severity: <level>`, `needs-info` |
+| `implementer` | `verdicts: none` |
+
+`implementer` is a producer role with no verdict enum. Its outcome is decided by the runner-owned verification barrier and the two review gates, and its `status` field is owned by the stage-result schema authored in P2.
+
 ## Deliberate Parity: Keep and Verify
 
 A parity family is a block of contract text that exists in more than one file and must stay in sync. When you edit any member of a family, update every member in the same change, and verify by diffing the members against each other. Wording drift between members is a defect.
@@ -31,6 +99,21 @@ A parity family is a block of contract text that exists in more than one file an
 | Missing-inputs stop rules | Workflow dispatch steps ("do not let it guess") with template HARD CONSTRAINTS ("stop and report the missing inputs") |
 | Read-only constraints | Workflow `Roles` Mode lines with template HARD CONSTRAINTS |
 | Scoped repeat passes | Workflow `Roles` "Supports a ... Pass" lines and dispatch steps with template pass sections |
+| Identifier parity | workflow markdown frontmatter with manifest |
+| Verdict parity | role prompt with result schema and manifest `verdicts` |
+| Outcome parity | manifest transition with terminal outcome |
+| Stage parity | none, authority `manifest (P2)` (see note below) |
+| Ownership | retry cap; skip predicate; artifact schema; question schema; runner versus worker authority (see note below) |
+
+Stage parity note: P1 registers no stage ids. Two known non-1:1 mapping cases are recorded here as evidence, not as members, and are not written into any workflow file. First, the proposed stage ids `architect-light`, `architect-full`, and `architect-split` (P2 proposals) all map to the single `architect` entry in `task-refinement-workflow.md`'s Roles section and to a single Sequence dispatch step, so three stages correspond to one manual step. Second, the proposed stage ids `gather-context` and `orchestrator-route` (P2 proposals) have no correspondingly named step in `product-spec-workflow.md`'s current Sequence, because both are runner-side stages.
+
+Ownership sub-concerns, each with its authoritative layer:
+
+- Retry cap: authority manifest, in the stage's `retry` block. Workflow prose may state the cap and names the manifest as the authority.
+- Skip predicate: authority manifest, declared per stage and testable from persisted state. No workflow prose decides whether a stage is skipped.
+- Artifact schema: authority JSON Schema. The manifest names which artifacts a stage requires; the schema fixes their shape.
+- Question schema: authority JSON Schema, `open-question.schema.json`. Workflow prose states when to ask; the schema fixes the field set.
+- Runner versus worker authority: authority manifest, in the stage's `authority` field. The role prompt restates the boundary for the worker and names the manifest as the authority.
 
 ## One Rule, One Home
 
@@ -39,6 +122,7 @@ Within a single file, each rule has exactly one owner section; every other menti
 Homes, by rule type:
 
 - Loop caps, cap exemptions, and round definitions live in the workflow's `Rules` section. Sequence steps reference the cap ("if the cap is reached"); they do not restate its number or exemption list.
+- For the three runnable workflows, loop caps live in the manifest's `retry` and `caps` blocks; the workflow's `Rules` section states the cap in prose and names the manifest as the authority.
 - A procedure lives in the section that defines it (a barrier step, a named convention section). Later steps reference it.
 - Checklists (`Completion` Required, `Completion Self-Check`, `Dispatch Gate`) verify rules. A checklist item may name the fields it checks, but it never restates a rule's full definition or condition; it points at the owning step or section.
 - A template's `Verdict Rule` clause that prevents misgrading (for example, what does not count toward a verdict) is part of the enum's interface, not a restatement.
@@ -64,3 +148,6 @@ Recorded asymmetries and pending decisions, so audits do not rediscover them:
 - Repeat-pass naming outliers pending alignment: `evaluator` (Re-Evaluation Pass), `investigator` (Follow-up Rounds), `devils-advocate` (unnamed repeat handling), `problem-definer` (lowercase "revision passes").
 - Read-only HARD CONSTRAINT wording varies across templates; align to one sentence opportunistically when a template is next edited.
 - Trial-gated removal candidates (kept until a trial run shows they are no longer needed): the implementer edit-hygiene and re-read-the-brief rules, the "running low on context" anti-rationalization rows, the Enforcement-rule sentence under every Anti-Rationalization table (it duplicates "No step may be skipped"), the roadmap-health rows that argue whether to run the workflow at all, the spike "clean up later" row, and the verification-log Purpose rationale in `dev-workflow`.
+- The nine manual-only workflows have no manifest, by decision D3.
+- The `quality-reviewer` heading in `dev-workflow`'s Roles section is an alias for the canonical role id `code-quality-reviewer`; `renamed-in: P3`.
+- The `dev-workflow` Roles line writes `fail-with-severity(critical|important)`; the `code-quality-reviewer` template writes `fail-with-severity: <critical | important>`. Aligned in P3.
