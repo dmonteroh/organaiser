@@ -1,0 +1,115 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: task-board
+  contractVersion: 1.0.0
+spec:
+  policy: ../task-board-workflow.md
+  entryStage: admit-task
+  terminalOutcomes:
+    success:
+      - integrated
+    attention:
+      - waiting-operator
+      - parked
+    neutral:
+      - superseded
+      - shelved
+      - cancelled
+  stages:
+    - id: admit-task
+      kind: runner
+      predicate: entry-artifacts-valid
+      transitions:
+        "true": release-dependencies
+        "false": reconcile-outcome
+    - id: release-dependencies
+      kind: runner
+      predicate: dependencies-satisfied
+      transitions:
+        "true": acquire-claims
+        "false": release-dependencies
+    - id: acquire-claims
+      kind: runner
+      predicate: claims-available
+      transitions:
+        "true": admit-to-batch
+        "false": acquire-claims
+    - id: admit-to-batch
+      kind: runner
+      predicate: batch-slot-available
+      transitions:
+        "true": product-specification
+        "false": admit-to-batch
+    - id: product-specification
+      kind: runner
+      predicate: product-spec-outcome
+      transitions:
+        skipped: task-refinement
+        specified: task-refinement
+        specified-with-default: task-refinement
+        shelved: reconcile-outcome
+        needs-research: reconcile-outcome
+        needs-decision: reconcile-outcome
+        needs-operator: reconcile-outcome
+    - id: task-refinement
+      kind: runner
+      predicate: refinement-outcome
+      transitions:
+        skipped: implementation
+        implementation-ready: implementation
+        split-required: reconcile-outcome
+        operator-escalated: reconcile-outcome
+    - id: implementation
+      kind: runner
+      predicate: implementation-outcome
+      transitions:
+        completed: runner-verification
+        questions: reconcile-outcome
+        failed: reconcile-outcome
+    - id: runner-verification
+      kind: runner
+      predicate: verification-passed
+      transitions:
+        "true": specification-review
+        "false": reconcile-outcome
+    - id: specification-review
+      kind: runner
+      predicate: spec-review-passed
+      transitions:
+        "true": code-quality-review
+        "false": reconcile-outcome
+    - id: code-quality-review
+      kind: runner
+      predicate: quality-review-passed
+      transitions:
+        "true": integration-candidate
+        "false": reconcile-outcome
+    - id: integration-candidate
+      kind: runner
+      predicate: integration-slot-available
+      transitions:
+        "true": integration-verification
+        "false": integration-candidate
+    - id: integration-verification
+      kind: runner
+      predicate: candidate-verified
+      transitions:
+        "true": destination-advance
+        "false": reconcile-outcome
+    - id: destination-advance
+      kind: runner
+      predicate: destination-advanced
+      transitions:
+        "true": reconcile-outcome
+        "false": integration-candidate
+    - id: reconcile-outcome
+      kind: runner
+      predicate: terminal-disposition
+      transitions:
+        integrated: integrated
+        superseded: superseded
+        shelved: shelved
+        cancelled: cancelled
+        parked: parked
+        waiting-operator: waiting-operator
