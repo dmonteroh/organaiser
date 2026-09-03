@@ -1,7 +1,7 @@
 import { DEFAULT_BUDGETS, type Budgets } from "../adapters/process-supervisor.ts";
 
-// The default no-progress budget consumers fall back to when a caller omits
-// it entirely (RV-02 watchdog convention: all budgets are seconds).
+// All watchdog budgets are seconds; this is the default no-progress budget
+// consumers fall back to when a caller omits it entirely.
 export const NO_PROGRESS_SECS_DEFAULT = DEFAULT_BUDGETS.NO_PROGRESS_SECS;
 
 const ENV_PREFIX = "ORGA_";
@@ -12,8 +12,8 @@ export type Read = (name: string) => string | undefined;
 
 // Checks the environment layer, then the user layer, then the project layer,
 // and returns the first value that is neither undefined nor the empty
-// string. The environment key is prefixed per D16; the file layers are keyed
-// by the bare field name.
+// string. Environment variables are prefixed ORGA_ so they don't collide
+// with unrelated tooling; the file layers are keyed by the bare field name.
 function layeredRead(project: Layer, user: Layer, env: Layer): Read {
   return (name: string): string | undefined => {
     for (const raw of [env[`${ENV_PREFIX}${name}`], user[name], project[name]]) {
