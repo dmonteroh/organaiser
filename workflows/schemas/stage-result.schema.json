@@ -182,6 +182,7 @@
         }
       },
       "then": {
+        "required": ["verdict"],
         "properties": {
           "verdict": {
             "$ref": "#/$defs/analystVerdict"
@@ -199,6 +200,7 @@
         }
       },
       "then": {
+        "required": ["verdict"],
         "properties": {
           "verdict": {
             "$ref": "#/$defs/architectVerdict"
@@ -216,6 +218,7 @@
         }
       },
       "then": {
+        "required": ["verdict"],
         "properties": {
           "verdict": {
             "$ref": "#/$defs/problemDefinerVerdict"
@@ -233,6 +236,7 @@
         }
       },
       "then": {
+        "required": ["verdict"],
         "properties": {
           "verdict": {
             "$ref": "#/$defs/specChallengerVerdict"
@@ -250,6 +254,7 @@
         }
       },
       "then": {
+        "required": ["verdict"],
         "properties": {
           "verdict": {
             "$ref": "#/$defs/specReviewerVerdict"
@@ -267,6 +272,7 @@
         }
       },
       "then": {
+        "required": ["verdict"],
         "properties": {
           "verdict": {
             "$ref": "#/$defs/codeQualityReviewerVerdict"
