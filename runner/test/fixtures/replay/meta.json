@@ -1,0 +1,6 @@
+{
+  "taskId": "REPLAY-FIXTURE",
+  "specPath": "spec.md",
+  "verificationMode": "legacy",
+  "integrationCommit": "8896a9d0dfa6d0b64db1bbaaab29a383fbe2dc74"
+}
