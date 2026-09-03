@@ -1,0 +1,136 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: task-refinement
+  contractVersion: 2.0.0
+spec:
+  policy: ../task-refinement-workflow.md
+  entryStage: analyst-initial
+  terminalOutcomes:
+    success:
+      - ready-to-implement
+      - superseded
+    attention:
+      - parked
+    neutral:
+  caps:
+    architectPasses: 2
+  stages:
+    - id: analyst-initial
+      kind: agent
+      role: analyst
+      prompt: ../subagents/analyst-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - implementation-ready
+        - needs-review
+        - blocked
+        - split-required
+      transitions:
+        implementation-ready: architect-light
+        needs-review: architect-full
+        blocked: architect-full
+        split-required: architect-split
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: architect-light
+      kind: agent
+      role: architect
+      prompt: ../subagents/architect-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - all-resolved
+        - needs-operator
+        - needs-another-pass
+        - split-required
+        - superseded-by-children
+        - operator-escalated
+      transitions:
+        all-resolved: refinement-self-check
+        needs-operator: analyst-final
+        needs-another-pass: analyst-final
+        split-required: architect-split
+        superseded-by-children: superseded
+        operator-escalated: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: architect-full
+      kind: agent
+      role: architect
+      prompt: ../subagents/architect-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - all-resolved
+        - needs-operator
+        - needs-another-pass
+        - split-required
+        - superseded-by-children
+        - operator-escalated
+      transitions:
+        all-resolved: analyst-final
+        needs-operator: analyst-final
+        needs-another-pass: analyst-final
+        split-required: architect-split
+        superseded-by-children: superseded
+        operator-escalated: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: architect-split
+      kind: agent
+      role: architect
+      prompt: ../subagents/architect-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - all-resolved
+        - needs-operator
+        - needs-another-pass
+        - split-required
+        - superseded-by-children
+        - operator-escalated
+      transitions:
+        all-resolved: analyst-final
+        needs-operator: analyst-final
+        needs-another-pass: analyst-final
+        split-required: superseded
+        superseded-by-children: superseded
+        operator-escalated: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: analyst-final
+      kind: agent
+      role: analyst
+      prompt: ../subagents/analyst-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - implementation-ready
+        - needs-review
+        - blocked
+        - split-required
+      transitions:
+        implementation-ready: refinement-self-check
+        needs-review: architect-full
+        blocked: architect-full
+        split-required: architect-split
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: refinement-self-check
+      kind: runner
+      predicate: sections-complete
+      transitions:
+        "true": ready-to-implement
+        "false": architect-full

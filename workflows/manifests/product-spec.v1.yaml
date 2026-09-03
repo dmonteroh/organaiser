@@ -1,0 +1,108 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: product-spec-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../product-spec-workflow.md
+  entryStage: gather-context
+  terminalOutcomes:
+    success:
+      - specified
+    attention:
+      - needs-operator
+    neutral:
+      - shelved
+      - needs-research
+      - needs-decision
+  caps:
+    revisionLoops: 2
+    needsInfoResolutions: 2
+  stages:
+    - id: gather-context
+      kind: runner
+      predicate: context-gathered
+      transitions:
+        "true": problem-definer-draft
+        "false": needs-operator
+    - id: problem-definer-draft
+      kind: agent
+      role: problem-definer
+      prompt: ../subagents/problem-definer-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - proceed
+        - shelve
+        - needs-research
+        - needs-decision
+        - needs-operator
+      transitions:
+        proceed: orchestrator-route
+        shelve: orchestrator-route
+        needs-research: orchestrator-route
+        needs-decision: orchestrator-route
+        needs-operator: orchestrator-route
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: orchestrator-route
+      kind: runner
+      predicate: spec-route
+      transitions:
+        proceed: spec-challenger-review
+        shelve: shelved
+        needs-research: needs-research
+        needs-decision: needs-decision
+        needs-operator: needs-operator
+        orchestrator-context: spec-challenger-review
+        research: needs-research
+        decision: needs-decision
+        operator: needs-operator
+    - id: spec-challenger-review
+      kind: agent
+      role: spec-challenger
+      prompt: ../subagents/spec-challenger-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - pass
+        - gaps-found
+        - needs-info
+      transitions:
+        pass: finalize
+        gaps-found: problem-definer-revise
+        needs-info: orchestrator-route
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: problem-definer-revise
+      kind: agent
+      role: problem-definer
+      prompt: ../subagents/problem-definer-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - proceed
+        - shelve
+        - needs-research
+        - needs-decision
+        - needs-operator
+      transitions:
+        proceed: orchestrator-route
+        shelve: orchestrator-route
+        needs-research: orchestrator-route
+        needs-decision: orchestrator-route
+        needs-operator: orchestrator-route
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: finalize
+      kind: runner
+      predicate: spec-complete
+      transitions:
+        "true": specified
+        "false": problem-definer-revise
