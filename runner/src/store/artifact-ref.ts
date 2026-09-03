@@ -30,6 +30,23 @@ function relativeWithinRoot(root: string, target: string): string | null {
   return rel;
 }
 
+// String-based containment (relativeWithinRoot on path.resolve output) only checks
+// the path's spelling, not what it points to: a symlink whose own path lies inside
+// root can still resolve to a target outside it. Every path this module reads must
+// therefore also pass containment on its realpath.
+function assertRealpathContained(root: string, target: string, label: string): void {
+  let realTarget: string;
+  try {
+    realTarget = fs.realpathSync(target);
+  } catch {
+    return;
+  }
+  const realRoot = fs.realpathSync(root);
+  if (relativeWithinRoot(realRoot, realTarget) === null) {
+    throw new ArtifactRefError(`${label} escapes root through a symlink: ${target}`);
+  }
+}
+
 export function makeArtifactRef(root: string, absolutePath: string): ArtifactRef {
   if (!path.isAbsolute(absolutePath)) {
     throw new ArtifactRefError(`artifact source path must be absolute: ${absolutePath}`);
@@ -39,6 +56,7 @@ export function makeArtifactRef(root: string, absolutePath: string): ArtifactRef
   if (rel === null) {
     throw new ArtifactRefError(`artifact path is outside root: ${absolutePath}`);
   }
+  assertRealpathContained(resolvedRoot, absolutePath, "artifact source path");
   const contents = fs.readFileSync(absolutePath, "utf8");
   return { path: rel.split(path.sep).join("/"), sha256: sha256(contents) };
 }
@@ -53,5 +71,9 @@ export function resolveArtifactRef(root: string, ref: ArtifactRef): string {
   if (rel === null) {
     throw new ArtifactRefError(`artifact ref escapes root: ${ref.path}`);
   }
+  if (rel === "") {
+    throw new ArtifactRefError(`artifact ref path must not be empty or resolve to the root itself: ${JSON.stringify(ref.path)}`);
+  }
+  assertRealpathContained(resolvedRoot, resolved, "artifact ref");
   return resolved;
 }

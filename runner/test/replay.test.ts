@@ -160,6 +160,43 @@ test("resolveArtifactRef throws a named error when the normalized join escapes r
   });
 });
 
+test("resolveArtifactRef throws a named error when ref.path is empty or resolves to the root itself", async () => {
+  await withTempWorkspace((root) => {
+    assert.throws(
+      () => resolveArtifactRef(root, { path: "", sha256: "0".repeat(64) }),
+      ArtifactRefError,
+    );
+    assert.throws(
+      () => resolveArtifactRef(root, { path: ".", sha256: "0".repeat(64) }),
+      ArtifactRefError,
+    );
+  });
+});
+
+test("makeArtifactRef throws a named error when the source path is a symlink whose target escapes root", async () => {
+  await withTwoTempWorkspaces((root, outside) => {
+    const outsideFile = path.join(outside, "report.txt");
+    fs.writeFileSync(outsideFile, "Verdict: pass\n", "utf8");
+    const symlinkPath = path.join(root, "report.txt");
+    fs.symlinkSync(outsideFile, symlinkPath);
+
+    assert.throws(() => makeArtifactRef(root, symlinkPath), ArtifactRefError);
+  });
+});
+
+test("resolveArtifactRef throws a named error when the ref resolves to a symlink whose target escapes root", async () => {
+  await withTwoTempWorkspaces((root, outside) => {
+    const outsideFile = path.join(outside, "report.txt");
+    fs.writeFileSync(outsideFile, "Verdict: pass\n", "utf8");
+    fs.symlinkSync(outsideFile, path.join(root, "report.txt"));
+
+    assert.throws(
+      () => resolveArtifactRef(root, { path: "report.txt", sha256: "0".repeat(64) }),
+      ArtifactRefError,
+    );
+  });
+});
+
 // ── replay.ts: verdict regex, dispatch-log parsing ────────────────────────────
 
 test("verdictRegex still matches a markdown-decorated Verdict line", () => {
@@ -292,6 +329,35 @@ test("an absolute report_file value is unresolvable, never stored as a path, and
 
     const result = accept(buildFacts(ledger, { cwd: root, runRoot: root }));
     assert.ok(result.gaps.includes("specReviewer:missing"), "the unresolved reviewer produces a gap, never a silent pass");
+  });
+});
+
+test("a report_file that is a symlink escaping the run root is rejected, never accreted as forged evidence", async () => {
+  await withTwoTempWorkspaces((root, outside) => {
+    const attemptDir = path.join(root, "attempt1-artifacts");
+    fs.mkdirSync(attemptDir, { recursive: true });
+
+    const forgedReport = path.join(outside, "forged-quality-report.txt");
+    fs.writeFileSync(forgedReport, "Verdict: pass\n", "utf8");
+    fs.symlinkSync(forgedReport, path.join(attemptDir, "quality-reviewer.report.txt"));
+
+    writeDispatchLog(attemptDir, [
+      { role: "implementer", commit_after: "aabbcc5" },
+      { role: "quality-reviewer", report_file: "" },
+    ]);
+
+    assert.throws(
+      () =>
+        reconstructLedger(root, {
+          taskId: "TEST",
+          specPath: null,
+          verificationMode: "legacy",
+          integrationCommit: null,
+          runRoot: root,
+        }),
+      ArtifactRefError,
+      "a report_file symlinked to a target outside the run root must be rejected, not accreted as a pass",
+    );
   });
 });
 
