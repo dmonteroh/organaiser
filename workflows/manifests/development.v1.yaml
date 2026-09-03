@@ -12,7 +12,7 @@ spec:
     attention:
       - waiting-operator
       - parked
-    neutral:
+    neutral: []
   caps:
     specReviewGate: 3
     qualityReviewGate: 3
