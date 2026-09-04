@@ -1,4 +1,6 @@
 import { DEFAULT_BUDGETS, type Budgets } from "../adapters/process-supervisor.ts";
+import { DEFAULT_TICK_INTERVAL_MS, DEFAULT_OPERATOR_POLL_WINDOW_MS } from "../engine/tick.ts";
+import { DEFAULT_CANCEL_GRACE_MS } from "../engine/control-commands.ts";
 
 // All watchdog budgets are seconds; this is the default no-progress budget
 // consumers fall back to when a caller omits it entirely.
@@ -82,9 +84,16 @@ export interface ConfigSources {
   env?: Layer;
 }
 
+export interface RunnerTiming {
+  tickIntervalMs: number;
+  operatorPollWindowMs: number;
+  cancelGraceMs: number;
+}
+
 export interface ResolvedConfig {
   runner: RunnerId;
   budgets: Readonly<Budgets>;
+  timing: Readonly<RunnerTiming>;
 }
 
 // Parses and validates the configuration surface. Collects every invalid
@@ -124,6 +133,20 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
         DEFAULT_BUDGETS.HARD_CEILING_SECS,
       ),
     },
+    timing: {
+      tickIntervalMs: attempt(
+        () => positiveInt(read, "TICK_INTERVAL_MS", DEFAULT_TICK_INTERVAL_MS),
+        DEFAULT_TICK_INTERVAL_MS,
+      ),
+      operatorPollWindowMs: attempt(
+        () => positiveInt(read, "OPERATOR_POLL_WINDOW_MS", DEFAULT_OPERATOR_POLL_WINDOW_MS),
+        DEFAULT_OPERATOR_POLL_WINDOW_MS,
+      ),
+      cancelGraceMs: attempt(
+        () => nonNegativeInt(read, "CANCEL_GRACE_MS", DEFAULT_CANCEL_GRACE_MS),
+        DEFAULT_CANCEL_GRACE_MS,
+      ),
+    },
   };
 
   if (errors.length > 0) {
@@ -131,6 +154,7 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
   }
 
   Object.freeze(config.budgets);
+  Object.freeze(config.timing);
   return Object.freeze(config);
 }
 
