@@ -1,4 +1,4 @@
-{"vendor":"codex","cliVersion":"0.46.0","commandShape":["exec","--json","--output-schema","<schema-path>","--output-last-message","<last-message-path>","--model","gpt-5-codex","--config","model_reasoning_effort=medium","--sandbox","workspace-write","--cd","<worktree>","-"],"captureDate":"2026-09-04","case":"rate-limit"}
+{"vendor":"codex","cliVersion":"0.46.0","commandShape":["exec","--json","--output-schema","<schema-path>","--output-last-message","<last-message-path>","--model","gpt-5-codex","--config","model_reasoning_effort=medium","--sandbox","workspace-write","--cd","<worktree>","-"],"captureDate":"2026-09-04","case":"rate-limit","synthesized":true,"synthesisReason":"not-provocable: permitted by the brief's synthesis rule; provoking it would mean exhausting real provider quota. Event bodies match the real error/turn.failed envelope observed in this session's genuine runs."}
 {"type":"thread.started","thread_id":"01a06d00-a000-7000-a000-000000000006"}
 {"type":"turn.started"}
 {"type":"error","message":"stream error: unexpected status 429 Too Many Requests: {\"detail\":\"Rate limit exceeded, please retry later.\"}; retrying 1/5 in 200ms…"}

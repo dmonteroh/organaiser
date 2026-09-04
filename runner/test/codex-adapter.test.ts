@@ -383,6 +383,38 @@ test("captures/codex/0.46.0: no capture line carries a JWT segment or an OAuth t
   }
 });
 
+// --- synthesis provenance: which captures are genuine bytes and which are not -------
+
+const GENUINE_CAPTURE_CASES: readonly string[] = ["process-crash", "missing-final-event", "version-output-change"];
+
+function captureMetadataLine(caseName: CaptureCase): Record<string, unknown> {
+  const raw = fs.readFileSync(path.join(CAPTURE_DIR, `${caseName}.jsonl`), "utf8");
+  return JSON.parse(raw.split("\n")[0]!) as Record<string, unknown>;
+}
+
+test("captures/codex/0.46.0: every non-genuine capture is marked synthesized in its own metadata line", () => {
+  for (const caseName of CAPTURE_CASES) {
+    const metadata = captureMetadataLine(caseName);
+    if (GENUINE_CAPTURE_CASES.includes(caseName)) {
+      assert.ok(
+        !("synthesized" in metadata),
+        `${caseName}.jsonl is a genuine capture and must carry no "synthesized" key`,
+      );
+      continue;
+    }
+    assert.equal(metadata.synthesized, true, `${caseName}.jsonl must carry "synthesized": true`);
+    assert.equal(
+      typeof metadata.synthesisReason,
+      "string",
+      `${caseName}.jsonl must carry a "synthesisReason" string`,
+    );
+    assert.ok(
+      (metadata.synthesisReason as string).length > 0,
+      `${caseName}.jsonl's "synthesisReason" must not be empty`,
+    );
+  }
+});
+
 // --- toEvents / extractSignals / last-message collect, replayed per capture ----------
 
 for (const caseName of CAPTURE_CASES) {
