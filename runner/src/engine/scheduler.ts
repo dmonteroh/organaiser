@@ -11,10 +11,9 @@
 //
 // `task-board.v1.yaml`'s stage graph is mirrored here as `STAGE_DEFINITIONS`,
 // a plain data table rather than a parsed re-read of the manifest at runtime:
-// this package carries no YAML parser, and `board-predicates.ts`'s
-// `PREDICATE_RETURN_UNIONS` (checked against the manifest by a test) is
-// already this module's cross-check that a predicate's declared outputs
-// cannot silently drift from what `STAGE_DEFINITIONS` routes them to.
+// this package carries no YAML parser. `STAGE_DEFINITIONS` is exported so a
+// test can assert its per-stage transitions map is identical, id-for-id and
+// target-for-target, to the manifest's own parsed transitions.
 
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
@@ -30,19 +29,19 @@ import {
   type DispatchConditions,
 } from "./dispatch.ts";
 import { getPredicate } from "./predicate-registry.ts";
-import { PREDICATE_RETURN_UNIONS } from "./board-predicates.ts";
+import { PREDICATE_RETURN_UNIONS, TERMINAL_DISPOSITION_VALUES } from "./board-predicates.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
 import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick.ts";
 import type { TaskRow, TaskState } from "../store/types.ts";
 
-interface StageDefinition {
+export interface StageDefinition {
   id: string;
   predicateName: string;
   transitions: Readonly<Record<string, string>>;
 }
 
-const STAGE_DEFINITIONS: readonly StageDefinition[] = [
+export const STAGE_DEFINITIONS: readonly StageDefinition[] = [
   {
     id: "admit-task",
     predicateName: "entry-artifacts-valid",
@@ -127,6 +126,7 @@ const ENTRY_STAGE_ID = "admit-task";
 const STAGE_DEFINITIONS_BY_ID = new Map(STAGE_DEFINITIONS.map((stage) => [stage.id, stage]));
 const STAGE_IDS = new Set(STAGE_DEFINITIONS.map((stage) => stage.id));
 const DISPATCHABLE_STAGE_IDS = new Set(["implementation", "integration"]);
+const LEGAL_TERMINAL_DISPOSITIONS = new Set<string>(TERMINAL_DISPOSITION_VALUES);
 
 // A representative store-level `TaskState` for each board stage, so
 // `tasks.state` (the broader target-architecture vocabulary) stays roughly in
@@ -355,6 +355,13 @@ function applyTransition(
 
   if (target === fromStageId) {
     // Self-loop: the task keeps waiting at this stage. No state change.
+    return;
+  }
+
+  if (!STAGE_IDS.has(target) && !LEGAL_TERMINAL_DISPOSITIONS.has(target)) {
+    runtime.scratch.invariantViolations.push(
+      `stage ${fromStageId} transition result ${JSON.stringify(result)} targets ${JSON.stringify(target)}, which is neither a known stage id nor a legal terminal disposition for task ${task.id}`,
+    );
     return;
   }
 

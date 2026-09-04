@@ -17,6 +17,7 @@ import {
   terminalDisposition,
 } from "../src/engine/board-predicates.ts";
 import { getPredicate, PredicateRegistryError, PREDICATE_REGISTRY } from "../src/engine/predicate-registry.ts";
+import { STAGE_DEFINITIONS } from "../src/engine/scheduler.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
 import type { AttemptDescriptor, ExecutionSurface, NormalizedEvent } from "../src/adapters/adapter.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
@@ -99,6 +100,27 @@ test("every predicate's declared return union equals its manifest stage's transi
       predicateKeys,
       manifestKeys,
       `predicate ${stage.predicate} (stage ${stage.id}) return union does not match manifest transitions keys`,
+    );
+  }
+});
+
+test("STAGE_DEFINITIONS' per-stage transitions map equals the manifest's, id-for-id and target-for-target", () => {
+  assert.ok(manifestStages.length > 0, "manifest must declare at least one stage");
+  const stageDefinitionsById = new Map(STAGE_DEFINITIONS.map((stage) => [stage.id, stage]));
+
+  assert.deepEqual(
+    [...stageDefinitionsById.keys()].sort(),
+    manifestStages.map((stage) => stage.id).sort(),
+    "STAGE_DEFINITIONS stage ids do not match the manifest's stage ids",
+  );
+
+  for (const manifestStage of manifestStages) {
+    const stageDefinition = stageDefinitionsById.get(manifestStage.id);
+    assert.ok(stageDefinition, `no STAGE_DEFINITIONS entry for manifest stage ${manifestStage.id}`);
+    assert.deepEqual(
+      (stageDefinition as (typeof STAGE_DEFINITIONS)[number]).transitions,
+      manifestStage.transitions,
+      `STAGE_DEFINITIONS transitions for stage ${manifestStage.id} do not match the manifest's transitions`,
     );
   }
 });

@@ -17,6 +17,7 @@ import {
   normalizeResults,
   reapWorkers,
   reconcileState,
+  STAGE_DEFINITIONS,
   type SchedulerSteps,
 } from "../src/engine/scheduler.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
@@ -198,6 +199,36 @@ test("advanceTransitions evaluates the whole board every call: two independent t
     assert.equal(getTask(db, "task-a").stage_id, "acquire-claims");
     assert.equal(getTask(db, "task-b").stage_id, "product-specification");
     assert.equal(runtime.scratch.transitionedThisTick, true);
+  });
+});
+
+test("advanceTransitions records an invariant violation instead of writing a task's row when a stage's transition targets neither a known stage id nor a legal terminal disposition", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "task-refinement", now: clock.now() });
+
+    const taskRefinement = STAGE_DEFINITIONS.find((stage) => stage.id === "task-refinement");
+    assert.ok(taskRefinement, "task-refinement must be a defined stage");
+    const transitions = taskRefinement.transitions as Record<string, string>;
+    const originalTarget = transitions.skipped as string;
+    transitions.skipped = "not-a-real-target";
+
+    try {
+      const runtime = createSchedulerRuntime();
+      advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+      assert.equal(runtime.scratch.transitionedThisTick, false);
+      assert.equal(runtime.scratch.invariantViolations.length, 1);
+      assert.match(
+        runtime.scratch.invariantViolations[0] as string,
+        /targets "not-a-real-target", which is neither a known stage id nor a legal terminal disposition/,
+      );
+
+      const task = getTask(db, "task-a");
+      assert.equal(task.stage_id, "task-refinement");
+      assert.equal(task.disposition, null);
+    } finally {
+      transitions.skipped = originalTarget;
+    }
   });
 });
 
