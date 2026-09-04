@@ -28,7 +28,7 @@ Some notes below cite planning codes from this project's own planning process: `
 
 ### Workflow ids
 
-Twelve workflow ids, recorded verbatim as authored in each file's frontmatter:
+Thirteen workflow ids, recorded verbatim as authored in each file's frontmatter:
 
 - `debugging-workflow`
 - `decision-workflow`
@@ -41,9 +41,10 @@ Twelve workflow ids, recorded verbatim as authored in each file's frontmatter:
 - `research-workflow`
 - `roadmap-health-workflow`
 - `spike-workflow`
+- `task-board`
 - `task-refinement`
 
-`task-refinement` is declared in `task-refinement-workflow.md` and does not match its filename stem; the manifest name `task-refinement.v1.yaml` already depends on that spelling. All twelve ids are unique. No id is renamed by this register.
+`task-refinement` is declared in `task-refinement-workflow.md` and does not match its filename stem; the manifest name `task-refinement.v1.yaml` already depends on that spelling. All thirteen ids are unique. No id is renamed by this register.
 
 ### Role ids
 
