@@ -20,6 +20,8 @@
 
 import { spawn } from "node:child_process";
 
+import { groupAlive, signalGroup } from "./process-group.ts";
+
 const OUTCOMES = {
   exitedClean: "exited_clean",
   exitedNonzero: "exited_nonzero",
@@ -129,18 +131,6 @@ function registerChildGroup(pid: number | undefined): void {
 function unregisterChildGroup(pid: number | undefined): void {
   if (typeof pid !== "number") return;
   activeChildGroups.delete(pid);
-}
-
-// True when the process group led by `pid` still has at least one live member.
-// `process.kill(pid, 0)` is the POSIX liveness probe: it sends no signal and
-// throws ESRCH when no such process exists.
-function groupAlive(pid: number): boolean {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -329,16 +319,4 @@ export async function superviseProcess({
 // both object and string snapshot shapes.
 function serialize(value: unknown): string {
   return JSON.stringify(value ?? null);
-}
-
-// Signal the whole process group led by `pid`. Swallows ESRCH (group already
-// gone) but lets other errors surface — a real teardown failure must not be
-// silently hidden.
-function signalGroup(pid: number, sig: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, sig);
-  } catch (err) {
-    if (err && (err as NodeJS.ErrnoException).code === "ESRCH") return;
-    throw err;
-  }
 }
