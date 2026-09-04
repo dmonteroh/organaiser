@@ -127,8 +127,16 @@ function checkArtifactsPresent(input: BarrierInput): ConditionOutcome {
     let stat: fs.Stats;
     try {
       stat = fs.statSync(resolved);
-    } catch {
-      return { ok: false, detail: `required artifact is absent: ${relPath}` };
+    } catch (err) {
+      const code = err instanceof Error && "code" in err ? (err as NodeJS.ErrnoException).code : undefined;
+      if (code === "ENOENT") {
+        return { ok: false, detail: `required artifact is absent: ${relPath}` };
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        detail: `required artifact could not be checked: ${relPath} (${code ?? "unknown"}: ${message})`,
+      };
     }
     if (!stat.isFile()) {
       return { ok: false, detail: `required artifact is not a regular file: ${relPath}` };
@@ -185,11 +193,22 @@ async function checkChecksPass(input: BarrierInput): Promise<ChecksPassOutcome> 
 
   const checkResults = await runChecks(normalized, { cwd: input.executionRoot, env: input.env });
 
-  const claimsParity = input.workerClaims
-    ? computeWorkerClaimsParity(input.workerClaims, checkResults)
-    : undefined;
+  if (input.workerClaims) {
+    let claimsParity: ClaimsParityResult;
+    try {
+      claimsParity = computeWorkerClaimsParity(input.workerClaims, checkResults);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        checkResults,
+        detail: `worker-claims parity computation failed: ${message}`,
+      };
+    }
+    return { ok: checkResults.overall === "pass", checkResults, claimsParity };
+  }
 
-  return { ok: checkResults.overall === "pass", checkResults, claimsParity };
+  return { ok: checkResults.overall === "pass", checkResults };
 }
 
 function recordAttempt(

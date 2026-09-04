@@ -289,6 +289,35 @@ test("a claims-parity mismatch is recorded as advisory evidence without changing
   });
 });
 
+// ── checks-pass: worker-claims parity I/O failure is recorded, not thrown ──
+test("a claims-parity temp-file failure is recorded as a checks-pass fail rather than escaping the barrier", async (t) => {
+  await withTempDir("barrier-exec-", async (executionRoot) => {
+    await withTempDir("barrier-task-", async (taskDir) => {
+      t.mock.method(fs, "mkdtempSync", () => {
+        throw new Error("ENOSPC: no space left on device, mkdtemp");
+      });
+
+      const result = await runVerificationBarrier(
+        baseInput(
+          {
+            checks: { build: { id: "build", argv: [process.execPath, "-e", "process.exit(0)"] } },
+            workerClaims: { checks: { build: "pass" } },
+          },
+          executionRoot,
+          taskDir,
+        ),
+      );
+      assert.equal(result.verdict, "fail");
+      assert.equal(result.failedCondition, "checks-pass");
+      assert.ok(/parity computation failed/.test(result.evidence.failureDetail ?? ""));
+      assert.ok(/ENOSPC/.test(result.evidence.failureDetail ?? ""));
+
+      const ledger = readLedger(taskDir);
+      assert.equal(ledger?.attempts.length, 1);
+    });
+  });
+});
+
 // ── short-circuit ordering ────────────────────────────────────────────────
 test("process-exited failure short-circuits: later conditions are not evaluated", async () => {
   const child = await spawnGroup(LONG_LIVED);
