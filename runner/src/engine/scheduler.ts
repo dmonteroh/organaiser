@@ -564,7 +564,11 @@ export function reconcileState(ctx: TickContext, runtime: SchedulerRuntime, work
   const claims = ctx.db.prepare(`SELECT COUNT(*) AS n FROM claims WHERE run_id = ?`).get(ctx.runId) as {
     n: number;
   };
-  if (claims.n > 0) {
+  // With no workspace provider, dispatch never requires a claim, so any
+  // `claims` row is stray. With one, `claimSetComplete` requires a `claims`
+  // row for every mutating dispatch, so the same rows are expected state
+  // rather than an invariant violation.
+  if (!workspace && claims.n > 0) {
     runtime.scratch.invariantViolations.push(`${claims.n} claim row(s) exist but P5 acquires none`);
   }
 
