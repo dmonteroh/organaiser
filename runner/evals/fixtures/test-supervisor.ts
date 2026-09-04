@@ -15,11 +15,12 @@ import { fileURLToPath } from "node:url";
 import { openStore } from "../../src/store/db.ts";
 import { acquireLease, releaseLease } from "../../src/store/lease.ts";
 import { reconcile } from "../../src/engine/reconcile.ts";
-import { createSchedulerTick } from "../../src/engine/scheduler.ts";
+import { createSchedulerTick, DEFAULT_SCHEDULER_STEPS, type WorkspaceProvider } from "../../src/engine/scheduler.ts";
 import { runTickShell } from "../../src/engine/tick.ts";
 import { withOperatorTermination } from "../../src/engine/control-commands.ts";
 import { FakeAdapter, type TerminateFn } from "../../src/adapters/fake.ts";
 import type { AttemptDescriptor } from "../../src/adapters/adapter.ts";
+import { DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../../src/git/workspace.ts";
 
 function groupAlive(pgid: number): boolean {
   try {
@@ -59,14 +60,19 @@ export interface TestSupervisorArgs {
   operatorPollWindowMs: number;
   cancelGraceMs: number;
   streamsDir: string;
+  workspaceMode: "none" | "worktree";
 }
 
 export function parseArgs(argv: readonly string[]): TestSupervisorArgs {
-  const [root, runId, tickIntervalMs, operatorPollWindowMs, cancelGraceMs, streamsDir] = argv;
+  const [root, runId, tickIntervalMs, operatorPollWindowMs, cancelGraceMs, streamsDir, workspaceModeArg] = argv;
   if (!root || !runId || !tickIntervalMs || !operatorPollWindowMs || !cancelGraceMs || !streamsDir) {
     throw new Error(
-      "usage: test-supervisor.ts <root> <runId> <tickIntervalMs> <operatorPollWindowMs> <cancelGraceMs> <streamsDir>",
+      "usage: test-supervisor.ts <root> <runId> <tickIntervalMs> <operatorPollWindowMs> <cancelGraceMs> <streamsDir> [workspaceMode]",
     );
+  }
+  const workspaceMode = workspaceModeArg === undefined ? "none" : workspaceModeArg;
+  if (workspaceMode !== "none" && workspaceMode !== "worktree") {
+    throw new Error(`usage: workspaceMode must be "none" or "worktree", got ${JSON.stringify(workspaceModeArg)}`);
   }
   return {
     root,
@@ -75,6 +81,7 @@ export function parseArgs(argv: readonly string[]): TestSupervisorArgs {
     operatorPollWindowMs: Number(operatorPollWindowMs),
     cancelGraceMs: Number(cancelGraceMs),
     streamsDir,
+    workspaceMode,
   };
 }
 
@@ -129,12 +136,17 @@ export async function runTestSupervisor(args: TestSupervisorArgs): Promise<numbe
       process.stderr.write(`[test-supervisor] run ${args.runId} heartbeat at ${Date.now()}\n`);
     }, args.tickIntervalMs);
 
+    const workspace: WorkspaceProvider | undefined =
+      args.workspaceMode === "worktree"
+        ? { projectRoot: args.root, root: DEFAULT_WORKTREE_ROOT, branchPrefix: DEFAULT_BRANCH_PREFIX }
+        : undefined;
+
     let exitCode: number;
     try {
       const exit = await runTickShell({
         db,
         runId: args.runId,
-        body: withOperatorTermination(createSchedulerTick(adapter), {
+        body: withOperatorTermination(createSchedulerTick(adapter, DEFAULT_SCHEDULER_STEPS, workspace), {
           installSigtermTrap: true,
           defaultCancelGraceMs: args.cancelGraceMs,
         }),

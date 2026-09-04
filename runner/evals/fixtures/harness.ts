@@ -13,7 +13,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawn, type ChildProcess } from "node:child_process";
+import assert from "node:assert/strict";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
@@ -283,6 +284,7 @@ export interface SpawnSupervisorOptions {
   cancelGraceMs?: number;
   streamsDir: string;
   logPath?: string;
+  workspaceMode?: "none" | "worktree";
 }
 
 export interface SpawnedSupervisor {
@@ -306,6 +308,7 @@ export function spawnFixtureSupervisor(root: string, runId: string, opts: SpawnS
     String(opts.operatorPollWindowMs ?? 400),
     String(opts.cancelGraceMs ?? 150),
     opts.streamsDir,
+    String(opts.workspaceMode ?? "none"),
   ];
   const logPath = opts.logPath ?? path.join(root, `.orga/runs/${runId}/test-supervisor-${randomUUID()}.log`);
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
@@ -358,7 +361,97 @@ export function sleepLine(ms: number): string {
   return JSON.stringify({ op: "sleep", ms });
 }
 
+export function writeFileLine(relPath: string, text: string): string {
+  return JSON.stringify({ op: "write-file", path: relPath, text });
+}
+
 // A well-formed implementer/integrator stream: reports success immediately.
 export function wellFormedStream(overrides: Record<string, unknown> = {}): string[] {
   return [outputLine("working"), reportLine(overrides), exitLine(0)];
+}
+
+function gitCapture(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }).trim();
+}
+
+// The invariant every later P7 fixture that dispatches into a runner-owned
+// worktree wraps its run in: the operator's own checkout — the project root
+// the supervisor was launched against, not any worktree under it — must show
+// an identical `HEAD` and an identical `git status --porcelain` before and
+// after `fn` runs, regardless of what `fn` does inside worktrees or the
+// store. Never mutates the checkout itself.
+export async function assertOperatorCheckoutUnchanged<T>(projectRoot: string, fn: () => Promise<T>): Promise<T> {
+  const headBefore = gitCapture(projectRoot, ["rev-parse", "HEAD"]);
+  const statusBefore = gitCapture(projectRoot, ["status", "--porcelain"]);
+
+  const result = await fn();
+
+  const headAfter = gitCapture(projectRoot, ["rev-parse", "HEAD"]);
+  const statusAfter = gitCapture(projectRoot, ["status", "--porcelain"]);
+
+  assert.equal(headAfter, headBefore, `operator checkout HEAD changed: before=${headBefore} after=${headAfter}`);
+  assert.equal(
+    statusAfter,
+    statusBefore,
+    `operator checkout working tree changed: before=${JSON.stringify(statusBefore)} after=${JSON.stringify(statusAfter)}`,
+  );
+
+  return result;
+}
+
+export class GitFixtureIgnoreError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitFixtureIgnoreError";
+  }
+}
+
+function orgaDirIgnoredInExclude(dir: string): boolean {
+  const excludePath = path.join(dir, ".git", "info", "exclude");
+  if (!fs.existsSync(excludePath)) return false;
+  const lines = fs.readFileSync(excludePath, "utf8").split("\n").map((line) => line.trim());
+  return lines.includes(".orga/");
+}
+
+function orgaDirCheckIgnored(dir: string): boolean {
+  try {
+    execFileSync("git", ["check-ignore", "-q", ".orga/"], { cwd: dir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A Git-project variant of `startFixtureRun` for the fixtures that dispatch
+// into a runner-owned worktree: `git init`, a seed commit so `HEAD`
+// resolves, then `initProject` (which only writes the `.git/info/exclude`
+// entry when `.git` already exists), then a commit of the tracked tree
+// `initProject` writes. Asserts both `.orga/` ignore registrations landed —
+// nothing in `git worktree add` itself refuses to create a worktree under an
+// unignored `.orga/`, and an unignored `.orga/` is invisible to
+// `assertOperatorCheckoutUnchanged`'s two-snapshot diff — before handing off
+// to the same board/run seeding `startFixtureRun` uses.
+export function startGitFixtureRun(dir: string, tasks: readonly FixtureTaskSpec[]): { runId: string; firstSupervisorPid: number } {
+  gitCapture(dir, ["init", "-q"]);
+  gitCapture(dir, ["config", "commit.gpgsign", "false"]);
+  gitCapture(dir, ["config", "user.name", "Fixture Operator"]);
+  gitCapture(dir, ["config", "user.email", "fixture-operator@example.com"]);
+
+  fs.writeFileSync(path.join(dir, "seed.txt"), "seed\n", "utf8");
+  gitCapture(dir, ["add", "--", "seed.txt"]);
+  gitCapture(dir, ["commit", "-q", "-m", "seed"]);
+
+  initProject(dir);
+
+  gitCapture(dir, ["add", "--", "orga.yaml", "orgaw", ".gitignore"]);
+  gitCapture(dir, ["commit", "-q", "-m", "init orga project"]);
+
+  if (!orgaDirIgnoredInExclude(dir)) {
+    throw new GitFixtureIgnoreError("startGitFixtureRun: .git/info/exclude has no .orga/ line after initProject");
+  }
+  if (!orgaDirCheckIgnored(dir)) {
+    throw new GitFixtureIgnoreError("startGitFixtureRun: git check-ignore -q .orga/ did not exit 0");
+  }
+
+  return startFixtureRun(dir, tasks);
 }

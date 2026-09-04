@@ -33,6 +33,8 @@ import {
   descendantProcessCleanupCancel,
   descendantProcessCleanupWallTimeout,
 } from "../evals/fixtures/10-descendant-process-cleanup.ts";
+import { outOfClaimWrite } from "../evals/fixtures/11-out-of-claim-write.ts";
+import { unrelatedDirtyCheckoutDoesNotAffectTask } from "../evals/fixtures/12-unrelated-dirty-checkout.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -52,6 +54,8 @@ test("cancel-run: graceful", { timeout: FIXTURE_TIMEOUT_MS }, cancelRunGraceful)
 test("cancel-run: --now", { timeout: FIXTURE_TIMEOUT_MS }, cancelRunNow);
 test("descendant-process-cleanup: after cancel", { timeout: FIXTURE_TIMEOUT_MS }, descendantProcessCleanupCancel);
 test("descendant-process-cleanup: after wall-timeout kill", { timeout: FIXTURE_TIMEOUT_MS }, descendantProcessCleanupWallTimeout);
+test("out-of-claim-write", { timeout: FIXTURE_TIMEOUT_MS }, outOfClaimWrite);
+test("unrelated-dirty-checkout-does-not-affect-task", { timeout: FIXTURE_TIMEOUT_MS }, unrelatedDirtyCheckoutDoesNotAffectTask);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

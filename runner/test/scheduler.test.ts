@@ -764,6 +764,28 @@ test("reconcileState with a workspace provider: a worktree present on disk with 
   });
 });
 
+test("a composed tick with a workspace provider and a seeded claims row does not rest blocked on stray-claims evidence", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
+    const provider = defaultProvider(dir);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const body = createSchedulerTick(adapter, DEFAULT_SCHEDULER_STEPS, provider);
+    const outcome = await body(buildCtx(db, runId, clock));
+
+    const restedBlockedOnClaims =
+      outcome.kind === "resting" &&
+      (outcome as { state: string }).state === "blocked" &&
+      /claim row\(s\) exist/.test((outcome as { reason: string | null }).reason ?? "");
+    assert.equal(
+      restedBlockedOnClaims,
+      false,
+      `a claims row required by claimSetComplete must not itself be flagged as an invariant violation; got ${JSON.stringify(outcome)}`,
+    );
+  });
+});
+
 test("an orphaned worktree cleanup withholds a succeeded verdict", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
     insertTask(db, { id: "task-a", runId, stageId: null, disposition: "integrated", now: clock.now() });

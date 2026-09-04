@@ -5,7 +5,8 @@
 // (`output` or `report`, echoed to stdout as a JSON line) or a control directive
 // (`sleep`, `exit`, `trap-sigterm`).
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 interface OutputLine {
   op: "output";
@@ -31,7 +32,13 @@ interface TrapSigtermLine {
   op: "trap-sigterm";
 }
 
-type StreamLine = OutputLine | ReportLine | SleepLine | ExitLine | TrapSigtermLine;
+interface WriteFileLine {
+  op: "write-file";
+  path: string;
+  text: string;
+}
+
+type StreamLine = OutputLine | ReportLine | SleepLine | ExitLine | TrapSigtermLine | WriteFileLine;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -65,6 +72,18 @@ async function main(): Promise<void> {
       case "trap-sigterm":
         process.on("SIGTERM", () => {});
         break;
+      case "write-file": {
+        const cwd = process.cwd();
+        const resolved = path.resolve(cwd, directive.path);
+        const relative = path.relative(cwd, resolved);
+        if (path.isAbsolute(directive.path) || relative.startsWith("..") || path.isAbsolute(relative)) {
+          process.stderr.write(`usage: write-file path must be relative and resolve inside cwd, got ${directive.path}\n`);
+          process.exit(2);
+        }
+        mkdirSync(path.dirname(resolved), { recursive: true });
+        writeFileSync(resolved, directive.text, "utf8");
+        break;
+      }
       case "exit":
         process.exit(directive.code);
     }
