@@ -86,7 +86,7 @@ test("classifyWorker: indeterminate when a worktree is expected but missing, ove
   );
 });
 
-// ── interruptReasonFor: mutating guard from goals spec 23.2 ───────────────
+// ── interruptReasonFor: mutating attempts are never auto-redispatched ─────
 
 test("interruptReasonFor: live classification never produces an interrupt reason", () => {
   assert.equal(interruptReasonFor("live", false), null);
@@ -103,7 +103,7 @@ test("interruptReasonFor: indeterminate always maps to indeterminate", () => {
   assert.equal(interruptReasonFor("indeterminate", true), "indeterminate");
 });
 
-test("interruptReasonFor: a mutating attempt is never eligible for automatic redispatch, even when exited or stale (goals spec 23.2 guard)", () => {
+test("interruptReasonFor: a mutating attempt is never eligible for automatic redispatch, even when exited or stale", () => {
   assert.equal(interruptReasonFor("exited", true), "indeterminate");
   assert.equal(interruptReasonFor("stale", true), "indeterminate");
 });
@@ -223,7 +223,7 @@ test("reconcile classifies a live worker without touching its attempt or worker 
   });
 });
 
-test("reconcile: a synthesized mutating attempt whose worker exited is marked indeterminate, never auto-redispatched (goals spec 23.2)", async () => {
+test("reconcile: a synthesized mutating attempt whose worker exited is marked indeterminate, never auto-redispatched", async () => {
   await withTempWorkspace(async (dir) => {
     initProject(dir);
     const db = openStore(dir);

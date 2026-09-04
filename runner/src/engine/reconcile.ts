@@ -1,6 +1,6 @@
-// Startup reconciliation (goals spec 23.1): on supervisor startup, after the
-// lease is acquired and before any dispatch, every non-terminal `workers` and
-// `attempts` record is classified against the observed system.
+// Startup reconciliation: on supervisor startup, after the lease is acquired
+// and before any dispatch, every non-terminal `workers` and `attempts`
+// record is classified against the observed system.
 //
 // classifyWorker is a pure function over already-gathered facts, mirroring
 // predicates.ts's accept(facts) shape: no filesystem, database, or
@@ -41,9 +41,10 @@ export function classifyWorker(facts: ClassifyFacts): WorkerClassification {
   return "indeterminate";
 }
 
-// Goals spec 23.2: a crashed mutating worker requires worktree reconciliation
-// first, which P5 does not implement, so a mutating attempt is never
-// auto-redispatched regardless of its process classification.
+// A mutating attempt is never auto-redispatched even when its worker is
+// confirmed exited or its lease is stale: reconciling a mutating worktree
+// after a crash requires tooling this phase doesn't implement, so a crashed
+// or stale mutating worker always classifies as indeterminate instead.
 export function interruptReasonFor(
   classification: WorkerClassification,
   mutating: boolean,

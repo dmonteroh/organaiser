@@ -242,7 +242,7 @@ test("resume replaces the abort controller and restores desired_state to running
   });
 });
 
-test("Q10: asserts zero live worker rows and throws a RunnerInvariantError when a live worker is present at waiting-operator", async () => {
+test("waiting-operator asserts zero live worker rows and throws a RunnerInvariantError when a live worker is present", async () => {
   await withRun(async ({ db, runId, clock }) => {
     insertWorker(db, { id: "w1", runId, attemptId: "att-1", pid: 999999, pgid: 999999, heartbeatAt: clock.now(), now: clock.now() });
     await assert.rejects(
@@ -260,7 +260,7 @@ test("Q10: asserts zero live worker rows and throws a RunnerInvariantError when 
   });
 });
 
-test("Q10: zero live workers holds at every tick inside the polling window", async () => {
+test("zero live workers holds at every tick inside the waiting-operator polling window", async () => {
   await withRun(async ({ db, runId, clock }) => {
     const zeroLiveObservations: number[] = [];
     let calls = 0;
@@ -279,7 +279,7 @@ test("Q10: zero live workers holds at every tick inside the polling window", asy
   });
 });
 
-test("Q10: run state waiting-operator is recorded durably on the first polling tick", async () => {
+test("run state waiting-operator is recorded durably on the first polling tick", async () => {
   await withRun(async ({ db, runId, clock }) => {
     let stateAfterSecondTickBody: unknown = null;
     let calls = 0;
@@ -298,7 +298,7 @@ test("Q10: run state waiting-operator is recorded durably on the first polling t
   });
 });
 
-test("Q10: the window resets to zero when a tick returns a non-waiting-operator outcome", async () => {
+test("the waiting-operator polling window resets to zero when a tick returns a non-waiting-operator outcome", async () => {
   await withRun(async ({ db, runId, clock }) => {
     // window 15 / interval 5 = 3 polls to exhaust. Without a reset, the single
     // waiting-operator tick at call 1 plus two more after the interruption

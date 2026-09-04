@@ -1,8 +1,9 @@
 // The tick shell: the fixed seam between "keeping the run alive and obeying
 // the operator" (this module) and "deciding what the board should do next"
 // (a TickBody supplied by the caller, P5d in production). This file owns lease
-// renewal, control-row read/ack, resting-state exit, and the Q10 bounded
-// polling window at `waiting-operator`. It never decides board transitions.
+// renewal, control-row read/ack, resting-state exit, and the bounded polling
+// window used while waiting on operator input at `waiting-operator`. It never
+// decides board transitions.
 //
 // Every deadline here is derived from the injected `now()` passed into
 // runTickShell (or Date.now by default): no bare Date.now() call appears

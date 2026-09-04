@@ -1,8 +1,8 @@
 // startRun: validates a board, snapshots the content hashes that produced
 // this run, commits the run row, then spawns the detached supervisor that
-// outlives the caller. This module never waits for run success (goals spec
-// 25.3): it returns as soon as the run row is durably committed and the
-// supervisor has been launched.
+// outlives the caller. This module never waits for run success: it returns
+// as soon as the run row is durably committed and the supervisor has been
+// launched.
 //
 // `board` arrives already parsed: this module validates its shape against
 // board.schema.json but does not itself read or parse the board file's
