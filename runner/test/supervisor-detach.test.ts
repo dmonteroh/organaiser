@@ -5,13 +5,35 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { openStore } from "../src/store/db.ts";
+import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import { startRun, BoardValidationError } from "../src/engine/supervisor-spawn.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 
 const SUPERVISOR_SPAWN_PATH = fileURLToPath(new URL("../src/engine/supervisor-spawn.ts", import.meta.url));
 const SUPERVISOR_PATH = fileURLToPath(new URL("../src/engine/supervisor.ts", import.meta.url));
+const DB_PATH = fileURLToPath(new URL("../src/store/db.ts", import.meta.url));
+
+// The scheduler never inserts `tasks` rows from a board (that is a later
+// phase's job), so a run left with zero task rows resolves to `succeeded` on
+// its first real tick (goals spec section 11's vacuous-zero-tasks rule). The
+// two tests below need the run to stay open across a real, non-mocked
+// timing window, so each seeds one task already at the `waiting-operator`
+// disposition: a genuine non-terminal, non-dispatchable board state that
+// keeps the tick shell in its bounded operator-poll loop instead of exiting.
+function seedWaitingOperatorTask(root: string, runId: string, now: number): void {
+  const db = openStore(root);
+  try {
+    withTransaction(db, () => {
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run("t1", runId, "t1", "Task 1", "brief.md", "wf1", null, "[]", 0, "waiting-operator", "waiting-operator", now, now);
+    });
+  } finally {
+    db.close();
+  }
+}
 
 function minimalBoard(): unknown {
   return {
@@ -135,11 +157,26 @@ test("startRun commits the run row, writes the content-hash snapshot, and spawns
 
 const CALLER_SCRIPT = `
 import { startRun } from ${JSON.stringify(SUPERVISOR_SPAWN_PATH)};
+import { openStore, withTransaction } from ${JSON.stringify(DB_PATH)};
 
 const [root, boardPath, workflowPath, templatePath] = process.argv.slice(2);
 const fs = await import("node:fs");
 const board = JSON.parse(fs.readFileSync(boardPath, "utf8"));
 const result = startRun({ root, boardPath, board, workflowPath, templatePath });
+
+// Seeded synchronously, before stdout is printed, so the row is durable
+// before the just-spawned supervisor's first tick can observe zero tasks.
+const seedDb = openStore(root);
+try {
+  withTransaction(seedDb, () => {
+    seedDb.prepare(
+      "INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run("t1", result.runId, "t1", "Task 1", "brief.md", "wf1", null, "[]", 0, "waiting-operator", "waiting-operator", Date.now(), Date.now());
+  });
+} finally {
+  seedDb.close();
+}
+
 process.stdout.write(JSON.stringify(result) + "\\n");
 // stay alive long enough for the test to kill this process before it exits
 // naturally — the point is to prove the supervisor survives a forceful death
@@ -215,6 +252,7 @@ test("two real supervisor processes racing for the same run: exactly one stays u
       workflowPath,
       templatePath,
     });
+    seedWaitingOperatorTask(dir, runId, Date.now());
 
     // startRun already spawned a first supervisor for this run; spawn a
     // second one directly against the same run id so it races the first for
