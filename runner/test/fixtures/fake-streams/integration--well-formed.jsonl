@@ -1,0 +1,3 @@
+{"op":"output","text":"starting work"}
+{"op":"report","report":{"protocolVersion":"1","workflowId":"dev-workflow","workflowVersion":"2.0.0","runId":"run_test","taskId":"task_test","attemptId":"attempt_test","stageId":"implement","roleId":"implementer","status":"completed","summary":"Implemented the change."}}
+{"op":"exit","code":0}
