@@ -21,6 +21,7 @@ import {
   killAll,
   installForegroundInterruptHandler,
 } from "../engine/control-commands.ts";
+import { runSupervisor } from "../engine/supervisor.ts";
 import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
@@ -162,7 +163,7 @@ function cmdInit(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
-function cmdRunStart(parsed: ParsedArgs, io: Io): ExitCode {
+async function cmdRunStart(parsed: ParsedArgs, io: Io): Promise<ExitCode> {
   const boardPath = flagString(parsed.flags, "board");
   if (!boardPath) throw new UsageError("run start requires --board <path>");
   const root = resolveRoot(io);
@@ -170,6 +171,11 @@ function cmdRunStart(parsed: ParsedArgs, io: Io): ExitCode {
   const templatePath = flagString(parsed.flags, "template") ?? DEFAULT_TEMPLATE_PATH;
   const board = readBoardFile(boardPath);
   const json = flagBool(parsed.flags, "json");
+  const foreground = flagBool(parsed.flags, "foreground");
+
+  if (foreground) {
+    return cmdRunStartForeground({ root, boardPath, board, workflowPath, templatePath, json, io });
+  }
 
   let result;
   try {
@@ -179,12 +185,53 @@ function cmdRunStart(parsed: ParsedArgs, io: Io): ExitCode {
     throw err;
   }
 
-  if (flagBool(parsed.flags, "foreground")) {
-    installForegroundInterruptHandler({ db: openStore(root), runId: result.runId, now: io.now });
-  }
-
   emit(io, json, result, `started run ${result.runId} (supervisor pid ${result.supervisorPid})`);
   return EXIT_CODES.OK;
+}
+
+interface ForegroundStartArgs {
+  root: string;
+  boardPath: string;
+  board: unknown;
+  workflowPath: string;
+  templatePath: string;
+  json: boolean;
+  io: Io;
+}
+
+// `--foreground` commits the run with no detached supervisor (`spawn:
+// false`), installs the interrupt handler in the same synchronous turn
+// `startRun` returns, then runs the supervisor's own lease/reconcile/tick
+// loop in this process. The `db` handle is shared with the interrupt
+// handler for the whole command and closed exactly once, after the wait
+// ends, so it stays open for as long as a signal could still arrive.
+async function cmdRunStartForeground(args: ForegroundStartArgs): Promise<ExitCode> {
+  const { root, boardPath, board, workflowPath, templatePath, json, io } = args;
+  const db = openStore(root);
+  let removeHandler: (() => void) | undefined;
+  try {
+    let result;
+    try {
+      result = startRun({ root, boardPath, board, workflowPath, templatePath, now: io.now, spawn: false });
+    } catch (err) {
+      if (err instanceof BoardValidationError) throw new UsageError(err.message);
+      throw err;
+    }
+
+    removeHandler = installForegroundInterruptHandler({ db, runId: result.runId, now: io.now });
+
+    const supervisorExitCode = await runSupervisor({ root, runId: result.runId });
+
+    const run = db.prepare(`SELECT * FROM runs WHERE id = ?`).get(result.runId) as RunRow | undefined;
+    if (!run) throw new NotFoundError(`no run ${result.runId}`);
+    emit(io, json, run, `run ${run.id}: reached ${run.state}`);
+
+    if (supervisorExitCode === EXIT_CODES.STATE_CONFLICT) return EXIT_CODES.STATE_CONFLICT;
+    return runStateToExitCode(run.state) ?? EXIT_CODES.OK;
+  } finally {
+    removeHandler?.();
+    db.close();
+  }
 }
 
 function cmdRunStatus(parsed: ParsedArgs, io: Io): ExitCode {

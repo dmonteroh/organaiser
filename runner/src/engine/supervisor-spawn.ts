@@ -92,12 +92,13 @@ export interface StartRunOptions {
   workflowPath: string;
   templatePath: string;
   now?: () => number;
+  spawn?: boolean;
 }
 
 export interface StartRunResult {
   runId: string;
-  supervisorPid: number;
-  logPath: string;
+  supervisorPid: number | null;
+  logPath: string | null;
 }
 
 export function startRun(options: StartRunOptions): StartRunResult {
@@ -145,6 +146,10 @@ export function startRun(options: StartRunOptions): StartRunResult {
     mirrorEvent(root, createdEvent);
   } finally {
     db.close();
+  }
+
+  if (options.spawn === false) {
+    return { runId, supervisorPid: null, logPath: null };
   }
 
   const runDir = runsDir(root, runId);

@@ -11,6 +11,7 @@ import { initProject } from "../src/store/init.ts";
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 import type { Io } from "../src/cli/commands.ts";
+import type { RunRow } from "../src/store/types.ts";
 
 const ORGA_BIN_PATH = fileURLToPath(new URL("../bin/orga.ts", import.meta.url));
 
@@ -436,3 +437,63 @@ test("a human-readable (non-JSON) run status prints on stdout, not JSON", async 
     }
   });
 });
+
+// ── run start --foreground: the supervisor runs in the calling process ─────
+
+test("run start --foreground returns only after the run rests, mapped to the matching exit code, spawning no detached supervisor", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const boardPath = writeBoard(dir);
+    const io = ioAt(dir);
+
+    const before = childCountOfSelf();
+    const code = await main(["node", "orga", "run", "start", "--board", boardPath, "--foreground", "--json"], io);
+    const after = childCountOfSelf();
+
+    assert.equal(after, before, "--foreground must spawn no detached child process");
+    assert.equal(io.outLines.length, 1, "exactly one stdout value after the wait ends");
+    const run = JSON.parse(io.outLines[0] as string) as RunRow;
+    assert.equal(run.state, "succeeded", "an empty board has nothing to dispatch and rests at succeeded");
+    assert.equal(code, EXIT_CODES.OK);
+    assert.equal(runStateToExitCode(run.state), code);
+
+    const runDir = path.join(dir, ".orga", "runs", run.id);
+    assert.ok(!fs.existsSync(path.join(runDir, "supervisor.log")), "no supervisor.log: nothing was spawned");
+    assert.ok(!fs.existsSync(path.join(runDir, "supervisor.pid")), "no supervisor.pid: nothing was spawned");
+  });
+});
+
+// `cmdRunStartForeground`'s source is the mechanically-checkable proof that
+// the interrupt handler is installed synchronously, ahead of any worker the
+// run could ever spawn: `installForegroundInterruptHandler` must appear
+// before the `runSupervisor` call, with no `await` and no other
+// process-spawning statement between the two.
+test("the interrupt handler is installed before runSupervisor is awaited, with nothing spawning in between", () => {
+  const source = fs.readFileSync(fileURLToPath(new URL("../src/cli/commands.ts", import.meta.url)), "utf8");
+  const bodyStart = source.indexOf("async function cmdRunStartForeground");
+  const bodyEnd = source.indexOf("\n}\n", bodyStart);
+  assert.ok(bodyStart >= 0 && bodyEnd > bodyStart, "cmdRunStartForeground must exist as a named function");
+  const body = source.slice(bodyStart, bodyEnd);
+
+  const installAt = body.indexOf("installForegroundInterruptHandler(");
+  const runSupervisorAt = body.indexOf("await runSupervisor(");
+  assert.ok(installAt >= 0, "must install the foreground interrupt handler");
+  assert.ok(runSupervisorAt >= 0, "must await runSupervisor");
+  assert.ok(installAt < runSupervisorAt, "the handler must install before runSupervisor is awaited");
+
+  const between = body.slice(installAt, runSupervisorAt);
+  assert.ok(!/\bawait\b/.test(between), "no await may sit between installing the handler and awaiting runSupervisor");
+  assert.ok(!/\bspawn\(/.test(between), "no process may spawn between installing the handler and awaiting runSupervisor");
+});
+
+// A live SIGINT race against this phase's `--foreground` path is not a
+// reliable black-box CLI assertion: with no task materialized into the
+// `tasks` table by any command in this build (`run start` included), the
+// in-process supervisor's own first tick always rests immediately, so the
+// window between installing the handler and the process resting is on the
+// order of single-digit milliseconds — too small to hit deterministically
+// from outside the process. `installForegroundInterruptHandler`'s own
+// signal-handling correctness (durable cancellation ahead of a competing
+// exit handler, real SIGTERM/SIGKILL escalation of a live worker) is
+// covered end to end by `test/kill.test.ts`; the assertion above is what is
+// mechanically checkable at this layer.

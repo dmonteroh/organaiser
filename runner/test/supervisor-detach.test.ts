@@ -123,6 +123,9 @@ test("startRun commits the run row, writes the content-hash snapshot, and spawns
     const { boardPath, workflowPath, templatePath } = writeFixtureFiles(dir);
 
     const result = startRun({ root: dir, boardPath, board: minimalBoard(), workflowPath, templatePath });
+    assert.ok(result.supervisorPid !== null && result.logPath !== null, "spawn defaults to true: pid and log path must be set");
+    const supervisorPid = result.supervisorPid as number;
+    const logPath = result.logPath as string;
 
     try {
       const db = openStore(dir);
@@ -137,15 +140,15 @@ test("startRun commits the run row, writes the content-hash snapshot, and spawns
       assert.ok(snapshot.workflow.sha256);
       assert.ok(snapshot.template.sha256);
 
-      assert.ok(fs.existsSync(result.logPath));
-      const pidFile = path.join(path.dirname(result.logPath), "supervisor.pid");
-      assert.equal(fs.readFileSync(pidFile, "utf8"), String(result.supervisorPid));
+      assert.ok(fs.existsSync(logPath));
+      const pidFile = path.join(path.dirname(logPath), "supervisor.pid");
+      assert.equal(fs.readFileSync(pidFile, "utf8"), String(supervisorPid));
 
-      const stillAlive = await waitFor(() => alive(result.supervisorPid), 1000);
+      const stillAlive = await waitFor(() => alive(supervisorPid), 1000);
       assert.ok(stillAlive, "supervisor must still be alive shortly after spawn");
     } finally {
       try {
-        process.kill(-result.supervisorPid, "SIGKILL");
+        process.kill(-supervisorPid, "SIGKILL");
       } catch {
         // already gone
       }
@@ -252,6 +255,7 @@ test("two real supervisor processes racing for the same run: exactly one stays u
       workflowPath,
       templatePath,
     });
+    assert.ok(firstPid !== null, "spawn defaults to true: the first supervisor must have a pid");
     seedWaitingOperatorTask(dir, runId, Date.now());
 
     // startRun already spawned a first supervisor for this run; spawn a

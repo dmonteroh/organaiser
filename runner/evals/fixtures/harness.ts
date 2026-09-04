@@ -162,6 +162,7 @@ export function startFixtureRun(dir: string, tasks: readonly FixtureTaskSpec[]):
   const { boardPath, workflowPath, templatePath } = writeFixtureFiles(dir, tasks);
   const board = boardWithTasks(tasks);
   const result = startRun({ root: dir, boardPath, board, workflowPath, templatePath });
+  if (result.supervisorPid === null) throw new Error("startFixtureRun: spawn defaults to true, but no pid came back");
   try {
     process.kill(-result.supervisorPid, "SIGKILL");
   } catch {
