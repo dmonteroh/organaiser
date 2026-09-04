@@ -100,11 +100,11 @@ test("every workflow's frontmatter carries the required fields with valid values
   }
 });
 
-test("exactly twelve workflow files exist and their ids are unique", () => {
+test("exactly thirteen workflow files exist and their ids are unique", () => {
   assert.equal(
     workflowFiles.length,
-    12,
-    `expected 12 workflow files, found ${workflowFiles.length}: ${workflowFiles.join(", ")}`,
+    13,
+    `expected 13 workflow files, found ${workflowFiles.length}: ${workflowFiles.join(", ")}`,
   );
   const ids = workflowFiles.map((file) => frontmatterByFile.get(file).id);
   const duplicates = [
@@ -462,9 +462,7 @@ const ROLE_VERDICT_DEFS = {
   "code-quality-reviewer": "codeQualityReviewerVerdict",
 };
 
-const PENDING_POLICY_TARGETS = {
-  "task-board.v1.yaml": "../task-board-workflow.md",
-};
+const PENDING_POLICY_TARGETS = {};
 
 const manifestFiles = fs
   .readdirSync(manifestsDir)
@@ -501,14 +499,6 @@ test("all five manifests parse under the restricted dialect and declare the requ
       `${file} is missing spec.stages`,
     );
   }
-});
-
-test("PENDING_POLICY_TARGETS carries exactly one entry", () => {
-  assert.equal(
-    Object.keys(PENDING_POLICY_TARGETS).length,
-    1,
-    `PENDING_POLICY_TARGETS must carry exactly one entry, found ${Object.keys(PENDING_POLICY_TARGETS).length}: ${JSON.stringify(PENDING_POLICY_TARGETS)}`,
-  );
 });
 
 test("every manifest's spec.policy and every stage prompt path resolves relative to workflows/manifests/, except the named PENDING_POLICY_TARGETS exception", () => {
