@@ -25,6 +25,7 @@ import { runSupervisor } from "../engine/supervisor.ts";
 import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
+import { cmdDoctor } from "./doctor.ts";
 
 const SUPERVISOR_ENTRY_PATH = fileURLToPath(new URL("../engine/supervisor.ts", import.meta.url));
 const DEFAULT_TEMPLATE_PATH = fileURLToPath(
@@ -429,12 +430,13 @@ function cmdRunDryRun(parsed: ParsedArgs, io: Io): ExitCode {
 
 // ── Dispatch table ───────────────────────────────────────────────────────────
 
-const VALUE_FLAGS = new Set(["board", "workflow", "template", "until", "timeout"]);
+const VALUE_FLAGS = new Set(["board", "workflow", "template", "until", "timeout", "vendor"]);
 
 type CommandBody = (parsed: ParsedArgs, io: Io) => ExitCode | Promise<ExitCode>;
 
 const COMMANDS: Readonly<Record<string, CommandBody>> = {
   init: cmdInit,
+  doctor: cmdDoctor,
   "run start": cmdRunStart,
   "run status": cmdRunStatus,
   "run wait": cmdRunWait,
