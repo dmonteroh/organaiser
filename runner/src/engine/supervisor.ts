@@ -19,9 +19,9 @@ import { fileURLToPath } from "node:url";
 import { openStore } from "../store/db.ts";
 import { acquireLease, releaseLease } from "../store/lease.ts";
 import { reconcile } from "./reconcile.ts";
+import { schedulerTick } from "./scheduler.ts";
 import {
   runTickShell,
-  restingStubBody,
   DEFAULT_TICK_INTERVAL_MS,
   DEFAULT_OPERATOR_POLL_WINDOW_MS,
 } from "./tick.ts";
@@ -70,7 +70,7 @@ export async function runSupervisor(args: SupervisorArgs): Promise<number> {
       const exit = await runTickShell({
         db,
         runId: args.runId,
-        body: restingStubBody({ kind: "active" }),
+        body: schedulerTick,
         tickIntervalMs,
         operatorPollWindowMs,
       });
