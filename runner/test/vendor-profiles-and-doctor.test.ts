@@ -342,11 +342,26 @@ test("probe: never opens a credential file, proved by a recording ProbeIo", asyn
   });
 });
 
-test("probe.ts source text imports neither node:fs nor node:child_process", () => {
+test("probe.ts source text imports no fs/fs-promises/child_process module, under any spelling", () => {
   const probeSourcePath = fileURLToPath(new URL("../src/adapters/probe.ts", import.meta.url));
   const source = fs.readFileSync(probeSourcePath, "utf8");
-  assert.ok(!source.includes("node:fs"), "probe.ts must not import node:fs");
-  assert.ok(!source.includes("node:child_process"), "probe.ts must not import node:child_process");
+  const forbiddenSpecifiers = [
+    '"fs"',
+    "'fs'",
+    '"node:fs"',
+    "'node:fs'",
+    '"fs/promises"',
+    "'fs/promises'",
+    '"node:fs/promises"',
+    "'node:fs/promises'",
+    '"child_process"',
+    "'child_process'",
+    '"node:child_process"',
+    "'node:child_process'",
+  ];
+  for (const specifier of forbiddenSpecifiers) {
+    assert.ok(!source.includes(specifier), `probe.ts must not import ${specifier}`);
+  }
 });
 
 test("isKnownBadVersion: whole-token matching only", () => {
