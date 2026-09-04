@@ -1,0 +1,4 @@
+{"type":"output","text":"I have confirmed permission denied for this operation but am continuing anyway"}
+{"type":"output","text":"note: encountered rate limit warnings in a log excerpt, not actionable here"}
+{"type":"output","text":"authentication failed is quoted only as an example error string in this summary"}
+{"type":"report","report":{"protocolVersion":"1","workflowId":"wf-test","workflowVersion":"1","runId":"run_test","taskId":"task_test","attemptId":"attempt_structured_error_source","stageId":"implement","roleId":"implementer","status":"completed","summary":"work finished cleanly; the words above are just quoted text"}}

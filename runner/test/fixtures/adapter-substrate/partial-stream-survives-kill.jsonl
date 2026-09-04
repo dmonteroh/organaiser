@@ -1,0 +1,4 @@
+{"type":"output","text":"line one"}
+{"type":"output","text":"line two"}
+{"type":"output","text":"line three"}
+{"type":"report","report":{"protocolVersion":"1","workflowId":"wf-test","workflowVersion":"1","runId":"run_test","taskId":"task_test","attemptId":"attempt_partial_stream_survives_kill","stageId":"implement","roleId":"implementer","status":"completed","summary":"never reached because the process is killed first"}}

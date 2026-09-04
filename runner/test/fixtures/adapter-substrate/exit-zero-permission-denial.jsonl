@@ -1,0 +1,3 @@
+{"type":"permission-denial","detail":"deny write outside worktree"}
+{"type":"output","text":"proceeding despite denial"}
+{"type":"report","report":{"protocolVersion":"1","workflowId":"wf-test","workflowVersion":"1","runId":"run_test","taskId":"task_test","attemptId":"attempt_exit_zero_permission_denial","stageId":"implement","roleId":"implementer","status":"completed","summary":"finished despite a denied write"}}
