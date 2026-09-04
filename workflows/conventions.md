@@ -58,8 +58,6 @@ Seven role ids, one per runnable template:
 - `problem-definer`, template `subagents/problem-definer-prompt.md`, owned by `product-spec-workflow`.
 - `spec-challenger`, template `subagents/spec-challenger-prompt.md`, owned by `product-spec-workflow`.
 
-Alias: `quality-reviewer` is the current `dev-workflow` Roles heading for `code-quality-reviewer`; `renamed-in: P3`.
-
 Role ids are scoped to these seven runnable templates. `decision-workflow.md` uses the bare id `architect` for an orchestrator-side role with no `Template:` line; this is outside the register's uniqueness scope while `decision-workflow` has no manifest, and any later manifest for it must qualify the id.
 
 ### Verdict enums
@@ -103,6 +101,7 @@ A parity family is a block of contract text that exists in more than one file an
 | Outcome parity | manifest transition with terminal outcome |
 | Stage parity | none, authority `manifest (P2)` (see note below) |
 | Ownership | retry cap; skip predicate; artifact schema; question schema; runner versus worker authority (see note below) |
+| Runner Protocol | `implementer`, `spec-reviewer`, `code-quality-reviewer`, `analyst`, `architect`, `problem-definer`, `spec-challenger` |
 
 Stage parity note: P1 registers no stage ids. Two known non-1:1 mapping cases are recorded here as evidence, not as members, and are not written into any workflow file. First, the proposed stage ids `architect-light`, `architect-full`, and `architect-split` (P2 proposals) all map to the single `architect` entry in `task-refinement-workflow.md`'s Roles section and to a single Sequence dispatch step, so three stages correspond to one manual step. Second, the proposed stage ids `gather-context` and `orchestrator-route` (P2 proposals) have no correspondingly named step in `product-spec-workflow.md`'s current Sequence, because both are runner-side stages.
 
@@ -145,8 +144,6 @@ Recorded asymmetries and pending decisions, so audits do not rediscover them:
 - No subagent-side forbidden-claims scan exists for `spike-workflow`, `debugging-workflow`, `dev-workflow`, or `task-refinement-workflow`; their lists are enforced by the orchestrator self-check alone.
 - `spike-reviewer` handles follow-up input as inline prose instead of a named pass section.
 - Repeat-pass naming outliers pending alignment: `evaluator` (Re-Evaluation Pass), `investigator` (Follow-up Rounds), `devils-advocate` (unnamed repeat handling), `problem-definer` (lowercase "revision passes").
-- Read-only HARD CONSTRAINT wording varies across templates; align to one sentence opportunistically when a template is next edited.
+- Read-only HARD CONSTRAINT wording is now byte-identical across the four read-only runnable templates (`spec-reviewer`, `code-quality-reviewer`, `analyst`, `spec-challenger`); it still varies among read-only-flavored non-runnable templates, for example `handoff-challenger` and `reliability-investigator`.
 - Trial-gated removal candidates (kept until a trial run shows they are no longer needed): the implementer edit-hygiene and re-read-the-brief rules, the "running low on context" anti-rationalization rows, the Enforcement-rule sentence under every Anti-Rationalization table (it duplicates "No step may be skipped"), the roadmap-health rows that argue whether to run the workflow at all, the spike "clean up later" row, and the verification-log Purpose rationale in `dev-workflow`.
 - The nine manual-only workflows have no manifest, by decision D3.
-- The `quality-reviewer` heading in `dev-workflow`'s Roles section is an alias for the canonical role id `code-quality-reviewer`; `renamed-in: P3`.
-- The `dev-workflow` Roles line writes `fail-with-severity(critical|important)`; the `code-quality-reviewer` template writes `fail-with-severity: <critical | important>`. Aligned in P3.
