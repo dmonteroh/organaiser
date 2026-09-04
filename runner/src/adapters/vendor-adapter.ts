@@ -266,6 +266,7 @@ export function createVendorAdapter(spec: VendorAdapterSpec, options: VendorAdap
       });
 
       child.on("exit", (code, signal) => {
+        if (runtimeAttempt.finished) return;
         const ended = framer.end();
         runtimeAttempt.trailing = ended.trailing;
         runtimeAttempt.streamTruncated = ended.truncated;
