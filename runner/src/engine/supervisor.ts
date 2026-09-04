@@ -25,6 +25,7 @@ import {
   DEFAULT_TICK_INTERVAL_MS,
   DEFAULT_OPERATOR_POLL_WINDOW_MS,
 } from "./tick.ts";
+import { withOperatorTermination } from "./control-commands.ts";
 
 export interface SupervisorArgs {
   root: string;
@@ -70,7 +71,7 @@ export async function runSupervisor(args: SupervisorArgs): Promise<number> {
       const exit = await runTickShell({
         db,
         runId: args.runId,
-        body: restingStubBody({ kind: "active" }),
+        body: withOperatorTermination(restingStubBody({ kind: "active" }), { installSigtermTrap: true }),
         tickIntervalMs,
         operatorPollWindowMs,
       });
