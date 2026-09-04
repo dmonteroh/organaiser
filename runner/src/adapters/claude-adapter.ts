@@ -20,11 +20,10 @@ import type { ExecutionSurface } from "./adapter.ts";
 import type { ResolvedVendorProfile } from "../cli/profiles.ts";
 
 /**
- * Builds the argument array `claude` is spawned with, following the goals spec section
- * 15 conceptual invocation. The packet travels on `input` (stdin), never in `args`.
- * `env` carries exactly the `profile.environmentAllowlist` names that are present in
- * `surface.environment` — nothing inherited wholesale, and no Claude-specific variable
- * hardcoded here.
+ * Builds the argument array `claude` is spawned with. The packet travels on `input`
+ * (stdin), never in `args`. `env` carries exactly the `profile.environmentAllowlist`
+ * names that are present in `surface.environment` — nothing inherited wholesale, and no
+ * Claude-specific variable hardcoded here.
  */
 export function buildClaudeAttemptCommand(
   profile: ResolvedVendorProfile,
@@ -222,10 +221,10 @@ export interface ClaudeVendorSignals extends VendorSignals {
  * Reads only parsed `stream-json` event fields and the final `result` envelope — never
  * a substring of assistant text, prompt echo, or stdout. `permission_denials` on the
  * final envelope always populates `permissionDenials`, regardless of exit code, so a
- * process that exits zero with an embedded denial still classifies `permission-denied`
- * (goals spec section 15: "Exit code zero MUST NOT override a permission denial").
- * `streamTruncated` is set whenever no `result` event was ever framed; the substrate
- * ORs this with its own truncation measurement rather than replacing it.
+ * process that exits zero with an embedded denial still classifies `permission-denied`:
+ * exit code zero must never override a permission denial. `streamTruncated` is set
+ * whenever no `result` event was ever framed; the substrate ORs this with its own
+ * truncation measurement rather than replacing it.
  */
 export function extractSignals(input: VendorSignalInput): ClaudeVendorSignals {
   const resultEvent = findResultEvent(input.values);
@@ -259,8 +258,8 @@ function parseClaudeVersion(result: ProbeSpawnResult): string | null {
 /**
  * `claude auth status --json` is a bounded, real, credential-store-free invocation: it
  * reports whether the CLI's own session is signed in without spending a model turn or
- * reading a credential file itself — the CLI does that internally, which is exactly the
- * "bounded real invocation" goals spec section 13.1 asks for instead of a file check.
+ * reading a credential file itself — the CLI does that internally, so this probe never
+ * has to parse or touch a credential file on its own.
  */
 function parseClaudeAuthOutcome(result: ProbeSpawnResult): string {
   let parsed: unknown;

@@ -169,7 +169,7 @@ test("buildClaudeAttemptCommand: never emits --background, --resume, or --contin
 
 // ── the Claude VendorProbeSpec, verified directly through probeVendor ──────
 
-test("claudeProbeSpec: probeVendor reports all nine CapabilityReport fields against the local install", async () => {
+test("claudeProbeSpec: probeVendor reports all nine CapabilityReport fields", async (t) => {
   const configuration: ProbeConfiguration = {
     executablePath: claudeProbeSpec.defaultExecutable,
     requestedModel: "sonnet",
@@ -179,17 +179,28 @@ test("claudeProbeSpec: probeVendor reports all nine CapabilityReport fields agai
   };
   const report: CapabilityReport = await probeVendor(claudeProbeSpec, configuration);
 
-  assert.notEqual(report.executablePath, "unknown", "the local claude binary must resolve on PATH");
-  assert.match(report.cliVersion, /^\d+\.\d+\.\d+/);
   assert.equal(report.requestedModel, "sonnet");
   assert.equal(report.requestedEffort, "low");
   assert.equal(report.structuredOutputMode, "stream-json");
-  assert.ok(
-    ["authenticated", "unauthenticated", "unknown", "probe-timeout"].includes(report.authenticationOutcome),
-  );
   assert.equal(typeof report.workingDirectoryBehavior, "string");
   assert.equal(typeof report.permissionAndSandboxConfiguration, "string");
   assert.equal(report.adapterVersion, "1");
+
+  if (report.executablePath === "unknown") {
+    // No real `claude` on PATH in this environment (CI, or a machine without the CLI
+    // installed): probeVendor's documented never-reject, sentinel-on-failure contract
+    // must still hold, so assert the sentinel shape instead of real CLI output.
+    t.diagnostic("claude not found on PATH; verifying probeVendor's sentinel-on-failure contract instead");
+    assert.equal(report.cliVersion, "unknown");
+    assert.equal(report.authenticationOutcome, "unknown");
+    return;
+  }
+
+  // A real `claude` resolved on PATH: assert the genuine values a live install reports.
+  assert.match(report.cliVersion, /^\d+\.\d+\.\d+/);
+  assert.ok(
+    ["authenticated", "unauthenticated", "unknown", "probe-timeout"].includes(report.authenticationOutcome),
+  );
 });
 
 // ── the ten captures, replayed through the production adapter ──────────────
@@ -423,6 +434,7 @@ test("missing-final-event: a stream with no result event sets streamTruncated an
   const result = await replayCapture("missing-final-event");
   assert.equal(result.candidateReportText, null);
   assert.equal(result.ok, false);
+  assert.equal(result.failureClass, "worker-crash");
   assert.match(result.reason ?? "", /stream-truncated/);
 });
 
@@ -437,6 +449,7 @@ test("version-output-change: the version-probe capture carries no result event w
   const result = await replayCapture("version-output-change");
   assert.equal(result.candidateReportText, null);
   assert.equal(result.ok, false);
+  assert.equal(result.failureClass, "runner-invariant");
 });
 
 // ── cost/model metadata is observability only ───────────────────────────────
