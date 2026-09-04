@@ -1,0 +1,92 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: task-board
+  contractVersion: 1.0.0
+spec:
+  policy: ../task-board-workflow.md
+  entryStage: admit-task
+  terminalOutcomes:
+    success:
+      - integrated
+    attention:
+      - waiting-operator
+      - parked
+    neutral:
+      - superseded
+      - shelved
+      - cancelled
+  stages:
+    - id: admit-task
+      kind: runner
+      predicate: entry-artifacts-valid
+      transitions:
+        "true": release-dependencies
+        "false": reconcile-outcome
+    - id: release-dependencies
+      kind: runner
+      predicate: dependencies-satisfied
+      transitions:
+        "true": acquire-claims
+        "false": release-dependencies
+    - id: acquire-claims
+      kind: runner
+      predicate: claims-available
+      transitions:
+        "true": admit-to-batch
+        "false": acquire-claims
+    - id: admit-to-batch
+      kind: runner
+      predicate: batch-slot-available
+      transitions:
+        "true": product-specification
+        "false": admit-to-batch
+    - id: product-specification
+      kind: runner
+      predicate: product-spec-outcome
+      transitions:
+        skipped: task-refinement
+        specified: task-refinement
+        shelved: reconcile-outcome
+        needs-research: reconcile-outcome
+        needs-decision: reconcile-outcome
+        needs-operator: reconcile-outcome
+    - id: task-refinement
+      kind: runner
+      predicate: refinement-outcome
+      transitions:
+        skipped: implementation
+        ready-to-implement: implementation
+        superseded: reconcile-outcome
+        parked: reconcile-outcome
+    - id: implementation
+      kind: runner
+      predicate: implementation-outcome
+      transitions:
+        integrating: integration-candidate
+        waiting-operator: reconcile-outcome
+        parked: reconcile-outcome
+    - id: integration-candidate
+      kind: runner
+      predicate: integration-slot-available
+      transitions:
+        "true": integration
+        "false": integration-candidate
+    - id: integration
+      kind: runner
+      predicate: integration-outcome
+      transitions:
+        integrated: reconcile-outcome
+        ready-to-implement: implementation
+        waiting-operator: reconcile-outcome
+        parked: reconcile-outcome
+    - id: reconcile-outcome
+      kind: runner
+      predicate: terminal-disposition
+      transitions:
+        integrated: integrated
+        superseded: superseded
+        shelved: shelved
+        cancelled: cancelled
+        parked: parked
+        waiting-operator: waiting-operator
