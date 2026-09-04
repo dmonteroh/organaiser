@@ -13,6 +13,7 @@ import {
   type Read,
 } from "../src/cli/config.ts";
 import { DEFAULT_BUDGETS } from "../src/adapters/process-supervisor.ts";
+import { DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../src/git/workspace.ts";
 
 function readerFor(value: string | undefined): Read {
   return (name: string): string | undefined => (name === "X" ? value : undefined);
@@ -157,4 +158,26 @@ test("loadConfig fails loudly on an invalid RUNNER", () => {
     () => loadConfig({ env: { ORGA_RUNNER: "gemini" } }),
     /invalid RUNNER: gemini \(must be one of codex\|claude\)/,
   );
+});
+
+// ── loadConfig.workspace: defaults, env overrides, and freezing ──────────────
+test("loadConfig.workspace defaults to workspace.ts's exported constants when unset", () => {
+  const config = loadConfig();
+  assert.equal(config.workspace.root, DEFAULT_WORKTREE_ROOT);
+  assert.equal(config.workspace.branchPrefix, DEFAULT_BRANCH_PREFIX);
+});
+
+test("ORGA_WORKTREE_ROOT in the env layer overrides the default worktree root", () => {
+  const env: Layer = { ORGA_WORKTREE_ROOT: "custom/worktrees" };
+  assert.equal(loadConfig({ env }).workspace.root, "custom/worktrees");
+});
+
+test("ORGA_BRANCH_PREFIX in the env layer overrides the default branch prefix", () => {
+  const env: Layer = { ORGA_BRANCH_PREFIX: "custom/prefix/" };
+  assert.equal(loadConfig({ env }).workspace.branchPrefix, "custom/prefix/");
+});
+
+test("loadConfig freezes config.workspace", () => {
+  const config = loadConfig();
+  assert.equal(Object.isFrozen(config.workspace), true);
 });

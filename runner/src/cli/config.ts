@@ -1,6 +1,7 @@
 import { DEFAULT_BUDGETS, type Budgets } from "../adapters/process-supervisor.ts";
 import { DEFAULT_TICK_INTERVAL_MS, DEFAULT_OPERATOR_POLL_WINDOW_MS } from "../engine/tick.ts";
 import { DEFAULT_CANCEL_GRACE_MS } from "../engine/control-commands.ts";
+import { DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../git/workspace.ts";
 
 // All watchdog budgets are seconds; this is the default no-progress budget
 // consumers fall back to when a caller omits it entirely.
@@ -94,6 +95,7 @@ export interface ResolvedConfig {
   runner: RunnerId;
   budgets: Readonly<Budgets>;
   timing: Readonly<RunnerTiming>;
+  workspace: Readonly<{ root: string; branchPrefix: string }>;
 }
 
 // Parses and validates the configuration surface. Collects every invalid
@@ -147,6 +149,16 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
         DEFAULT_CANCEL_GRACE_MS,
       ),
     },
+    workspace: {
+      root: attempt(
+        () => stringVal(read, "WORKTREE_ROOT", DEFAULT_WORKTREE_ROOT) ?? DEFAULT_WORKTREE_ROOT,
+        DEFAULT_WORKTREE_ROOT,
+      ),
+      branchPrefix: attempt(
+        () => stringVal(read, "BRANCH_PREFIX", DEFAULT_BRANCH_PREFIX) ?? DEFAULT_BRANCH_PREFIX,
+        DEFAULT_BRANCH_PREFIX,
+      ),
+    },
   };
 
   if (errors.length > 0) {
@@ -155,6 +167,7 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
 
   Object.freeze(config.budgets);
   Object.freeze(config.timing);
+  Object.freeze(config.workspace);
   return Object.freeze(config);
 }
 
