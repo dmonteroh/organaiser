@@ -1,11 +1,21 @@
 // The operator control commands that stop work: `run pause`, `run cancel`,
 // `run kill`, `kill-all`, and the `Ctrl-C` handler for `--foreground` mode.
-// `pauseRun`/`cancelRun` only record intent (a `control` row, plus a SIGTERM
-// nudge to the supervisor process for cancel) — the supervisor itself, via
+// `pauseRun`/`cancelRun` only record intent (a `control` row) — the control
+// row is the sole durable trigger, read and acknowledged by the supervisor's
+// own tick loop within one tick interval. The supervisor itself, via
 // `withOperatorTermination`, is what actually walks `terminateGroups` over
 // the worker groups it finds recorded in SQLite. `killRun`/`killAll` and the
 // foreground interrupt handler assume no live supervisor and do that walk
 // themselves, reading straight from SQLite.
+//
+// Neither `pauseRun` nor `cancelRun` signals the supervisor process: once a
+// worker has been dispatched, `process-supervisor.ts`'s own
+// `installParentExitCleanup` has registered a SIGTERM/SIGINT/SIGHUP handler
+// that hard-kills every tracked group and exits immediately, with no grace
+// window and no durable record — sending SIGTERM from here would race that
+// handler and could hand it a live supervisor to kill out from under an
+// in-progress graceful cancel. That file is P4-integrated and out of scope
+// here, so the only correct fix on this side is to never send the signal.
 
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
@@ -63,13 +73,6 @@ function insertControlRow(db: DatabaseSync, runId: string, kind: ControlKind, no
     });
   });
   return id;
-}
-
-function readActiveLeaseOwnerPid(db: DatabaseSync, runId: string): number | null {
-  const row = db
-    .prepare(`SELECT owner_pid FROM locks WHERE kind = 'run-lease' AND resource = ? AND released_at IS NULL`)
-    .get(runId) as { owner_pid: number } | undefined;
-  return row ? row.owner_pid : null;
 }
 
 function releaseAnyActiveLease(db: DatabaseSync, runId: string, now: number): void {
@@ -182,10 +185,9 @@ export function pauseRun(db: DatabaseSync, opts: PauseCancelOptions): ControlCom
   return { ok: true, inserted: true, controlId };
 }
 
-// Records intent and, when a live supervisor holds the run lease, nudges it
-// with SIGTERM so it does not wait a full tick interval to notice the
-// control row. Termination of the worker groups themselves is the live
-// supervisor's job (`withOperatorTermination`) or, with no live supervisor,
+// Records intent only, same as `pauseRun`. Termination of the worker groups
+// themselves is the live supervisor's job (`withOperatorTermination`, run
+// from its own tick loop once it acks this row) or, with no live supervisor,
 // `killRun`'s.
 export function cancelRun(db: DatabaseSync, opts: PauseCancelOptions): ControlCommandResult {
   const now = nowOr(opts.now);
@@ -196,17 +198,6 @@ export function cancelRun(db: DatabaseSync, opts: PauseCancelOptions): ControlCo
   if (hasUnackedControl(db, opts.runId, kind)) return { ok: true, inserted: false, controlId: null };
 
   const controlId = insertControlRow(db, opts.runId, kind, now());
-
-  const supervisorPid = readActiveLeaseOwnerPid(db, opts.runId);
-  if (supervisorPid !== null) {
-    try {
-      process.kill(supervisorPid, "SIGTERM");
-    } catch {
-      // best-effort nudge only: the control row is the durable record, so a
-      // signal delivery failure (already gone, not permitted) never blocks
-      // recording the request.
-    }
-  }
 
   return { ok: true, inserted: true, controlId };
 }
@@ -283,14 +274,16 @@ export interface WithOperatorTerminationOptions {
 
 let sigtermTrapInstalled = false;
 
-// `cancelRun` sends the live supervisor a SIGTERM nudge (AC-mandated) so it
-// does not have to wait a full tick interval to notice the control row it
-// already wrote. With nothing else trapping SIGTERM at supervisor startup,
-// the OS default disposition would terminate the process outright before it
-// ever reaches its next tick, dropping the control row on the floor. This
-// no-op trap only prevents that default kill: the actual termination
-// sequence still runs from the ordinary tick loop below, once it observes
-// the abort.
+// Nothing in this module signals the supervisor process, so this trap is not
+// a nudge: it only guards the window before the first worker is dispatched.
+// With no trap installed, an externally-delivered SIGTERM arriving in that
+// window would hit the OS default disposition and terminate the process
+// outright before it ever reaches its next tick, dropping an already-written
+// control row on the floor. Once a worker is dispatched,
+// `process-supervisor.ts`'s own `installParentExitCleanup` takes over SIGTERM
+// handling for the rest of the process's life; this no-op trap does not, and
+// cannot, change what that handler does. The actual termination sequence for
+// an acknowledged control row always runs from the ordinary tick loop below.
 function installSigtermTrapOnce(): void {
   if (sigtermTrapInstalled) return;
   sigtermTrapInstalled = true;

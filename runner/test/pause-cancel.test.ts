@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
 
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
@@ -232,7 +234,7 @@ test("pauseRun does not insert a duplicate unacknowledged 'pause' row", async ()
   });
 });
 
-test("cancelRun inserts a 'cancel' row and sends SIGTERM to the active lease owner", async () => {
+test("cancelRun inserts a 'cancel' row and does not signal the active lease owner", async () => {
   await withTempWorkspace(async (dir) => {
     initProject(dir);
     const db = openStore(dir);
@@ -247,8 +249,14 @@ test("cancelRun inserts a 'cancel' row and sends SIGTERM to the active lease own
       const row = db.prepare("SELECT kind FROM control WHERE id = ?").get(result.controlId) as { kind: string };
       assert.equal(row.kind, "cancel");
 
-      const dead = await waitFor(() => !alive(fakeSupervisor.pid as number), 500);
-      assert.ok(dead, "the plain (non-trapping) fake supervisor must have died from the SIGTERM nudge");
+      // cancelRun must be a pure DB write: no signal to the lease owner. A
+      // process that never traps SIGTERM (PLAIN_IDLE does not) would die
+      // immediately from a real nudge, so staying alive here is the proof.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.ok(
+        alive(fakeSupervisor.pid as number),
+        "cancelRun must not signal the supervisor process — the control row is the only durable trigger",
+      );
     } finally {
       await killGroupBestEffort(fakeSupervisor.pid);
       db.close();
@@ -611,6 +619,173 @@ test("run cancel end to end: a real supervisor process acknowledges the control 
           // already gone
         }
       }
+    }
+  });
+});
+
+// ── Regression: cancelRun must never race process-supervisor's exit handler ──
+//
+// Once a worker is dispatched through the real `superviseProcess`,
+// `process-supervisor.ts`'s own `installParentExitCleanup` registers a
+// SIGTERM handler that hard-kills every tracked group and calls
+// `process.exit(130)` synchronously, with no grace window and no durable
+// record. A SIGTERM sent to that same process races that handler. This test
+// reproduces the exact precondition (a real worker dispatched via
+// `superviseProcess`, so the competing handler genuinely exists) and asserts
+// that a `cancelRun` call in that state still lets the run reach `cancelled`
+// through the ordinary tick loop, with the configured grace period honored —
+// proving `cancelRun` itself never triggers the race, rather than merely
+// passing by coincidence.
+test("cancelRun against a supervisor with a real dispatched worker: the run reaches cancelled with the configured grace honored, not process-supervisor's immediate exit(130)", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    const runId = "run-1";
+    insertRun(db, runId, Date.now());
+    db.close();
+
+    const graceMs = 150;
+    const scriptPath = path.join(dir, "supervisor-with-real-worker.mjs");
+    const dbPath = fileURLToPath(new URL("../src/store/db.ts", import.meta.url));
+    const leasePath = fileURLToPath(new URL("../src/store/lease.ts", import.meta.url));
+    const tickPath = fileURLToPath(new URL("../src/engine/tick.ts", import.meta.url));
+    const controlCommandsPath = fileURLToPath(new URL("../src/engine/control-commands.ts", import.meta.url));
+    const processSupervisorPath = fileURLToPath(new URL("../src/adapters/process-supervisor.ts", import.meta.url));
+
+    // Mirrors `supervisor.ts`'s own wiring order: the tick-body wrapper (and
+    // its SIGTERM trap) is built first, before any worker exists, exactly as
+    // `runSupervisor` builds it before `runTickShell` ever runs a tick. The
+    // real `superviseProcess` call that follows is what registers
+    // process-supervisor's own competing handler — the realistic ordering
+    // this test needs, not merely the source layout.
+    const script = `
+      import { openStore, withTransaction } from ${JSON.stringify(dbPath)};
+      import { acquireLease } from ${JSON.stringify(leasePath)};
+      import { runTickShell, restingStubBody } from ${JSON.stringify(tickPath)};
+      import { withOperatorTermination } from ${JSON.stringify(controlCommandsPath)};
+      import { superviseProcess } from ${JSON.stringify(processSupervisorPath)};
+
+      const dir = ${JSON.stringify(dir)};
+      const runId = ${JSON.stringify(runId)};
+      const db = openStore(dir);
+
+      acquireLease(db, { runId, ownerPid: process.pid, tickIntervalMs: 50, now: Date.now });
+
+      const body = withOperatorTermination(restingStubBody({ kind: 'active' }), {
+        installSigtermTrap: true,
+        defaultCancelGraceMs: ${graceMs},
+      });
+
+      const supervisePromise = superviseProcess({
+        command: process.execPath,
+        args: ['-e', "process.on('SIGTERM', () => {}); process.stdout.write('READY\\\\n'); setTimeout(() => {}, 60000);"],
+        budgets: { POLL_SECS: 60, NO_PROGRESS_SECS: 600, GRACE_SECS: 60, HARD_CEILING_SECS: 600 },
+        recordProcess: (info) => {
+          withTransaction(db, () => {
+            db.prepare(
+              \`INSERT INTO attempts (id, run_id, task_id, stage_id, role, round, input_version, vendor, model, config_json, mutating, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\`,
+            ).run('att-1', runId, 'task-1', 'stage-1', 'implementer', 1, 'v1', 'fake', 'fake', '{}', 0, 'running', Date.now());
+            db.prepare(
+              \`INSERT INTO workers (id, run_id, attempt_id, pid, pgid, heartbeat_at, started_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)\`,
+            ).run('w1', runId, 'att-1', info.pid, info.pgid, Date.now(), Date.now());
+          });
+          process.stdout.write('WORKERPID:' + info.pid + '\\n');
+        },
+        onStdout: () => {
+          process.stdout.write('CHILD-READY\\n');
+        },
+      });
+      supervisePromise.catch(() => {});
+
+      const exit = await runTickShell({ db, runId, body, tickIntervalMs: 50, operatorPollWindowMs: 300000 });
+      process.stdout.write('EXITCODE:' + exit.exitCode + '\\n');
+      process.exit(exit.exitCode);
+    `;
+    fs.writeFileSync(scriptPath, script);
+
+    const supervisor = spawn(process.execPath, [scriptPath], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let workerPgid: number | undefined;
+    let exitCodeLine: number | undefined;
+    supervisor.stdout.setEncoding("utf8");
+    supervisor.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      const workerMatch = /WORKERPID:(\d+)/.exec(chunk);
+      if (workerMatch) workerPgid = Number(workerMatch[1]);
+      const exitMatch = /EXITCODE:(\d+)/.exec(chunk);
+      if (exitMatch) exitCodeLine = Number(exitMatch[1]);
+    });
+    let stderr = "";
+    supervisor.stderr.setEncoding("utf8");
+    supervisor.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    try {
+      const workerStarted = await waitFor(() => stdout.includes("CHILD-READY"), 3000);
+      assert.ok(
+        workerStarted,
+        `worker did not start in time (this is the precondition that registers process-supervisor's own SIGTERM handler); stderr: ${stderr}`,
+      );
+
+      const cancelDb = openStore(dir);
+      let cancelledAtMs: number;
+      try {
+        cancelRun(cancelDb, { runId });
+        cancelledAtMs = Date.now();
+      } finally {
+        cancelDb.close();
+      }
+
+      // Give process-supervisor's own exit(130) handler every chance to have
+      // won this race if cancelRun (wrongly) signalled it: if the process is
+      // still alive shortly after cancelRun returns, no such signal was sent.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.ok(
+        supervisor.exitCode === null,
+        "the supervisor process must still be alive immediately after cancelRun — cancelRun must not signal it",
+      );
+
+      const exited = await waitFor(() => supervisor.exitCode !== null, 5000);
+      assert.ok(exited, `supervisor process did not exit; stderr: ${stderr}`);
+      const elapsedMs = Date.now() - cancelledAtMs;
+
+      assert.equal(
+        supervisor.exitCode,
+        0,
+        `supervisor must exit via runTickShell's own return (0), not process-supervisor's exit(130); stderr: ${stderr}`,
+      );
+      assert.equal(exitCodeLine, 0);
+      assert.ok(
+        elapsedMs >= graceMs - 20,
+        `the configured ${graceMs}ms grace window must be honored, not skipped for an immediate force-kill (took ${elapsedMs}ms)`,
+      );
+
+      const finalDb = openStore(dir);
+      try {
+        const run = getRunRow(finalDb, runId);
+        assert.equal(run.state, "cancelled", "the durable cancelled record must exist");
+        assert.equal(run.terminal_reason, "operator-cancel");
+        const attempt = getAttempt(finalDb, "att-1");
+        assert.equal(attempt.status, "interrupted");
+        assert.equal(attempt.interrupt_reason, "operator-cancel");
+      } finally {
+        finalDb.close();
+      }
+
+      if (typeof workerPgid === "number") {
+        const gone = await waitFor(() => !groupAlive(workerPgid as number), 500);
+        assert.ok(gone, "the SIGTERM-ignoring worker's group must be gone after the SIGKILL escalation");
+      }
+    } finally {
+      try {
+        supervisor.kill("SIGKILL");
+      } catch {
+        // already gone
+      }
+      await killGroupBestEffort(workerPgid);
     }
   });
 });
