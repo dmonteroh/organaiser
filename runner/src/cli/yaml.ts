@@ -57,6 +57,11 @@ function splitKeyValue(content: string, filePath: string, lineNum: number): { ke
   if (!parsed) {
     throw formatDialectError(filePath, lineNum, `line is not a valid "key: value" mapping entry: ${content}`);
   }
+  // A bare (unquoted) key goes through the same forbidden-construct scan as every
+  // scalar and sequence-item value, so an anchor/alias/tag/block-scalar/flow-collection
+  // construct in key position is refused rather than silently accepted as a literal
+  // key string.
+  assertNoForbiddenConstruct(parsed.key, filePath, lineNum);
   return parsed;
 }
 

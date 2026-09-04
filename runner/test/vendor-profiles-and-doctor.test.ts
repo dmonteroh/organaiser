@@ -12,13 +12,16 @@ import {
   probeVendor,
   isKnownBadVersion,
   knownBadReason,
+  DEFAULT_PROBE_REGISTRY,
   type ProbeIo,
   type ProbeSpawnResult,
   type VendorProbeSpec,
+  type VendorProbeRegistry,
 } from "../src/adapters/probe.ts";
 import type { ProbeConfiguration } from "../src/adapters/adapter.ts";
 import { initProject } from "../src/store/init.ts";
 import { main } from "../bin/orga.ts";
+import { cmdDoctor } from "../src/cli/doctor.ts";
 import type { Io } from "../src/cli/commands.ts";
 import { knownBadVersionRefused } from "../evals/fixtures/12-known-bad-version-refused.ts";
 
@@ -26,6 +29,10 @@ import { knownBadVersionRefused } from "../evals/fixtures/12-known-bad-version-r
 
 test("yaml: refuses an anchor", () => {
   assert.throws(() => parseYamlText('key: &x "value"\n', "t.yaml"), /t\.yaml:1: anchor/);
+});
+
+test("yaml: refuses an anchor in key position", () => {
+  assert.throws(() => parseYamlText("&x: value\n", "t.yaml"), /t\.yaml:1: anchor/);
 });
 
 test("yaml: refuses an alias", () => {
@@ -262,6 +269,52 @@ test("probe: a real path, a real version, and authenticationOutcome === probe-ti
   });
 });
 
+test("probe-io: a timed-out auth probe reaps the whole process group, not just the immediate child", async () => {
+  await withTempWorkspace(async (dir) => {
+    const pidFile = path.join(dir, "grandchild.pid");
+    writeStub(
+      dir,
+      "stub-vendor",
+      `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("stub-vendor 1.0.0\\n");
+  process.exit(0);
+}
+if (args[0] === "doctor-auth-probe") {
+  const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
+  fs.writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid));
+  setInterval(() => {}, 1000);
+} else {
+  process.exit(1);
+}
+`,
+    );
+    const configuration = baseConfiguration({
+      environment: { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` },
+    });
+    const spec = testSpec({ authProbeTimeoutMs: 300 });
+    const report = await probeVendor(spec, configuration);
+    assert.equal(report.authenticationOutcome, "probe-timeout");
+
+    const grandchildPid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0, "the stub must have recorded a grandchild pid");
+
+    let alive = true;
+    for (let i = 0; i < 40 && alive; i++) {
+      try {
+        process.kill(grandchildPid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } catch {
+        alive = false;
+      }
+    }
+    assert.equal(alive, false, "the grandchild process must be dead once probeVendor returns probe-timeout");
+  });
+});
+
 test("probe: never rejects even when the resolved binary exits non-zero on every invocation", async () => {
   await withTempWorkspace(async (dir) => {
     writeStub(
@@ -413,6 +466,48 @@ test("doctor: exits 0 when the vendor is present, authenticated, and not on the 
     const io = doctorIo({ ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` });
     const code = await main(["node", "orga", "doctor", "--vendor", "codex", "--json"], io);
     assert.equal(code, 0, `expected a usable vendor to exit 0; stderr: ${io.errLines.join("\n")}`);
+  });
+});
+
+test("doctor: cmdDoctor accepts an injected VendorProbeRegistry in place of the placeholder default", async () => {
+  await withTempWorkspace(async (dir) => {
+    writeStub(
+      dir,
+      "codex",
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("stub-vendor 9.9.9\\n");
+  process.exit(0);
+}
+if (args[0] === "real-auth-check") {
+  process.exit(0);
+}
+process.exit(1);
+`,
+    );
+    const io = doctorIo({ ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` });
+    const parsed = { positionals: [], flags: new Map<string, string | boolean>([["vendor", "codex"], ["json", true]]) };
+
+    const withDefaultRegistry = await cmdDoctor(parsed, io);
+    assert.equal(
+      withDefaultRegistry,
+      15,
+      "the placeholder default registry's authProbeArgs does not match the stub's real subcommand",
+    );
+
+    io.outLines.length = 0;
+    io.errLines.length = 0;
+    const customRegistry: VendorProbeRegistry = {
+      ...DEFAULT_PROBE_REGISTRY,
+      codex: { ...DEFAULT_PROBE_REGISTRY.codex, authProbeArgs: ["real-auth-check"] },
+    };
+    const withCustomRegistry = await cmdDoctor(parsed, io, customRegistry);
+    assert.equal(
+      withCustomRegistry,
+      0,
+      "an injected registry carrying the vendor's real authProbeArgs must be genuinely swappable in",
+    );
   });
 });
 

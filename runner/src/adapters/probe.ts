@@ -81,6 +81,15 @@ function parseAuthOutcomeFromExit(result: ProbeSpawnResult): string {
   return UNKNOWN;
 }
 
+/**
+ * A vendor-neutral placeholder auth-probe subcommand. No real vendor CLI is known to
+ * implement it; it stands in only until the vendor that owns each `VendorProbeSpec`
+ * (the Claude and Codex adapter work) supplies the real bounded-auth-check argument
+ * array and outcome parser for its own binary. A registry entry still using this
+ * placeholder will classify every real, authenticated install as unusable.
+ */
+const PLACEHOLDER_AUTH_PROBE_ARGS: readonly string[] = ["doctor-auth-probe"];
+
 export const CLAUDE_PROBE_SPEC: VendorProbeSpec = {
   vendor: "claude",
   defaultExecutable: "claude",
@@ -90,7 +99,7 @@ export const CLAUDE_PROBE_SPEC: VendorProbeSpec = {
   workingDirectoryBehavior: "runs with cwd set to the attempt's assigned worktree",
   versionArgs: ["--version"],
   parseVersion: parseVersionFromStdout,
-  authProbeArgs: ["doctor-auth-probe"],
+  authProbeArgs: PLACEHOLDER_AUTH_PROBE_ARGS,
   authProbeTimeoutMs: 8000,
   parseAuthOutcome: parseAuthOutcomeFromExit,
 };
@@ -104,12 +113,26 @@ export const CODEX_PROBE_SPEC: VendorProbeSpec = {
   workingDirectoryBehavior: "runs with cwd set to the attempt's assigned worktree",
   versionArgs: ["--version"],
   parseVersion: parseVersionFromStdout,
-  authProbeArgs: ["doctor-auth-probe"],
+  authProbeArgs: PLACEHOLDER_AUTH_PROBE_ARGS,
   authProbeTimeoutMs: 8000,
   parseAuthOutcome: parseAuthOutcomeFromExit,
 };
 
-export const PROBE_SPECS: Readonly<Record<VendorId, VendorProbeSpec>> = {
+/**
+ * The shape `doctor.ts` probes against: one `VendorProbeSpec` per known vendor. Each
+ * vendor's real spec belongs in that vendor's own adapter file, not here — this module
+ * owns only the vendor-neutral probe engine, the known-bad list, and this registry
+ * shape. `doctor.ts` takes a registry as an injectable, defaulted parameter (mirroring
+ * the `Io`/`processIo` injection pattern used for CLI I/O elsewhere in this codebase),
+ * so a caller can supply a registry whose entries carry each vendor's real
+ * `authProbeArgs`/`parseAuthOutcome` (and any other spec-owning field) without editing
+ * this file. `DEFAULT_PROBE_REGISTRY` below is only a placeholder default: both of its
+ * entries use `PLACEHOLDER_AUTH_PROBE_ARGS`, which is not a real subcommand on either
+ * vendor CLI.
+ */
+export type VendorProbeRegistry = Readonly<Record<VendorId, VendorProbeSpec>>;
+
+export const DEFAULT_PROBE_REGISTRY: VendorProbeRegistry = {
   claude: CLAUDE_PROBE_SPEC,
   codex: CODEX_PROBE_SPEC,
 };
@@ -163,12 +186,6 @@ async function resolveExecutablePath(
   }
   for (const candidate of candidates) {
     if (await io.exists(candidate)) {
-      try {
-        await io.readFile(candidate);
-      } catch {
-        // Unreadable (e.g. a directory, or a permission-denied binary) is still a
-        // resolved candidate; readability is a liveness check, not a resolution gate.
-      }
       return candidate;
     }
   }

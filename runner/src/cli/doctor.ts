@@ -4,8 +4,21 @@
 // goals spec section 25.3: `0` when the vendor is usable, `15` when it is missing,
 // unauthenticated, or on the known-bad list, `2` for a missing or unknown `--vendor`.
 // Omitting `--vendor` probes both vendors and returns the worst code.
+//
+// Which `VendorProbeSpec` each vendor probes against is injectable: `cmdDoctor` takes
+// a `VendorProbeRegistry` as a defaulted last parameter (mirroring the `Io`/`processIo`
+// injection pattern this module already uses for CLI output), defaulting to
+// `DEFAULT_PROBE_REGISTRY`. A caller that owns a vendor's real adapter can pass a
+// registry with that vendor's real spec in place of the placeholder default.
 
-import { probeVendor, isKnownBadVersion, knownBadReason, PROBE_SPECS, type VendorId } from "../adapters/probe.ts";
+import {
+  probeVendor,
+  isKnownBadVersion,
+  knownBadReason,
+  DEFAULT_PROBE_REGISTRY,
+  type VendorId,
+  type VendorProbeRegistry,
+} from "../adapters/probe.ts";
 import type { CapabilityReport } from "../adapters/adapter.ts";
 import { EXIT_CODES, type ExitCode } from "./exit-codes.ts";
 import type { Io } from "./commands.ts";
@@ -36,8 +49,8 @@ function classify(vendor: VendorId, report: CapabilityReport): { usable: boolean
   return { usable: true, reason: "usable" };
 }
 
-async function probeOne(vendor: VendorId, io: Io): Promise<DoctorResult> {
-  const spec = PROBE_SPECS[vendor];
+async function probeOne(vendor: VendorId, io: Io, registry: VendorProbeRegistry): Promise<DoctorResult> {
+  const spec = registry[vendor];
   const report = await probeVendor(spec, {
     executablePath: spec.defaultExecutable,
     requestedModel: "default",
@@ -54,7 +67,11 @@ interface DoctorParsedArgs {
   flags: ReadonlyMap<string, string | boolean>;
 }
 
-export async function cmdDoctor(parsed: DoctorParsedArgs, io: Io): Promise<ExitCode> {
+export async function cmdDoctor(
+  parsed: DoctorParsedArgs,
+  io: Io,
+  registry: VendorProbeRegistry = DEFAULT_PROBE_REGISTRY,
+): Promise<ExitCode> {
   const rawVendor = parsed.flags.get("vendor");
   if (rawVendor !== undefined && typeof rawVendor !== "string") {
     io.stderr("error: --vendor requires a value");
@@ -72,7 +89,7 @@ export async function cmdDoctor(parsed: DoctorParsedArgs, io: Io): Promise<ExitC
   }
 
   const json = parsed.flags.get("json") === true;
-  const results = await Promise.all(vendors.map((vendor) => probeOne(vendor, io)));
+  const results = await Promise.all(vendors.map((vendor) => probeOne(vendor, io, registry)));
 
   if (json) {
     io.stdout(
