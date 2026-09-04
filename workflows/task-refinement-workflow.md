@@ -188,7 +188,7 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
    - Validate `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` against the final sketch, including the sizing bands and any over-target justifications
    - Verify brief hygiene per the Brief hygiene section
 6. If the final confidence check fails: go to step 2 with the new findings (see loop cap in Rules)
-7. Run the Completion Self-Check and mark the task `ready-to-implement`. In manual mode this stays an orchestrator action; no new subagent dispatch is needed. In runner mode it is the runner-owned `refinement-self-check` stage: it validates required sections, enums, counts, dependencies, and file existence, and it does not replace analyst judgment.
+7. Run the Completion Self-Check and mark the task `ready-to-implement`. In manual mode this stays an orchestrator action; no new subagent dispatch is needed. In runner mode it is the runner-owned `refinement-self-check` stage: it validates required sections, enums, counts, dependencies, and file existence, and it does not replace analyst judgment. Items 1, 3, 4, and 5 of the 9-item Completion Self-Check list are judgment calls a mechanical predicate cannot perform; they remain enforced by the analyst and architect stage verdicts feeding into this stage, not by the predicate itself.
 
 ### Refinement queue reconciliation
 
