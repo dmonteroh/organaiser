@@ -1,0 +1,81 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: integration
+  contractVersion: 1.0.0
+spec:
+  policy: ../dev-workflow.md
+  entryStage: lock-destination
+  terminalOutcomes:
+    success:
+      - integrated
+    attention:
+      - waiting-operator
+      - parked
+    neutral:
+      - ready-to-implement
+  caps:
+    crossTaskReviewGate: 3
+  stages:
+    - id: lock-destination
+      kind: runner
+      predicate: destination-lock-held
+      transitions:
+        "true": create-candidate
+        "false": parked
+    - id: create-candidate
+      kind: runner
+      predicate: candidate-worktree-created
+      transitions:
+        "true": replay-task
+        "false": parked
+    - id: replay-task
+      kind: runner
+      predicate: replay-clean
+      transitions:
+        "true": verify-candidate
+        "false": parked
+    - id: verify-candidate
+      kind: runner
+      predicate: candidate-checks-pass
+      transitions:
+        "true": cross-task-review
+        "false": ready-to-implement
+    - id: cross-task-review
+      kind: agent
+      role: code-quality-reviewer
+      prompt: ../subagents/code-quality-reviewer-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: fast-review
+      verdicts:
+        - pass
+        - needs-info
+        - "fail-with-severity: critical"
+        - "fail-with-severity: important"
+      transitions:
+        pass: advance-destination
+        needs-info: waiting-operator
+        "fail-with-severity: critical": ready-to-implement
+        "fail-with-severity: important": ready-to-implement
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: advance-destination
+      kind: runner
+      predicate: destination-advanced
+      transitions:
+        "true": persist-integration
+        "false": create-candidate
+    - id: persist-integration
+      kind: runner
+      predicate: integration-evidence-durable
+      transitions:
+        "true": cleanup
+        "false": parked
+    - id: cleanup
+      kind: runner
+      predicate: worktrees-removed
+      transitions:
+        "true": integrated
+        "false": parked

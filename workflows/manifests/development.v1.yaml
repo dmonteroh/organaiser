@@ -1,0 +1,138 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: dev-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../dev-workflow.md
+  entryStage: implement
+  terminalOutcomes:
+    success:
+      - integrating
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    specReviewGate: 3
+    qualityReviewGate: 3
+    questionsLoop: 3
+    artifactRepair: 3
+    taskChecksGate: 3
+  stages:
+    - id: implement
+      kind: agent
+      role: implementer
+      prompt: ../subagents/implementer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: collect-implementation-artifacts
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: collect-implementation-artifacts
+      kind: runner
+      predicate: implementation-artifacts-present
+      transitions:
+        "true": verify-task
+        "false": implement
+    - id: verify-task
+      kind: runner
+      predicate: task-checks-pass
+      transitions:
+        "true": review-spec
+        "false": implement
+    - id: review-spec
+      kind: agent
+      role: spec-reviewer
+      prompt: ../subagents/spec-reviewer-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: fast-review
+      verdicts:
+        - pass
+        - fail
+        - needs-info
+      transitions:
+        pass: review-quality
+        fail: fix-spec
+        needs-info: waiting-operator
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: fix-spec
+      kind: agent
+      role: implementer
+      prompt: ../subagents/implementer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: collect-implementation-artifacts
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: review-quality
+      kind: agent
+      role: code-quality-reviewer
+      prompt: ../subagents/code-quality-reviewer-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: fast-review
+      verdicts:
+        - pass
+        - needs-info
+        - "fail-with-severity: critical"
+        - "fail-with-severity: important"
+      transitions:
+        pass: record-minors
+        needs-info: waiting-operator
+        "fail-with-severity: critical": fix-quality
+        "fail-with-severity: important": fix-quality
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: fix-quality
+      kind: agent
+      role: implementer
+      prompt: ../subagents/implementer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: collect-implementation-artifacts
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: record-minors
+      kind: runner
+      predicate: minor-findings-recorded
+      transitions:
+        "true": ready-to-integrate
+        "false": parked
+    - id: ready-to-integrate
+      kind: runner
+      predicate: handoff-recorded
+      transitions:
+        "true": integrating
+        "false": parked
