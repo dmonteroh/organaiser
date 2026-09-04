@@ -2,8 +2,8 @@
 // section 23.3). Eligibility is expressed as ten named conditions rather than
 // section 12's nine bullets: "a worker slot and vendor slot are available" is
 // two independent conditions, split here so each can be toggled on its own.
-// Four are evaluated for real in P5's scope; six are hard-coded to their
-// permissive value behind a marker naming the phase that replaces them.
+// Six are evaluated for real; four are hard-coded to their permissive value
+// behind a marker naming the phase that replaces them.
 //
 // Atomic dispatch creates the `attempts` row and its worker inside one
 // transaction keyed by P5a's `(run_id, task_id, stage_id, round,
@@ -33,32 +33,68 @@ export interface DispatchConditions {
   stageInputArtifactsValid: boolean;
   workerSlotAvailable: boolean;
 
-  // Out of P5 scope: hard-coded permissive, named for a later phase.
-  claimSetComplete: boolean; // P7: claim-set assignment is not implemented.
-  claimsDoNotOverlapActive: boolean; // P7: claim overlap checking is not implemented.
+  // Evaluated for real: computed from the claims and worktrees rows.
+  claimSetComplete: boolean;
+  worktreeMatchesRecordedBase: boolean;
+
+  // Out of scope: hard-coded permissive, named for a later phase.
+  claimsDoNotOverlapActive: boolean; // P8: claim overlap checking is not implemented.
   vendorSlotAvailable: boolean; // P6: per-vendor concurrency slots are not implemented.
   readinessProbePassed: boolean; // P6: readiness-probe-gated dispatch is not implemented.
-  worktreeMatchesRecordedBase: boolean; // P7: worktrees are not implemented.
   noControllerOrIntegrationLockConflict: boolean; // P8: controller/integration lock arbitration is not implemented.
 }
 
 export function permissiveOutOfScopeConditions(): Pick<
   DispatchConditions,
-  | "claimSetComplete"
   | "claimsDoNotOverlapActive"
   | "vendorSlotAvailable"
   | "readinessProbePassed"
-  | "worktreeMatchesRecordedBase"
   | "noControllerOrIntegrationLockConflict"
 > {
   return {
-    claimSetComplete: true, // P7:
-    claimsDoNotOverlapActive: true, // P7:
+    claimsDoNotOverlapActive: true, // P8:
     vendorSlotAvailable: true, // P6:
     readinessProbePassed: true, // P6:
-    worktreeMatchesRecordedBase: true, // P7:
     noControllerOrIntegrationLockConflict: true, // P8:
   };
+}
+
+export interface ClaimSetCompleteInput {
+  runId: string;
+  taskId: string;
+  mutating: boolean;
+  workspaceProviderPresent: boolean;
+}
+
+// True unless the dispatch is mutating, a workspace provider is in play, and
+// the task has no claims recorded at all: a non-mutating dispatch or a
+// scheduler with no workspace provider never requires a claim set.
+export function claimSetComplete(db: DatabaseSync, input: ClaimSetCompleteInput): boolean {
+  if (!input.mutating || !input.workspaceProviderPresent) return true;
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM claims WHERE run_id = ? AND task_id = ?`)
+    .get(input.runId, input.taskId) as { n: number };
+  return row.n > 0;
+}
+
+export interface WorktreeMatchesRecordedBaseInput {
+  runId: string;
+  taskId: string;
+  heldBaseCommit: string | null;
+}
+
+// A pure store-and-argument computation: no Git call, no ref resolution. A
+// task with no active worktrees row has nothing to match against. A task
+// with one is eligible only when the scheduler currently holds an in-memory
+// workspace handle for it whose base commit string-matches the row; an
+// active row with no matching held handle is a leftover from an attempt the
+// scheduler no longer tracks, and a leftover blocks dispatch.
+export function worktreeMatchesRecordedBase(db: DatabaseSync, input: WorktreeMatchesRecordedBaseInput): boolean {
+  const row = db
+    .prepare(`SELECT base_commit FROM worktrees WHERE run_id = ? AND task_id = ? AND cleanup_state = 'active'`)
+    .get(input.runId, input.taskId) as { base_commit: string } | undefined;
+  if (!row) return true;
+  return input.heldBaseCommit !== null && input.heldBaseCommit === row.base_commit;
 }
 
 // Priority filtering happens only after this conjunction: eligibility never

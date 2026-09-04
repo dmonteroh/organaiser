@@ -6,10 +6,12 @@ import test from "node:test";
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import {
+  claimSetComplete,
   createAttemptRecord,
   dispatchAttempt,
   isDispatchEligible,
   permissiveOutOfScopeConditions,
+  worktreeMatchesRecordedBase,
   type AttemptRecordInput,
   type DispatchAttemptInput,
   type DispatchConditions,
@@ -152,28 +154,30 @@ test("dispatchAttempt: two dispatch calls racing the same key yield exactly one 
   });
 });
 
-test("dispatch.ts's six out-of-scope conditions each carry a P6/P7/P8 marker naming the phase that replaces them", () => {
-  const conditionNames = [
-    "claimSetComplete",
-    "claimsDoNotOverlapActive",
-    "vendorSlotAvailable",
-    "readinessProbePassed",
-    "worktreeMatchesRecordedBase",
-    "noControllerOrIntegrationLockConflict",
-  ];
+test("dispatch.ts's four remaining out-of-scope conditions each carry a P6/P8 marker naming the phase that replaces them, and claimSetComplete/worktreeMatchesRecordedBase no longer appear in that block", () => {
+  const conditionNames = ["claimsDoNotOverlapActive", "vendorSlotAvailable", "readinessProbePassed", "noControllerOrIntegrationLockConflict"];
   for (const name of conditionNames) {
     const lineMatch = dispatchSource.match(new RegExp(`^\\s*${name}: (?:boolean|true);.*$`, "m"));
     assert.ok(lineMatch, `no declaration/assignment line found for ${name}`);
   }
   // Every out-of-scope condition's hard-coded permissive assignment (in
-  // `permissiveOutOfScopeConditions`) carries a `// P6:`, `// P7:`, or `// P8:`
-  // marker, so a later phase narrowing scope cannot silently drop one.
+  // `permissiveOutOfScopeConditions`) carries a `// P6:` or `// P8:` marker,
+  // so a later phase narrowing scope cannot silently drop one.
   const permissiveBlock = dispatchSource.slice(
     dispatchSource.indexOf("export function permissiveOutOfScopeConditions"),
-    dispatchSource.indexOf("// Priority filtering happens only after this conjunction"),
+    dispatchSource.indexOf("export interface ClaimSetCompleteInput"),
   );
-  const markerCount = (permissiveBlock.match(/\/\/ P[678]:/g) ?? []).length;
-  assert.equal(markerCount, 6, "expected exactly six P6/P7/P8 markers, one per out-of-scope condition");
+  const markerCount = (permissiveBlock.match(/\/\/ P[68]:/g) ?? []).length;
+  assert.equal(markerCount, 4, "expected exactly four P6/P8 markers, one per remaining out-of-scope condition");
+  assert.ok(!permissiveBlock.includes("claimSetComplete"), "claimSetComplete must not appear inside the permissive block");
+  assert.ok(!permissiveBlock.includes("worktreeMatchesRecordedBase"), "worktreeMatchesRecordedBase must not appear inside the permissive block");
+
+  const conditionsInterface = dispatchSource.slice(
+    dispatchSource.indexOf("export interface DispatchConditions"),
+    dispatchSource.indexOf("export function permissiveOutOfScopeConditions"),
+  );
+  assert.match(conditionsInterface, /claimSetComplete: boolean;/);
+  assert.match(conditionsInterface, /worktreeMatchesRecordedBase: boolean;/);
 });
 
 test("isDispatchEligible: the ten-condition conjunction requires every condition, and priority filtering never bypasses it", () => {
@@ -182,6 +186,8 @@ test("isDispatchEligible: the ten-condition conjunction requires every condition
     noUnresolvedBlockingQuestion: true,
     stageInputArtifactsValid: true,
     workerSlotAvailable: true,
+    claimSetComplete: true,
+    worktreeMatchesRecordedBase: true,
     ...permissiveOutOfScopeConditions(),
   };
   assert.equal(isDispatchEligible(allTrue), true);
@@ -189,4 +195,102 @@ test("isDispatchEligible: the ten-condition conjunction requires every condition
   for (const key of Object.keys(allTrue) as Array<keyof DispatchConditions>) {
     assert.equal(isDispatchEligible({ ...allTrue, [key]: false }), false, `${key} must be a hard requirement`);
   }
+});
+
+test("claimSetComplete: table-driven over mutating/provider/claims-row combinations", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, "run-1", 1000);
+      withTransaction(db, () => {
+        db.prepare(
+          `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        ).run("claim-1", "run-1", "task-with-claims", "files", JSON.stringify(["a.txt"]), 1000);
+      });
+
+      const cases: Array<{ name: string; input: Parameters<typeof claimSetComplete>[1]; expected: boolean }> = [
+        {
+          name: "non-mutating dispatch is always complete",
+          input: { runId: "run-1", taskId: "task-no-claims", mutating: false, workspaceProviderPresent: true },
+          expected: true,
+        },
+        {
+          name: "no workspace provider is always complete",
+          input: { runId: "run-1", taskId: "task-no-claims", mutating: true, workspaceProviderPresent: false },
+          expected: true,
+        },
+        {
+          name: "mutating, provider present, no claims row",
+          input: { runId: "run-1", taskId: "task-no-claims", mutating: true, workspaceProviderPresent: true },
+          expected: false,
+        },
+        {
+          name: "mutating, provider present, a claims row exists",
+          input: { runId: "run-1", taskId: "task-with-claims", mutating: true, workspaceProviderPresent: true },
+          expected: true,
+        },
+      ];
+
+      for (const { name, input, expected } of cases) {
+        assert.equal(claimSetComplete(db, input), expected, name);
+      }
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("worktreeMatchesRecordedBase: table-driven over no-row/matching-handle/leftover-row combinations", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, "run-1", 1000);
+      withTransaction(db, () => {
+        db.prepare(
+          `INSERT INTO worktrees (id, run_id, task_id, path, branch, base_commit, cleanup_state, created_at, cleaned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+        ).run("wt-1", "run-1", "task-active", "/tmp/wt-1", "orga/task/task-active", "abc123", "active", 1000);
+        db.prepare(
+          `INSERT INTO worktrees (id, run_id, task_id, path, branch, base_commit, cleanup_state, created_at, cleaned_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run("wt-2", "run-1", "task-cleaned", "/tmp/wt-2", "orga/task/task-cleaned", "def456", "cleaned", 1000, 1001);
+      });
+
+      const cases: Array<{ name: string; input: Parameters<typeof worktreeMatchesRecordedBase>[1]; expected: boolean }> = [
+        {
+          name: "no active worktrees row: nothing to match",
+          input: { runId: "run-1", taskId: "task-with-no-row", heldBaseCommit: null },
+          expected: true,
+        },
+        {
+          name: "an active row but a cleaned row is irrelevant: still nothing to match",
+          input: { runId: "run-1", taskId: "task-cleaned", heldBaseCommit: null },
+          expected: true,
+        },
+        {
+          name: "active row, held handle matches the recorded base commit",
+          input: { runId: "run-1", taskId: "task-active", heldBaseCommit: "abc123" },
+          expected: true,
+        },
+        {
+          name: "active row, held handle for a different base commit",
+          input: { runId: "run-1", taskId: "task-active", heldBaseCommit: "zzz999" },
+          expected: false,
+        },
+        {
+          name: "active row, no held handle at all (a leftover blocks dispatch)",
+          input: { runId: "run-1", taskId: "task-active", heldBaseCommit: null },
+          expected: false,
+        },
+      ];
+
+      for (const { name, input, expected } of cases) {
+        assert.equal(worktreeMatchesRecordedBase(db, input), expected, name);
+      }
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,12 +21,88 @@ import {
   reconcileState,
   STAGE_DEFINITIONS,
   type SchedulerSteps,
+  type WorkspaceProvider,
 } from "../src/engine/scheduler.ts";
+import { createWorkspace, DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../src/git/workspace.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
 import type { ProcessAdapter } from "../src/adapters/adapter.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 
 const fixturesStreamsDir = fileURLToPath(new URL("./fixtures/fake-streams/", import.meta.url));
+
+function runGit(dir: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: dir,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+  }).trim();
+}
+
+function commitFile(dir: string, relPath: string, contents: string, message: string): string {
+  const abs = path.join(dir, relPath);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, contents, "utf8");
+  runGit(dir, ["add", "--", relPath]);
+  runGit(dir, [
+    "-c",
+    "user.name=Test User",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-q",
+    "-m",
+    message,
+    "--",
+    relPath,
+  ]);
+  return runGit(dir, ["rev-parse", "HEAD"]);
+}
+
+// Sets up a git repository at `dir` with an initialized, committed project,
+// mirroring `workspace.test.ts`'s own `setupProject`.
+function setupGitProject(dir: string): string {
+  runGit(dir, ["init", "-q"]);
+  runGit(dir, ["config", "commit.gpgsign", "false"]);
+  const seed = commitFile(dir, "seed.txt", "seed\n", "seed");
+  initProject(dir);
+  runGit(dir, ["add", "--", "orga.yaml", ".gitignore"]);
+  runGit(dir, [
+    "-c",
+    "user.name=Test User",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-q",
+    "-m",
+    "init orga project",
+  ]);
+  return runGit(dir, ["rev-parse", "HEAD"]);
+}
+
+function defaultProvider(projectRoot: string): WorkspaceProvider {
+  return { projectRoot, root: DEFAULT_WORKTREE_ROOT, branchPrefix: DEFAULT_BRANCH_PREFIX };
+}
+
+function seedFilesClaim(db: ReturnType<typeof openStore>, runId: string, taskId: string, paths: string[]): void {
+  withTransaction(db, () => {
+    db.prepare(
+      `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(`claim-${taskId}`, runId, taskId, "files", JSON.stringify(paths), 1000);
+  });
+}
+
+async function waitForExit(pid: number, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`process ${pid} did not exit within ${timeoutMs}ms`);
+}
 
 function fakeClock(startMs: number): { now: () => number; advance: (ms: number) => void } {
   let current = startMs;
@@ -138,6 +216,32 @@ async function withRunDb(
       const runId = "run-1";
       insertRun(db, runId, clock.now());
       await fn({ dir, db, runId, clock });
+    } finally {
+      db.close();
+    }
+  });
+}
+
+// Like `withRunDb`, but `dir` is a real git repository with an initial
+// commit, so a workspace provider pointed at it can actually create
+// worktrees.
+async function withGitRunDb(
+  fn: (env: {
+    dir: string;
+    db: ReturnType<typeof openStore>;
+    runId: string;
+    clock: ReturnType<typeof fakeClock>;
+    baseCommit: string;
+  }) => Promise<void>,
+): Promise<void> {
+  await withTempWorkspace(async (dir) => {
+    const baseCommit = setupGitProject(dir);
+    const db = openStore(dir);
+    try {
+      const clock = fakeClock(1_000_000);
+      const runId = "run-1";
+      insertRun(db, runId, clock.now());
+      await fn({ dir, db, runId, clock, baseCommit });
     } finally {
       db.close();
     }
@@ -433,5 +537,267 @@ test("priority filtering never bypasses eligibility: a higher-priority ineligibl
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
 
     assert.equal(runtime.liveAttempt?.taskId, "task-b", "the eligible, lower-priority task is dispatched instead");
+  });
+});
+
+test("dispatchEligible: a mutating task with no claims rows is not dispatched when a workspace provider is present, and is dispatched once a claims row exists", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    const provider = defaultProvider(dir);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+
+    const liveAfterFirstCall: unknown = runtime.liveAttempt;
+    assert.equal(liveAfterFirstCall, null, "no claims row means claimSetComplete is false");
+    const attemptsBefore = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(attemptsBefore.n, 0, "no attempts row is created for an ineligible dispatch");
+
+    seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+
+    const liveAfterSecondCall = runtime.liveAttempt as { taskId: string } | null;
+    assert.equal(liveAfterSecondCall?.taskId, "task-a", "the task dispatches once its claims row exists");
+    const attemptsAfter = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(attemptsAfter.n, 1);
+  });
+});
+
+test("dispatchEligible with no workspace provider: unchanged behavior — zero worktrees rows, process.cwd() as the working directory", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
+
+    assert.equal(runtime.liveAttempt?.taskId, "task-a");
+    assert.equal(runtime.liveAttempt?.workspace, null, "no workspace handle is held without a provider");
+    assert.equal(runtime.liveAttempt?.handle.worktree, process.cwd(), "the working directory is unchanged");
+
+    const worktreeRows = db.prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(worktreeRows.n, 0, "no worktree is ever created without a provider");
+  });
+});
+
+test("dispatchEligible with a workspace provider: a mutating dispatch runs inside a runner-owned worktree, and the operator checkout is left untouched", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
+    const provider = defaultProvider(dir);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const headBefore = runGit(dir, ["rev-parse", "HEAD"]);
+    const statusBefore = runGit(dir, ["status", "--porcelain"]);
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+
+    assert.ok(runtime.liveAttempt, "the task dispatches once its claims row exists");
+    const workspace = runtime.liveAttempt!.workspace;
+    assert.ok(workspace, "a workspace handle is held for a provider-backed mutating dispatch");
+    assert.ok(fs.existsSync(workspace!.path), "the worktree directory exists on disk");
+    assert.equal(runtime.liveAttempt!.handle.worktree, workspace!.path, "the attempt's working directory is the worktree path");
+
+    // Let the fake worker process finish before inspecting the checkout again.
+    await waitForExit(runtime.liveAttempt!.handle.pid);
+
+    const headAfter = runGit(dir, ["rev-parse", "HEAD"]);
+    const statusAfter = runGit(dir, ["status", "--porcelain"]);
+    assert.equal(headAfter, headBefore, "the operator checkout's HEAD is unchanged");
+    assert.equal(statusAfter, statusBefore, "the operator checkout's working tree is unchanged");
+  });
+});
+
+test("normalizeResults: a mutating attempt whose observed diff exceeds its claims is rejected without touching the worktree, and reconcileState still finds no invariant to flag", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
+    const provider = defaultProvider(dir);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+    assert.ok(runtime.liveAttempt);
+    const workspacePath = runtime.liveAttempt!.workspace!.path;
+
+    // Simulate the worker writing an out-of-claim file into its worktree.
+    fs.writeFileSync(path.join(workspacePath, "unclaimed.txt"), "surprise\n", "utf8");
+    await waitForExit(runtime.liveAttempt!.handle.pid);
+
+    const diffBefore = runGit(workspacePath, ["diff"]);
+    const statusBefore = runGit(workspacePath, ["status", "--porcelain"]);
+
+    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
+
+    assert.equal(runtime.liveAttempt, null);
+
+    const attempt = db.prepare(`SELECT status FROM attempts WHERE run_id = ? AND task_id = ?`).get(runId, "task-a") as {
+      status: string;
+    };
+    assert.equal(attempt.status, "failed", "an out-of-claim attempt is marked failed regardless of the adapter's own verdict");
+
+    const violationEvents = db
+      .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`)
+      .all(runId) as Array<{ payload: string }>;
+    assert.equal(violationEvents.length, 1);
+    const payload = JSON.parse(violationEvents[0]!.payload) as { outOfClaim: string[] };
+    assert.deepEqual(payload.outOfClaim, ["unclaimed.txt"]);
+
+    const worktreeRow = db
+      .prepare(`SELECT cleanup_state FROM worktrees WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-a") as { cleanup_state: string };
+    assert.equal(worktreeRow.cleanup_state, "active", "a rejection leaves the worktrees row active; no removeWorkspace call");
+
+    assert.ok(fs.existsSync(path.join(workspacePath, "unclaimed.txt")), "the file the worker wrote is still present");
+    const diffAfter = runGit(workspacePath, ["diff"]);
+    const statusAfter = runGit(workspacePath, ["status", "--porcelain"]);
+    assert.equal(diffAfter, diffBefore, "the worktree's working tree is byte-identical before and after the rejection");
+    assert.equal(statusAfter, statusBefore);
+
+    // advanceTransitions finds no outcome recorded for task-a (the violation
+    // withheld it), so the task advances no board transition.
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+    const taskAfter = getTask(db, "task-a");
+    assert.equal(taskAfter.stage_id, "implementation", "the rejected task's stage is unchanged");
+
+    const reconcileRuntime = createSchedulerRuntime();
+    reconcileState(buildCtx(db, runId, clock), reconcileRuntime, provider);
+    assert.equal(
+      reconcileRuntime.scratch.invariantViolations.some((v) => v.includes("untracked worktree")),
+      false,
+      "an active worktrees row backing a live-tracked task is not reported as an untracked stray",
+    );
+  });
+});
+
+test("normalizeResults: a genuine git failure inside observedPaths still fails the attempt closed, but is recorded distinctly from an empty-violation rejection", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
+    const provider = defaultProvider(dir);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+    assert.ok(runtime.liveAttempt);
+    const workspacePath = runtime.liveAttempt!.workspace!.path;
+    await waitForExit(runtime.liveAttempt!.handle.pid);
+
+    // Delete the worktree directory itself (not through `git worktree
+    // remove`, so git's own metadata is left dangling too) so that
+    // observedPaths' `git diff`/`git ls-files` calls, run with this now-gone
+    // path as their cwd, fail with a real, uncontrived error rather than a
+    // mock.
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+
+    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
+
+    assert.equal(runtime.liveAttempt, null);
+
+    const attempt = db.prepare(`SELECT status FROM attempts WHERE run_id = ? AND task_id = ?`).get(runId, "task-a") as {
+      status: string;
+    };
+    assert.equal(attempt.status, "failed", "the attempt still fails closed on a genuine internal (git) failure");
+
+    const worktreeRow = db
+      .prepare(`SELECT cleanup_state FROM worktrees WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-a") as { cleanup_state: string };
+    assert.equal(worktreeRow.cleanup_state, "active", "a rejection leaves the worktrees row active here too");
+
+    const violationEvents = db
+      .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`)
+      .all(runId) as Array<{ payload: string }>;
+    assert.equal(violationEvents.length, 1);
+    const payload = JSON.parse(violationEvents[0]!.payload) as { outOfClaim: string[]; internalError?: string };
+    assert.deepEqual(payload.outOfClaim, [], "the catch path reports no out-of-claim paths, same shape as before");
+    assert.equal(typeof payload.internalError, "string", "the caught error's message is recorded");
+    assert.ok(
+      (payload.internalError as string).length > 0,
+      "the internal-error field is non-empty, distinguishing this from a genuine empty-violation rejection",
+    );
+  });
+});
+
+test("a task whose out-of-claim rejection left an active worktrees row is not redispatched: worktreeMatchesRecordedBase blocks it on the next tick", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
+    const provider = defaultProvider(dir);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+    const workspacePath = runtime.liveAttempt!.workspace!.path;
+    fs.writeFileSync(path.join(workspacePath, "unclaimed.txt"), "surprise\n", "utf8");
+    await waitForExit(runtime.liveAttempt!.handle.pid);
+
+    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
+    assert.equal(runtime.liveAttempt, null);
+
+    const attemptsBefore = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(attemptsBefore.n, 1);
+
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+
+    assert.equal(runtime.liveAttempt, null, "the leftover active worktrees row blocks redispatch");
+    const attemptsAfter = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(attemptsAfter.n, 1, "no second attempts row is created");
+  });
+});
+
+test("reconcileState with a workspace provider: a worktree present on disk with no worktrees row surfaces as an invariant violation", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    const provider = defaultProvider(dir);
+    const untrackedPath = path.resolve(dir, DEFAULT_WORKTREE_ROOT, runId, "orphan-task");
+    runGit(dir, ["worktree", "add", untrackedPath, "-b", "orga/task/orphan-task", "HEAD"]);
+
+    const runtime = createSchedulerRuntime();
+    reconcileState(buildCtx(db, runId, clock), runtime, provider);
+
+    assert.equal(runtime.scratch.invariantViolations.length, 1);
+    assert.match(runtime.scratch.invariantViolations[0] as string, /untracked worktree/);
+  });
+});
+
+test("an orphaned worktree cleanup withholds a succeeded verdict", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: null, disposition: "integrated", now: clock.now() });
+    const provider = defaultProvider(dir);
+
+    const handle = await createWorkspace({
+      mode: "worktree",
+      db,
+      projectRoot: dir,
+      runId,
+      taskId: "task-a",
+      taskKey: "task-a",
+      ref: "HEAD",
+      root: provider.root,
+      branchPrefix: provider.branchPrefix,
+    });
+
+    // Force the branch-delete step of the coming cleanup to fail: free the
+    // branch from its worktree, then check it out in the main repository so
+    // `git branch -D` refuses to delete it, mirroring `workspace.test.ts`'s
+    // own forced-failure setup.
+    runGit(dir, ["worktree", "remove", "--force", handle.path]);
+    runGit(dir, ["checkout", handle.branch]);
+
+    const body = createSchedulerTick(noWorkAdapter(), DEFAULT_SCHEDULER_STEPS, provider);
+    const outcome = await body(buildCtx(db, runId, clock));
+
+    assert.equal(outcome.kind, "resting");
+    assert.equal((outcome as { state: string }).state, "blocked", "an orphaned cleanup withholds succeeded");
+    assert.match((outcome as { reason: string }).reason, /orphaned/);
+
+    const row = db
+      .prepare(`SELECT cleanup_state FROM worktrees WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-a") as { cleanup_state: string };
+    assert.equal(row.cleanup_state, "orphaned");
   });
 });
