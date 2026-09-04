@@ -165,8 +165,7 @@ async function createWorktreeWorkspace(input: CreateWorkspaceInput): Promise<Wor
 // in-place branch is a stub that throws rather than falling through to
 // worktree behavior.
 export async function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceHandle> {
-  if (input.mode === "in-place") {
-    // P7e: in-place workspace mode is not implemented yet.
+  if (input.mode === "in-place") { // P7e: in-place workspace mode is not implemented yet.
     throw new WorkspaceModeNotImplementedError(
       "in-place workspace mode is not implemented; P7e fills this branch",
     );
