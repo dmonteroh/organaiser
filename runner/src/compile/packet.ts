@@ -103,14 +103,16 @@ function heading(name: PacketSection, body: string): string {
 }
 
 // Guards against untrusted stage-input content that mimics the untrusted-block
-// delimiter or a runner-authored role-binding line, so it cannot be misread as
-// closing the block early or as a second, forged binding.
+// delimiter, a runner-authored role-binding line, or a canonical top-level packet
+// heading, so it cannot be misread as closing the block early, as a second forged
+// binding, or as a real packet section boundary.
 function escapeUntrustedContent(content: string): string {
   return content
     .replace(/<<<UNTRUSTED/g, "\\<<<UNTRUSTED")
     .replace(/UNTRUSTED>>>/g, "\\UNTRUSTED>>>")
     .replace(/^(Role file: )/gm, "\\$1")
-    .replace(/^(Role sha256: )/gm, "\\$1");
+    .replace(/^(Role sha256: )/gm, "\\$1")
+    .replace(/^(## (?:Packet Header|Instructions|Inputs|Result Contract))$/gm, "\\$1");
 }
 
 function renderStageInput(input: PacketStageInput): string {

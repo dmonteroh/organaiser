@@ -164,22 +164,28 @@ test("a process that traps SIGTERM is actually killed by cancel via the supplied
     const adapter = new FakeAdapter({ terminate });
     const desc = attempt("implement", "sigterm-trap");
     const handle = await adapter.start(desc, "packet body", await surfaceIn(dir));
-    assert.ok(handle.pid > 0);
-    assert.equal(handle.pgid, handle.pid);
-    assert.ok(isAlive(handle.pgid), "the replayed process must be a real, live process group");
+    try {
+      assert.ok(handle.pid > 0);
+      assert.equal(handle.pgid, handle.pid);
+      assert.ok(isAlive(handle.pgid), "the replayed process must be a real, live process group");
 
-    // The scripted stream traps SIGTERM only after emitting its first output line, so
-    // observing that line first guarantees the trap is installed before cancel fires
-    // (the script's own next step, the long sleep, is what actually yields back to its
-    // event loop; everything before it runs synchronously).
-    const iterator = adapter.observe(handle)[Symbol.asyncIterator]();
-    await iterator.next();
+      // The scripted stream traps SIGTERM only after emitting its first output line, so
+      // observing that line first guarantees the trap is installed before cancel fires
+      // (the script's own next step, the long sleep, is what actually yields back to its
+      // event loop; everything before it runs synchronously).
+      const iterator = adapter.observe(handle)[Symbol.asyncIterator]();
+      await iterator.next();
 
-    const report = await adapter.cancel(handle, 200);
-    assert.equal(report.attemptId, desc.attemptId);
-    assert.equal(report.killedProcessTree, true);
-    assert.equal(report.signalSent, "SIGKILL");
-    assert.equal(isAlive(handle.pgid), false);
+      const report = await adapter.cancel(handle, 200);
+      assert.equal(report.attemptId, desc.attemptId);
+      assert.equal(report.killedProcessTree, true);
+      assert.equal(report.signalSent, "SIGKILL");
+      assert.equal(isAlive(handle.pgid), false);
+    } finally {
+      if (isAlive(handle.pgid)) {
+        await terminate({ pid: handle.pid, pgid: handle.pgid }, 50);
+      }
+    }
   });
 });
 
