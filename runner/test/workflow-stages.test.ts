@@ -676,3 +676,36 @@ test("verify-task false -> implement counts only taskChecksGate", async () => {
     assert.equal(outcome.outcome, "integrating");
   });
 });
+
+// ── The driver reads DEVELOPMENT_CAPS live, not a baked-in literal ───────
+
+test("mutating DEVELOPMENT_CAPS.specReviewGate changes the round count the driver parks at", async () => {
+  const mutableCaps = DEVELOPMENT_CAPS as Record<string, number>;
+  const originalSpecReviewGate = mutableCaps.specReviewGate;
+  assert.equal(originalSpecReviewGate, 3);
+
+  mutableCaps.specReviewGate = 1;
+  try {
+    await withEnv(async (env) => {
+      const { adapter, queue } = makeAdapter(env.streamsDir);
+      queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+      queue("implement", "completed");
+      queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "fail", "fail");
+      queue("review-spec", "fail");
+
+      const outcome = await runDevelopmentStages(baseInput(env, adapter));
+
+      assert.equal(outcome.outcome, "parked");
+      assert.deepEqual(
+        outcome.stages.map((s) => s.stageId),
+        ["implement", "collect-implementation-artifacts", "verify-task", "review-spec"],
+      );
+      assert.equal(outcome.gateRounds.specReviewGate, 1);
+      assert.equal(outcome.schemaInvalid, undefined);
+    });
+  } finally {
+    mutableCaps.specReviewGate = originalSpecReviewGate as number;
+  }
+
+  assert.equal(DEVELOPMENT_CAPS.specReviewGate, 3);
+});
