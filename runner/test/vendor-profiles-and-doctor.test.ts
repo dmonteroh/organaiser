@@ -110,13 +110,18 @@ test("profiles: each layer wins over every layer below it for at least one field
   );
   const sources: VendorProfileSources = {
     vendor: "codex",
-    flags: { model: "flag-model" },
-    env: { ORGA_SANDBOX_MODE: "env-sandbox" },
+    flags: { model: "flag-model", maxConcurrentProcesses: "3" },
+    env: { ORGA_SANDBOX_MODE: "env-sandbox", ORGA_MAX_CONCURRENT_PROCESSES: "5" },
     project,
     user,
   };
   const profile = resolveVendorProfile("default", sources);
   assert.equal(profile.model, "flag-model", "flags must win over env/project/user/default");
+  assert.equal(
+    profile.maxConcurrentProcesses,
+    3,
+    "flags must win over env when both set the same field",
+  );
   assert.equal(profile.sandboxMode, "env-sandbox", "env must win over project/user/default");
   assert.equal(
     profile.permissionMode,
