@@ -391,6 +391,63 @@ test("vendor-adapter: cancel reaches the injected terminator with the handle's p
   }
 });
 
+test("vendor-adapter: a spawn error (binary missing from PATH) resolves gracefully instead of crashing", async () => {
+  const spec: VendorAdapterSpec = {
+    vendor: "stub",
+    buildCommand: () => ({
+      command: "definitely-not-a-real-binary-xyz",
+      args: [],
+      input: "",
+      cwd: process.cwd(),
+      env: process.env,
+    }),
+    toEvents: () => ({ events: [], candidateReportText: null }),
+    extractSignals: (input) => ({
+      permissionDenials: [],
+      toolFailures: [],
+      vendorErrorClass: null,
+      unknownEventTypes: [],
+      streamTruncated: input.streamTruncated,
+      descendantsAlive: input.descendantsAlive,
+    }),
+  };
+
+  const terminate: TerminateFn = async () => ({
+    signalSent: null,
+    exitCode: null,
+    killedProcessTree: false,
+    timedOutWaitingForExit: false,
+  });
+
+  const adapter = createVendorAdapter(spec, {
+    probe: async (configuration) => ({
+      executablePath: configuration.executablePath,
+      cliVersion: "1",
+      requestedModel: configuration.requestedModel,
+      requestedEffort: configuration.requestedEffort,
+      structuredOutputMode: "jsonl",
+      authenticationOutcome: "not-applicable",
+      workingDirectoryBehavior: "honored",
+      permissionAndSandboxConfiguration: "none",
+      adapterVersion: "1",
+    }),
+    terminate,
+  });
+
+  const handle = await adapter.start(attemptDescriptor("spawn-error-test"), "packet", surfaceHere());
+
+  for await (const _event of adapter.observe(handle)) {
+    // Draining is enough to prove observe() terminates rather than hanging.
+  }
+
+  const artifacts = await adapter.collect(handle);
+  assert.equal(artifacts.candidateReportText, null);
+
+  const outcome = await adapter.classify(artifacts);
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.failureClass, "worker-crash");
+});
+
 // --- the four required deterministic stream cases, run through the real pipeline ---
 
 for (const streamCase of adapterStreamCases("test-vendor", FIXTURE_DIR)) {

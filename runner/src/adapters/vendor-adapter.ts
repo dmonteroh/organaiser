@@ -277,6 +277,19 @@ export function createVendorAdapter(spec: VendorAdapterSpec, options: VendorAdap
         notifyWaiters(runtimeAttempt.finishedWaiters);
       });
 
+      child.on("error", () => {
+        if (runtimeAttempt.finished) return;
+        const ended = framer.end();
+        runtimeAttempt.trailing = ended.trailing;
+        runtimeAttempt.streamTruncated = ended.truncated;
+        runtimeAttempt.exitCode = 1;
+        runtimeAttempt.signal = null;
+        runtimeAttempt.finished = true;
+        runtimeAttempt.events.push({ type: "exit", code: 1, signal: null, timestamp: nowIso() });
+        notifyWaiters(runtimeAttempt.waiters);
+        notifyWaiters(runtimeAttempt.finishedWaiters);
+      });
+
       // A child that exits before it ever reads stdin (or never reads it at all) turns
       // the write into an EPIPE; that is a normal race with a fast-exiting process, not
       // an adapter fault, so it is swallowed here rather than left to crash as an
@@ -322,19 +335,20 @@ export function createVendorAdapter(spec: VendorAdapterSpec, options: VendorAdap
 
     async classify(artifacts: AttemptArtifacts): Promise<AttemptOutcome> {
       const attempt = requireAttempt(artifacts.attemptId);
+      const descendantsAlive = groupAlive(attempt.pgid);
       const vendorSignals = spec.extractSignals({
         artifacts,
         values: attempt.values,
         trailing: attempt.trailing,
         streamTruncated: attempt.streamTruncated,
-        descendantsAlive: groupAlive(attempt.pgid),
+        descendantsAlive,
       });
       // The substrate measures liveness and stream truncation itself: neither is the
       // vendor's to judge, so both are overwritten here regardless of what the vendor
       // spec reported.
       const signals: VendorSignals = {
         ...vendorSignals,
-        descendantsAlive: groupAlive(attempt.pgid),
+        descendantsAlive,
         streamTruncated: attempt.streamTruncated || vendorSignals.streamTruncated,
       };
       return classifyAttempt(artifacts, signals, reportValidator);
