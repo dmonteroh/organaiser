@@ -292,12 +292,20 @@ function readClaimedPaths(db: DatabaseSync, runId: string, taskId: string): stri
 
 interface ClaimValidationOutcome {
   outOfClaim: string[];
+  // Set only when this outcome came from the catch path below rather than a
+  // genuine (non-empty) `validateClaims` rejection, so the two cases stay
+  // distinguishable in recorded evidence even though both fail the attempt
+  // closed. Absent for a real violation.
+  internalError?: string;
 }
 
 // Validates a mutating attempt's workspace against its declared claims.
 // Every failure here — a Git call inside `observedPaths`, a malformed claim
 // row — converts to a rejection rather than propagating, since an uncaught
-// throw in this path kills the detached supervisor.
+// throw in this path kills the detached supervisor. The caught error's
+// message is preserved on the outcome rather than discarded, so a transient
+// Git/filesystem failure is never recorded identically to a genuine
+// out-of-claim rejection.
 async function validateAttemptClaims(
   db: DatabaseSync,
   runId: string,
@@ -309,8 +317,8 @@ async function validateAttemptClaims(
     const claimed = readClaimedPaths(db, runId, taskId);
     const result = validateClaims({ observed, claimed, recordedDirt: workspace.recordedDirt });
     return result.ok ? null : { outOfClaim: result.outOfClaim };
-  } catch {
-    return { outOfClaim: [] };
+  } catch (err) {
+    return { outOfClaim: [], internalError: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -362,7 +370,11 @@ export async function normalizeResults(
         task_id: reaped.taskId,
         attempt_id: reaped.attemptId,
         type: "attempt.claim-violation",
-        payload: JSON.stringify({ outOfClaim: claimViolation.outOfClaim }),
+        payload: JSON.stringify(
+          claimViolation.internalError === undefined
+            ? { outOfClaim: claimViolation.outOfClaim }
+            : { outOfClaim: claimViolation.outOfClaim, internalError: claimViolation.internalError },
+        ),
         created_at: nowMs,
       });
     }

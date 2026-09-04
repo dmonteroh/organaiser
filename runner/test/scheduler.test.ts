@@ -673,6 +673,55 @@ test("normalizeResults: a mutating attempt whose observed diff exceeds its claim
   });
 });
 
+test("normalizeResults: a genuine git failure inside observedPaths still fails the attempt closed, but is recorded distinctly from an empty-violation rejection", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
+    const provider = defaultProvider(dir);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+    assert.ok(runtime.liveAttempt);
+    const workspacePath = runtime.liveAttempt!.workspace!.path;
+    await waitForExit(runtime.liveAttempt!.handle.pid);
+
+    // Delete the worktree directory itself (not through `git worktree
+    // remove`, so git's own metadata is left dangling too) so that
+    // observedPaths' `git diff`/`git ls-files` calls, run with this now-gone
+    // path as their cwd, fail with a real, uncontrived error rather than a
+    // mock.
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+
+    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
+
+    assert.equal(runtime.liveAttempt, null);
+
+    const attempt = db.prepare(`SELECT status FROM attempts WHERE run_id = ? AND task_id = ?`).get(runId, "task-a") as {
+      status: string;
+    };
+    assert.equal(attempt.status, "failed", "the attempt still fails closed on a genuine internal (git) failure");
+
+    const worktreeRow = db
+      .prepare(`SELECT cleanup_state FROM worktrees WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-a") as { cleanup_state: string };
+    assert.equal(worktreeRow.cleanup_state, "active", "a rejection leaves the worktrees row active here too");
+
+    const violationEvents = db
+      .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`)
+      .all(runId) as Array<{ payload: string }>;
+    assert.equal(violationEvents.length, 1);
+    const payload = JSON.parse(violationEvents[0]!.payload) as { outOfClaim: string[]; internalError?: string };
+    assert.deepEqual(payload.outOfClaim, [], "the catch path reports no out-of-claim paths, same shape as before");
+    assert.equal(typeof payload.internalError, "string", "the caught error's message is recorded");
+    assert.ok(
+      (payload.internalError as string).length > 0,
+      "the internal-error field is non-empty, distinguishing this from a genuine empty-violation rejection",
+    );
+  });
+});
+
 test("a task whose out-of-claim rejection left an active worktrees row is not redispatched: worktreeMatchesRecordedBase blocks it on the next tick", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
     insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
