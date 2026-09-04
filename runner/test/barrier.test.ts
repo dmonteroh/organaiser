@@ -346,12 +346,31 @@ test("artifacts-present failure short-circuits before checks-pass runs", async (
 test("table-driven: each condition's failure prevents the later conditions from running", async () => {
   const child = await spawnGroup(LONG_LIVED);
   const pgid = child.pid as number;
+  const descendantLeader = await spawnGroup(LONG_LIVED);
+  const descendantLeaderPgid = descendantLeader.pid as number;
+  const descendant = await spawnGroup(LONG_LIVED);
+  const descendantPgid = descendant.pid as number;
   try {
+    await killGroupBestEffort(descendantLeaderPgid);
+    await waitFor(() => {
+      try {
+        process.kill(-descendantLeaderPgid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 3000);
+
     await withTempDir("barrier-exec-", async (executionRoot) => {
       await withTempDir("barrier-task-", async (taskDir) => {
         const markerPath = path.join(executionRoot, "table-marker.txt");
         const cases: Array<{ name: string; input: Partial<BarrierInput>; expected: string }> = [
           { name: "process-exited", input: { pgids: [pgid], requiredArtifacts: ["missing.txt"] }, expected: "process-exited" },
+          {
+            name: "no-live-descendants",
+            input: { pgids: [descendantLeaderPgid, descendantPgid], requiredArtifacts: ["missing.txt"] },
+            expected: "no-live-descendants",
+          },
           { name: "artifacts-present", input: { requiredArtifacts: ["missing.txt"] }, expected: "artifacts-present" },
           {
             name: "checks-pass",
@@ -380,6 +399,8 @@ test("table-driven: each condition's failure prevents the later conditions from 
     });
   } finally {
     await killGroupBestEffort(pgid);
+    await killGroupBestEffort(descendantLeaderPgid);
+    await killGroupBestEffort(descendantPgid);
   }
 });
 
