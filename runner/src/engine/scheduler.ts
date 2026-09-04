@@ -21,17 +21,21 @@ import type { DatabaseSync } from "node:sqlite";
 import type { AttemptOutcome, ProcessAdapter, ProcessHandle } from "../adapters/adapter.ts";
 import { FakeAdapter } from "../adapters/fake.ts";
 import {
+  claimSetComplete,
   computeInputVersion,
   dispatchAttempt,
   isDispatchEligible,
   nextAttemptRound,
   permissiveOutOfScopeConditions,
+  worktreeMatchesRecordedBase,
   type DispatchConditions,
 } from "./dispatch.ts";
 import { getPredicate } from "./predicate-registry.ts";
 import { PREDICATE_RETURN_UNIONS, TERMINAL_DISPOSITION_VALUES } from "./board-predicates.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
+import { createWorkspace, removeWorkspace, listUntrackedWorktrees, type WorkspaceHandle } from "../git/workspace.ts";
+import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick.ts";
 import type { TaskRow, TaskState } from "../store/types.ts";
 
@@ -150,6 +154,18 @@ interface LiveAttempt {
   taskId: string;
   stageId: string;
   handle: ProcessHandle;
+  workspace: WorkspaceHandle | null;
+}
+
+// The workspace root, worktrees root, and branch prefix a caller sources
+// from `ResolvedConfig.workspace` (plus the project root) to give
+// `createSchedulerTick` a real Git workspace to dispatch mutating attempts
+// into. Absent, `dispatchEligible` creates no worktree and runs no claim
+// validation, so the current in-place behavior is preserved exactly.
+export interface WorkspaceProvider {
+  projectRoot: string;
+  root: string;
+  branchPrefix: string;
 }
 
 interface TickScratch {
@@ -256,10 +272,60 @@ export function reapWorkers(ctx: TickContext, runtime: SchedulerRuntime): void {
   runtime.liveAttempt = null;
 }
 
+// Reads the task's single `dimension = 'files'` claims row and parses its
+// JSON array of repository-relative paths. A missing row, a non-array parse
+// result, or a parse throw all yield an empty claim set rather than
+// propagating: a malformed claim rejects the attempt at `validateClaims`
+// instead of killing the detached supervisor.
+function readClaimedPaths(db: DatabaseSync, runId: string, taskId: string): string[] {
+  const row = db
+    .prepare(`SELECT value FROM claims WHERE run_id = ? AND task_id = ? AND dimension = 'files'`)
+    .get(runId, taskId) as { value: string } | undefined;
+  if (!row) return [];
+  try {
+    const parsed = JSON.parse(row.value) as unknown;
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+interface ClaimValidationOutcome {
+  outOfClaim: string[];
+}
+
+// Validates a mutating attempt's workspace against its declared claims.
+// Every failure here — a Git call inside `observedPaths`, a malformed claim
+// row — converts to a rejection rather than propagating, since an uncaught
+// throw in this path kills the detached supervisor.
+async function validateAttemptClaims(
+  db: DatabaseSync,
+  runId: string,
+  taskId: string,
+  workspace: WorkspaceHandle,
+): Promise<ClaimValidationOutcome | null> {
+  try {
+    const observed = await observedPaths(workspace);
+    const claimed = readClaimedPaths(db, runId, taskId);
+    const result = validateClaims({ observed, claimed, recordedDirt: workspace.recordedDirt });
+    return result.ok ? null : { outOfClaim: result.outOfClaim };
+  } catch {
+    return { outOfClaim: [] };
+  }
+}
+
 // Step 2: normalize the reaped worker's artifacts into an `AttemptOutcome`
 // via the adapter's own `collect`/`classify`, and persist the attempt's
 // terminal status. The outcome is kept in this tick's scratch space for
 // `advanceTransitions`, called immediately afterward in the same tick.
+//
+// When the attempt dispatched into a workspace, its observed diff is
+// validated against the task's claims before the outcome is recorded. A
+// claim violation marks the attempt failed with the offending paths as
+// structured evidence and leaves the task's outcome unset for this tick, so
+// `advanceTransitions` finds no facts for it and advances no transition; the
+// worktrees row is left `active` (no `removeWorkspace` call), which is what
+// makes `worktreeMatchesRecordedBase` block the task's redispatch next tick.
 export async function normalizeResults(
   ctx: TickContext,
   runtime: SchedulerRuntime,
@@ -272,10 +338,14 @@ export async function normalizeResults(
   const outcome = await adapter.classify(artifacts);
   const nowMs = ctx.now();
 
+  const claimViolation = reaped.workspace
+    ? await validateAttemptClaims(ctx.db, ctx.runId, reaped.taskId, reaped.workspace)
+    : null;
+
   withTransaction(ctx.db, () => {
     ctx.db
       .prepare(`UPDATE attempts SET status = ?, exit_code = ?, ended_at = ? WHERE id = ?`)
-      .run(outcome.ok ? "completed" : "failed", artifacts.exitCode, nowMs, reaped.attemptId);
+      .run(claimViolation ? "failed" : outcome.ok ? "completed" : "failed", artifacts.exitCode, nowMs, reaped.attemptId);
     appendEvent(ctx.db, {
       id: randomUUID(),
       run_id: ctx.runId,
@@ -285,9 +355,22 @@ export async function normalizeResults(
       payload: JSON.stringify({ ok: outcome.ok, failureClass: outcome.failureClass, reason: outcome.reason }),
       created_at: nowMs,
     });
+    if (claimViolation) {
+      appendEvent(ctx.db, {
+        id: randomUUID(),
+        run_id: ctx.runId,
+        task_id: reaped.taskId,
+        attempt_id: reaped.attemptId,
+        type: "attempt.claim-violation",
+        payload: JSON.stringify({ outOfClaim: claimViolation.outOfClaim }),
+        created_at: nowMs,
+      });
+    }
   });
 
-  runtime.scratch.outcomeByTaskId.set(reaped.taskId, outcome);
+  if (!claimViolation) {
+    runtime.scratch.outcomeByTaskId.set(reaped.taskId, outcome);
+  }
   delete runtime.scratch.reapedAttempt;
 }
 
@@ -460,21 +543,25 @@ export function executeGates(ctx: TickContext, runtime: SchedulerRuntime): void 
 // Step 5: reconcile dependencies, claims, questions, and worktrees.
 // Dependency re-evaluation already happens every tick inside
 // `advanceTransitions` (the whole board is re-walked, including tasks
-// waiting at `release-dependencies`), so this step's own job in P5 — with no
-// claims, questions, or worktrees implemented — is to confirm none of those
-// three exist as a stray, unreconciled row.
-export function reconcileState(ctx: TickContext, runtime: SchedulerRuntime): void {
+// waiting at `release-dependencies`), so this step's own job is to confirm
+// no stray, unreconciled row exists: an `active` worktrees row is now
+// legitimate (a dispatched attempt owns it), but a worktree present on disk
+// with no row at all is the state a crash between `git worktree add` and the
+// row-write transaction leaves behind.
+export function reconcileState(ctx: TickContext, runtime: SchedulerRuntime, workspace?: WorkspaceProvider): void {
   const claims = ctx.db.prepare(`SELECT COUNT(*) AS n FROM claims WHERE run_id = ?`).get(ctx.runId) as {
     n: number;
   };
-  const worktrees = ctx.db
-    .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND cleanup_state = 'active'`)
-    .get(ctx.runId) as { n: number };
   if (claims.n > 0) {
     runtime.scratch.invariantViolations.push(`${claims.n} claim row(s) exist but P5 acquires none`);
   }
-  if (worktrees.n > 0) {
-    runtime.scratch.invariantViolations.push(`${worktrees.n} active worktree(s) exist but P5 creates none`);
+
+  if (!workspace) return;
+  const untracked = listUntrackedWorktrees({ db: ctx.db, runId: ctx.runId, projectRoot: workspace.projectRoot });
+  if (untracked.length > 0) {
+    runtime.scratch.invariantViolations.push(
+      `${untracked.length} untracked worktree(s) on disk with no worktrees row: ${untracked.join(", ")}`,
+    );
   }
 }
 
@@ -489,10 +576,18 @@ function dispatchDependenciesSatisfied(db: DatabaseSync, task: TaskRow): boolean
 // serial: `workerSlotAvailable` is false whenever a live attempt already
 // exists, so at most one dispatch happens per tick and at most one attempt is
 // ever live for the run.
+//
+// With no workspace provider, dispatch runs exactly as it always has: no
+// worktree, no claim requirement, `process.cwd()` as the working directory.
+// With one, a mutating dispatch is guarded by `claimSetComplete` and
+// `worktreeMatchesRecordedBase` and, once past those, runs inside a
+// runner-owned worktree created by `createWorkspace`; the resulting handle
+// is held on `runtime.liveAttempt.workspace` for the reap-time claim check.
 export async function dispatchEligible(
   ctx: TickContext,
   runtime: SchedulerRuntime,
   adapter: ProcessAdapter,
+  workspace?: WorkspaceProvider,
 ): Promise<void> {
   if (runtime.liveAttempt !== null) return;
 
@@ -501,11 +596,29 @@ export async function dispatchEligible(
   );
 
   for (const task of candidates) {
+    const mutating = true;
     const conditions: DispatchConditions = {
       dependenciesSatisfied: dispatchDependenciesSatisfied(ctx.db, task),
       noUnresolvedBlockingQuestion: !hasOpenBlockingQuestion(ctx.db, task),
       stageInputArtifactsValid: briefArtifactDeclared(task),
       workerSlotAvailable: runtime.liveAttempt === null,
+      claimSetComplete: claimSetComplete(ctx.db, {
+        runId: ctx.runId,
+        taskId: task.id,
+        mutating,
+        workspaceProviderPresent: workspace !== undefined,
+      }),
+      // `runtime.liveAttempt` is guaranteed null here (checked at this
+      // function's entry, and this single-lane loop dispatches at most one
+      // attempt before returning), so the held handle for any candidate task
+      // is always none under this child's serial scheduling; the
+      // matching-handle true branch is exercised by
+      // `worktreeMatchesRecordedBase`'s own unit test instead.
+      worktreeMatchesRecordedBase: worktreeMatchesRecordedBase(ctx.db, {
+        runId: ctx.runId,
+        taskId: task.id,
+        heldBaseCommit: null,
+      }),
       ...permissiveOutOfScopeConditions(),
     };
 
@@ -515,6 +628,30 @@ export async function dispatchEligible(
     const role = stageId === "implementation" ? "implementer" : "integrator";
     const round = nextAttemptRound(ctx.db, ctx.runId, task.id, stageId);
     const inputVersion = computeInputVersion({ taskId: task.id, stageId, updatedAt: String(task.updated_at) });
+
+    let workingDirectory = process.cwd();
+    let workspaceHandle: WorkspaceHandle | null = null;
+    if (mutating && workspace) {
+      try {
+        workspaceHandle = await createWorkspace({
+          mode: "worktree",
+          ref: "HEAD",
+          db: ctx.db,
+          projectRoot: workspace.projectRoot,
+          runId: ctx.runId,
+          taskId: task.id,
+          taskKey: task.task_key,
+          root: workspace.root,
+          branchPrefix: workspace.branchPrefix,
+        });
+      } catch (err) {
+        runtime.scratch.invariantViolations.push(
+          `workspace creation failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      workingDirectory = workspaceHandle.path;
+    }
 
     const outcome = await dispatchAttempt(
       ctx.db,
@@ -529,9 +666,9 @@ export async function dispatchEligible(
         vendor: "fake",
         model: "fake",
         configJson: "{}",
-        mutating: true,
+        mutating,
         timeoutBudget: { spawnMs: 30000, idleMs: 30000, wallMs: 300000 },
-        workingDirectory: process.cwd(),
+        workingDirectory,
         environment: process.env,
         packet: `packet for task ${task.id} at stage ${stageId}`,
       },
@@ -539,7 +676,13 @@ export async function dispatchEligible(
     );
 
     if (outcome.dispatched) {
-      runtime.liveAttempt = { attemptId: outcome.attemptId, taskId: task.id, stageId, handle: outcome.handle };
+      runtime.liveAttempt = {
+        attemptId: outcome.attemptId,
+        taskId: task.id,
+        stageId,
+        handle: outcome.handle,
+        workspace: workspaceHandle,
+      };
       runtime.scratch.dispatchedThisTick = true;
     }
     // Serial: stop after the first attempted dispatch regardless of outcome,
@@ -590,18 +733,27 @@ function gatherBoardSummary(ctx: TickContext, runtime: SchedulerRuntime): BoardS
   };
 }
 
-// Cleans runner-owned worktrees before a `succeeded` verdict. P5 creates no
-// worktree, so this always iterates zero rows; it stays a named, called step
-// for interface completeness with the phase that implements worktrees.
-function cleanRunnerOwnedWorktrees(ctx: TickContext): void {
+// Cleans runner-owned worktrees before a `succeeded` verdict, by calling
+// `removeWorkspace` for each `active` row. With no workspace provider, no
+// worktree could have been created, so this always iterates zero rows. A
+// `WorkspaceHandle` is reconstructed from the row's own columns:
+// `removeWorkspace` only reads `path` and `branch` off it, never `baseCommit`
+// or `recordedDirt`, so the reconstruction is exact for what it uses.
+async function cleanRunnerOwnedWorktrees(ctx: TickContext, workspace?: WorkspaceProvider): Promise<void> {
+  if (!workspace) return;
   const rows = ctx.db
-    .prepare(`SELECT id FROM worktrees WHERE run_id = ? AND cleanup_state = 'active'`)
-    .all(ctx.runId) as unknown as Array<{ id: string }>;
-  const nowMs = ctx.now();
+    .prepare(`SELECT path, branch, base_commit FROM worktrees WHERE run_id = ? AND cleanup_state = 'active'`)
+    .all(ctx.runId) as unknown as Array<{ path: string; branch: string; base_commit: string }>;
   for (const row of rows) {
-    withTransaction(ctx.db, () => {
-      ctx.db.prepare(`UPDATE worktrees SET cleanup_state = 'cleaned', cleaned_at = ? WHERE id = ?`).run(nowMs, row.id);
-    });
+    const handle: WorkspaceHandle = {
+      mode: "worktree",
+      root: workspace.root,
+      path: row.path,
+      branch: row.branch,
+      baseCommit: row.base_commit,
+      recordedDirt: [],
+    };
+    await removeWorkspace(handle, { db: ctx.db, projectRoot: workspace.projectRoot, runId: ctx.runId });
   }
 }
 
@@ -648,8 +800,13 @@ export interface SchedulerSteps {
   normalizeResults: (ctx: TickContext, runtime: SchedulerRuntime, adapter: ProcessAdapter) => Promise<void>;
   advanceTransitions: (ctx: TickContext, runtime: SchedulerRuntime) => void;
   executeGates: (ctx: TickContext, runtime: SchedulerRuntime) => void;
-  reconcileState: (ctx: TickContext, runtime: SchedulerRuntime) => void;
-  dispatchEligible: (ctx: TickContext, runtime: SchedulerRuntime, adapter: ProcessAdapter) => Promise<void>;
+  reconcileState: (ctx: TickContext, runtime: SchedulerRuntime, workspace?: WorkspaceProvider) => void;
+  dispatchEligible: (
+    ctx: TickContext,
+    runtime: SchedulerRuntime,
+    adapter: ProcessAdapter,
+    workspace?: WorkspaceProvider,
+  ) => Promise<void>;
 }
 
 export const DEFAULT_SCHEDULER_STEPS: SchedulerSteps = {
@@ -661,9 +818,15 @@ export const DEFAULT_SCHEDULER_STEPS: SchedulerSteps = {
   dispatchEligible,
 };
 
+// The workspace provider is the third, optional parameter: absent (the
+// default, and the production binding below), every step runs exactly as it
+// did before this wiring existed — no worktree, no claim requirement, no
+// untracked-worktree scan. Present, it is threaded into `reconcileState` and
+// `dispatchEligible` and into the end-of-tick worktree cleanup.
 export function createSchedulerTick(
   adapter: ProcessAdapter,
   steps: SchedulerSteps = DEFAULT_SCHEDULER_STEPS,
+  workspace?: WorkspaceProvider,
 ): TickBody {
   const runtime = createSchedulerRuntime();
 
@@ -674,13 +837,23 @@ export function createSchedulerTick(
     await steps.normalizeResults(ctx, runtime, adapter);
     steps.advanceTransitions(ctx, runtime);
     steps.executeGates(ctx, runtime);
-    steps.reconcileState(ctx, runtime);
-    await steps.dispatchEligible(ctx, runtime, adapter);
+    steps.reconcileState(ctx, runtime, workspace);
+    await steps.dispatchEligible(ctx, runtime, adapter, workspace);
 
     const summary = gatherBoardSummary(ctx, runtime);
-    const outcome = classifyTick(summary);
+    let outcome = classifyTick(summary);
     if (outcome.kind === "resting" && outcome.state === "succeeded") {
-      cleanRunnerOwnedWorktrees(ctx);
+      await cleanRunnerOwnedWorktrees(ctx, workspace);
+      const orphaned = ctx.db
+        .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND cleanup_state = 'orphaned'`)
+        .get(ctx.runId) as { n: number };
+      if (orphaned.n > 0) {
+        outcome = {
+          kind: "resting",
+          state: "blocked",
+          reason: `${orphaned.n} worktree(s) failed cleanup and are orphaned`,
+        };
+      }
     }
     return outcome;
   };
