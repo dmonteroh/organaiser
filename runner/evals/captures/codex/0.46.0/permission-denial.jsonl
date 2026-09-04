@@ -1,0 +1,8 @@
+{"vendor":"codex","cliVersion":"0.46.0","commandShape":["exec","--json","--output-schema","<schema-path>","--output-last-message","<last-message-path>","--model","gpt-5-codex","--config","model_reasoning_effort=medium","--sandbox","workspace-write","--cd","<worktree>","-"],"captureDate":"2026-09-04","case":"permission-denial","synthesized":true,"synthesisReason":"blocked-environment: codex-cli 0.46.0 cannot complete a turn against this machine's ChatGPT-authenticated account (every model in the account catalog is rejected server-side); event bodies are hand-constructed from envelope shapes observed in real 0.46.0 runs. Re-record per follow-up F1."}
+{"type":"thread.started","thread_id":"01a06d00-a000-7000-a000-000000000004"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"rm -rf /etc/hosts"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"rm -rf /etc/hosts","aggregated_output":"sandbox denied operation: Operation not permitted","status":"failed"}}
+{"type":"item.started","item":{"id":"item_1","type":"agent_message"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"{\"status\":\"completed\",\"summary\":\"permission-denial capture (see verification log: synthesized under a confirmed environment blocker)\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":48,"output_tokens":24}}

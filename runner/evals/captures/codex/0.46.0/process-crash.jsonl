@@ -1,0 +1,10 @@
+{"vendor":"codex","cliVersion":"0.46.0","commandShape":["exec","--json","--output-schema","<schema-path>","--output-last-message","<last-message-path>","--model","gpt-5-codex","--config","model_reasoning_effort=medium","--sandbox","workspace-write","--cd","<worktree>","-"],"captureDate":"2026-09-04","case":"process-crash"}
+{"type":"thread.started","thread_id":"01a06d00-8193-7721-9d72-1131aa9aae26"}
+{"type":"turn.started"}
+{"type":"error","message":"stream error: unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.\"}; retrying 1/5 in 189ms…"}
+{"type":"error","message":"stream error: unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.\"}; retrying 2/5 in 393ms…"}
+{"type":"error","message":"stream error: unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.\"}; retrying 3/5 in 720ms…"}
+{"type":"error","message":"stream error: unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.\"}; retrying 4/5 in 1.454s…"}
+{"type":"error","message":"stream error: unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.\"}; retrying 5/5 in 3.023s…"}
+{"type":"error","message":"unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.\"}"}
+{"type":"turn.failed","error":{"message":"unexpected status 400 Bad Request: {\"detail\":\"The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.\"}"}}

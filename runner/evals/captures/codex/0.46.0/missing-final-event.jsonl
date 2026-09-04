@@ -1,0 +1,3 @@
+{"vendor":"codex","cliVersion":"0.46.0","commandShape":["exec","--json","--output-schema","<schema-path>","--output-last-message","<last-message-path>","--model","gpt-5-codex","--config","model_reasoning_effort=medium","--sandbox","workspace-write","--cd","<worktree>","-"],"captureDate":"2026-09-04","case":"missing-final-event"}
+{"type":"thread.started","thread_id":"01a06d00-b9fe-7241-bee0-0f4f6878e8b0"}
+{"type":"turn.started"}
