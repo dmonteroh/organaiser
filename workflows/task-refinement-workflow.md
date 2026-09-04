@@ -11,7 +11,7 @@ runnerMode: supported
 
 # Task Refinement Workflow Contract
 
-Iterative confidence-building process that transforms a raw task into an implementation-ready brief. An analyst confidence check feeds an architect review, with operator escalation when needed; a final analyst check closes the loop unless the run was clean enough to take the defined fast path.
+Iterative confidence-building process that transforms a raw task into a ready-to-implement brief. An analyst confidence check feeds an architect review, with operator escalation when needed; a final analyst check closes the loop unless the run was clean enough to take the defined fast path.
 
 This workflow produces enriched task documents, not code. It is a pre-implementation quality gate.
 
@@ -31,7 +31,7 @@ This workflow produces enriched task documents, not code. It is a pre-implementa
 ### architect
 
 - Template: `subagents/architect-prompt.md`
-- Mode: decision-making (may update the task document, must NOT write production code)
+- Mode: decision-making (may update its own task brief and refinement log only, must NOT write production code)
 - Constraints:
   - Must review analyst findings and make concrete decisions, not defer everything
   - Must answer questions where the codebase provides sufficient signal
@@ -39,6 +39,7 @@ This workflow produces enriched task documents, not code. It is a pre-implementa
   - Must not weaken analyst-identified risks without explicit justification
   - Owns the three required task-brief sections: must append `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` on every non-split pass
   - Owns brief hygiene: must move refinement narrative to the refinement log on every non-split pass (see Brief hygiene)
+  - Board status, execution order, and child-task insertion are proposals in the report; the orchestrator (manual mode) or the runner (runner mode) applies them
 
 ## Confidence Dimensions
 
@@ -53,7 +54,7 @@ The analyst rates each dimension as `confident`, `uncertain`, or `blocked`:
 | Risk exposure             | Are failure modes, rollback needs, and testing gaps identified and classified?                                                           |
 | Agent implementability    | Can a single agent session realistically hold the full task in context and converge on a working implementation? See sizing rules below. |
 
-A task is **implementation-ready** when all dimensions are `confident`, zero blockers remain, no questions or vagueness items are unresolved, and the task is not classified as an umbrella/split-required parent.
+A task is **ready-to-implement** when all dimensions are `confident`, zero blockers remain, no questions or vagueness items are unresolved, and the task is not classified as an umbrella/split-required parent.
 
 ## Task Sizing Rules
 
@@ -77,7 +78,7 @@ The analyst rates `agent implementability` from these measures:
 
 When `agent implementability` is `blocked`, the architect **must split the task** into subtasks, each with a single primary concern. Splitting is not a failure; it is the correct resolution. A well-scoped subtask that an agent can finish is worth more than an ambitious task that fails 4 times.
 
-`agent implementability: blocked` is a terminal result for the current parent task in that workflow run. The parent task may not be marked `implementation-ready`. The only valid outcomes are:
+`agent implementability: blocked` is a terminal result for the current parent task in that workflow run. The parent task may not be marked `ready-to-implement`. The only valid outcomes are:
 
 - `split-required`: child tasks still need to be created
 - `superseded-by-children`: child tasks were created and the parent was converted into an umbrella/non-dispatchable task
@@ -109,18 +110,18 @@ The refined task document is the implementer-facing source of truth. Refinement 
 
 ### Required section in the task brief: `Implementation Constraints`
 
-Append this section to the refined task brief before marking it implementation-ready:
+Append this section to the refined task brief before marking it ready-to-implement:
 
 - **Reference pattern**: specific architectural patterns the implementer must follow
 - **Negative scope**: explicit list of what must NOT be built in this task
 - **Deployment context reminder**: environment/runtime assumptions and rollout context that constrain implementation
 - **Playbook-like instructions**: ordered, unambiguous implementation steps the implementer can follow without re-deriving the plan. Write them so a smaller or lower-effort model can execute them. For any file in the read set over roughly 500 lines, name the specific functions or regions to read and modify, not just the file path, so the implementer never has to hold the whole file in context.
 
-If this section is missing, the task is not implementation-ready and may not be dispatched to an implementing agent.
+If this section is missing, the task is not ready-to-implement and may not be dispatched to an implementing agent.
 
 ### Required section in the task brief: `Sizing Budget`
 
-Append this section to the refined task brief before marking it implementation-ready:
+Append this section to the refined task brief before marking it ready-to-implement:
 
 - **Concern axes count**: enumerate the major implementation axes
 - **Acceptance criteria count**: total AC count after refinement
@@ -129,16 +130,18 @@ Append this section to the refined task brief before marking it implementation-r
 - **Read scope**: number of files in the implementer's read set and the largest file's approximate line count, taken from the analyst's Files Read list, not estimated
 - **Band per measure**: mark each value `within-target` or `over-target` against the sizing table. Every `over-target` value carries a one-line justification
 
-If any measure breaches its hard cap, the task is not implementation-ready and must follow the split path.
+If any measure breaches its hard cap, the task is not ready-to-implement and must follow the split path.
 
 ### Required section in the task brief: `Execution Gates`
 
-Append this section to the refined task brief before marking it implementation-ready:
+Append this section to the refined task brief before marking it ready-to-implement:
 
 - **Blocked by**: prerequisite tasks or concrete repo states that must exist first
 - **Order constraints**: where this task belongs in execution order
 - **Dispatchability**: `dispatchable`, `blocked`, or `umbrella`
 - **Follow-up tasks**: child tasks created by splitting, if any
+- **Claims**: file and non-file write surfaces, every dimension with a value or `none`
+- **Verification commands**: the exact argument arrays the runner and implementer run
 
 Dependency findings may not remain only in narrative prose. If a dependency or ordering constraint is real enough to affect implementation, it must be recorded in `Execution Gates` and reflected in task metadata/order before the workflow completes.
 
@@ -150,7 +153,7 @@ The refinement trail moves to a companion file `<task-brief-name>-refinement-log
 
 The log is a decision record, not a transcript: terse entries for decisions with rationale, rejected alternatives, operator items, and source-verification anchors. Target roughly 60 lines per pass. Later passes append deltas only (what changed and why); they never restate or re-summarize prior passes.
 
-The architect owns brief hygiene on every non-split pass. A brief that still carries refinement narrative is not implementation-ready.
+The architect owns brief hygiene on every non-split pass. A brief that still carries refinement narrative is not ready-to-implement.
 
 ## Sequence
 
@@ -168,15 +171,14 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
    - `implementation-ready`: light pass. Validate the sketch, then draft and append the three sections. Do not manufacture findings to review
    - On every non-split pass, finish by applying brief hygiene (see Brief hygiene: the refinement log)
 3. Split branch (only when `agent implementability` is `blocked`):
-   - Create child tasks sized to fit the sizing rules
-   - Update the parent task to `umbrella`/`superseded-by-children` status so it is non-dispatchable
-   - Update execution order and dependency metadata so only the child tasks are dispatchable
-   - Do not mark the parent task `implementation-ready` and do not draft the three sections for it; they are produced per child during each child's own refinement
+   - Return child-task proposals sized to fit the sizing rules, each carrying the fields in adaptation spec section 11.3: stable proposed identifier, title, canonical brief path, parent identifier, dependencies, starting stage, initial claim set or `unknown`, acceptance criteria, and sizing budget
+   - All children apply in one transaction: the orchestrator (manual mode) or the runner (runner mode) validates the entire child graph, then marks the parent `superseded` and inserts every child. A partial split never reaches the board
+   - Do not mark the parent task `ready-to-implement` and do not draft the three sections for it; they are produced per child during each child's own refinement
    - Restart the per-task sequence from step 1 for each child task; the parent task's per-task sequence ends here
 4. If the architect returned `needs-operator` or `operator-escalated`: do not pause the run to ask. First verify each item against the operator question bar (see Defaulted Decisions and Operator Questions); items that fail the bar return to the architect as decisions to make. For each item that meets the bar, record it in the run's open-questions file with context, options, impact, and a stated default when one exists, then continue:
    - With a safe stated default: complete the per-task sequence on the default, written into the brief as a constraint marked `defaulted-pending-operator`. The task's `Execution Gates` records `blocked-on-operator: <question>` so the Dispatch Gate holds this task only, not the run.
    - Without a safe default: mark the task `operator-escalated`, park it, and continue with other tasks.
-   - Operator answers are collected once at the end of the run (see Post-all-tasks), not per item. When an answer requires a split, return to step 2 for that task so the architect executes it.
+   - Operator answers are collected once at the end of the run (see Refinement queue reconciliation), not per item. When an answer requires a split, return to step 2 for that task so the architect executes it.
 5. Dispatch `analyst` for final confidence check, unless the fast path applies. Fast path: skip this step only when the first analyst pass returned `implementation-ready`, the architect changed nothing beyond appending the three sections and applying brief hygiene, and no operator-required items existed. The fast path never applies when the architect returned `needs-another-pass`; in that case include the architect's named investigation items in the dispatch.
    - Include the first-pass analyst report and the architect review in the dispatch, and state that this is the final confidence check
    - The analyst re-reads only the files affected by architect/operator decisions and carries forward unchanged first-pass findings
@@ -186,13 +188,15 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
    - Validate `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` against the final sketch, including the sizing bands and any over-target justifications
    - Verify brief hygiene per the Brief hygiene section
 6. If the final confidence check fails: go to step 2 with the new findings (see loop cap in Rules)
-7. Orchestrator runs the Completion Self-Check and marks the task `implementation-ready`. This is an orchestrator action; no new subagent dispatch is needed.
+7. Run the Completion Self-Check and mark the task `ready-to-implement`. In manual mode this stays an orchestrator action; no new subagent dispatch is needed. In runner mode it is the runner-owned `refinement-self-check` stage: it validates required sections, enums, counts, dependencies, and file existence, and it does not replace analyst judgment. Items 1, 3, 4, and 5 of the 9-item Completion Self-Check list are judgment calls a mechanical predicate cannot perform; they remain enforced by the analyst and architect stage verdicts feeding into this stage, not by the predicate itself.
 
-### Post-all-tasks
+### Refinement queue reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple tasks were refined in one pass: architect reviews cross-task dependencies
 2. Verify no task's implementation sketch conflicts with another task's scope
-3. Recommend execution order based on dependency graph
+3. Recommend execution order based on dependency graph; cross-task dependencies are returned as board proposals, not direct board edits
 4. Present the batched operator items once: every open question across all tasks, each with context, options, impact, and its stated default. The run completes without waiting for answers; the run report lists dispatchable tasks separately from operator-blocked tasks so implementation can start while the operator works the blockers.
 5. Process operator answers when they arrive (typically after the run):
    - A confirmed default is orchestrator bookkeeping only: mark the question resolved, drop the `blocked-on-operator` gate and the `defaulted-pending-operator` marker, no subagent dispatch. When every answer confirms its default, the whole batch resolves this way.
@@ -201,7 +205,7 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
 ## Rules
 
 - Steps are executed in order. A step may be skipped only under a skip condition the sequence itself defines (the step 5 fast path).
-- Maximum loop iterations (step 5 → step 2): 2. If a task cannot reach `confident` across all dimensions after 2 architect passes, park the task as `operator-escalated` with a recommendation to split or restructure recorded in the open-questions file; it joins the end-of-run batch.
+- Maximum loop iterations (step 5 → step 2): 2 (manifest authority: `manifests/task-refinement.v1.yaml` caps). If a task cannot reach `confident` across all dimensions after 2 architect passes, park the task as `operator-escalated` (runner state: `parked`) with a recommendation to split or restructure recorded in the open-questions file; it joins the end-of-run batch.
 - The analyst must never write production code. If the analyst produces code, the output is invalid and must be re-dispatched with a corrective instruction.
 - The architect must make decisions, not defer. "Needs more thought" is not a valid resolution: either resolve it, request specific information from the operator, or classify the risk.
 - A parent task with `agent implementability: blocked` may not remain `Approved` or otherwise dispatchable after refinement. The workflow must leave it as `split-required`, `blocked`, or `umbrella/superseded`.
@@ -236,7 +240,7 @@ The architect owns brief hygiene on every non-split pass. A brief that still car
 
 - All dispatchable tasks have all confidence dimensions rated `confident` (umbrella/superseded parents are exempt; their children must satisfy this instead)
 - All dispatchable tasks have a file-level implementation sketch
-- Every task is either implementation-ready or explicitly parked (`blocked-on-operator`, `operator-escalated`, or a recorded prerequisite gate) with its question in the batched open-questions file; no blocker is unaccounted for
+- Every task is either ready-to-implement or explicitly parked (`blocked-on-operator`, `operator-escalated`, or a recorded prerequisite gate) with its question in the batched open-questions file; no blocker is unaccounted for
 - Every question is either answered with a recorded decision and rationale, or recorded in the open-questions file with context, options, impact, and stated default
 - The run report separates dispatchable tasks from operator-blocked tasks and includes the defaulted-decisions vs operator-questions counts
 - Task document updated with all decisions (as terse constraints) and the final implementation sketch; findings and rationale recorded in the refinement log
@@ -259,7 +263,7 @@ The following phrases may never appear in refinement completion reports:
 
 ### Completion Self-Check
 
-Before marking a task as implementation-ready, the orchestrator must verify:
+Before marking a task as ready-to-implement, the orchestrator must verify:
 
 1. The analyst read the actual source files (not just the task description).
 2. Every confidence dimension has a recorded rating with supporting evidence.
@@ -267,7 +271,7 @@ Before marking a task as implementation-ready, the orchestrator must verify:
 4. Every operator-required item passed the operator question bar and is either resolved with the answer applied, or recorded in the batched open-questions file with its task gated accordingly. No item was escalated mid-run.
 5. The final confidence check was run AFTER all decisions were made (not before), or the step 5 fast path condition was met.
 6. `Implementation Constraints`, `Sizing Budget`, and `Execution Gates` are appended to the task brief (not left in a separate refinement artifact).
-7. If the task breached a sizing hard cap, the parent was not marked implementation-ready and was converted into a split-required or umbrella/superseded state. Any over-target value under its cap carries a one-line justification in the `Sizing Budget`.
+7. If the task breached a sizing hard cap, the parent was not marked ready-to-implement and was converted into a split-required or umbrella/superseded state. Any over-target value under its cap carries a one-line justification in the `Sizing Budget`.
 8. If the refinement identified dependency/order gates, those gates were reflected in task metadata/order before dispatch.
 9. The brief contains only implementer-facing content; analyst reports, rationale, and operator Q&A are in the refinement log, not the brief.
 
@@ -283,6 +287,7 @@ Before any implementing agent is dispatched, the orchestrator must verify all of
 6. Any prerequisite tasks listed in `Execution Gates` are complete, or the operator has explicitly approved starting before they finish.
 7. Execution order metadata matches the refined task state; no parent umbrella task remains dispatchable while its child packets are the intended implementation path.
 8. The brief carries no refinement narrative (analyst reports, architect rationale, operator Q&A); those live in the refinement log.
+9. Claims and verification commands are present in `Execution Gates`.
 
 If any check fails, implementation dispatch is forbidden.
 
@@ -290,8 +295,8 @@ If any check fails, implementation dispatch is forbidden.
 
 - **product-spec-workflow**: Upstream. A `specified` product intent arrives here for implementation planning.
 - **spike-workflow**: Upstream. Adopt/adapt decisions create follow-up tasks refined here before implementation.
-- **gap-analysis-workflow**: Upstream. Newly created tasks from gap analysis are made implementation-ready here.
-- **design-intake-workflow**: Upstream. Presentation-scoped raw tasks drafted from external design deliverables are made implementation-ready here.
-- **dev-workflow**: Downstream. Implementation-ready briefs are built there; the three appended sections travel with the task packet. The refinement log does not travel: it is an operator-facing record, not implementer input.
+- **gap-analysis-workflow**: Upstream. Newly created tasks from gap analysis are made ready-to-implement here.
+- **design-intake-workflow**: Upstream. Presentation-scoped raw tasks drafted from external design deliverables are made ready-to-implement here.
+- **dev-workflow**: Downstream. Ready-to-implement briefs are built there; the three appended sections travel with the task packet. The refinement log does not travel: it is an operator-facing record, not implementer input.
 - **decision-workflow**: Use when an operator-required item is a significant architectural or strategic decision that deserves its own decision record.
 
