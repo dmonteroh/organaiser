@@ -102,11 +102,11 @@ function fileSource(filePath: string, text: string): { path: string; text: strin
 test("profiles: each layer wins over every layer below it for at least one field", () => {
   const project = fileSource(
     "project.yaml",
-    "vendors:\n  codex:\n    default:\n      model: \"project-model\"\n      sandboxMode: \"project-sandbox\"\n",
+    "vendors:\n  codex:\n    default:\n      model: \"project-model\"\n      sandboxMode: \"project-sandbox\"\n      permissionMode: \"project-permission\"\n",
   );
   const user = fileSource(
     "user.yaml",
-    "vendors:\n  codex:\n    default:\n      model: \"user-model\"\n      sandboxMode: \"user-sandbox\"\n      effort: \"user-effort\"\n",
+    "vendors:\n  codex:\n    default:\n      model: \"user-model\"\n      sandboxMode: \"user-sandbox\"\n      effort: \"user-effort\"\n      permissionMode: \"user-permission\"\n",
   );
   const sources: VendorProfileSources = {
     vendor: "codex",
@@ -118,6 +118,11 @@ test("profiles: each layer wins over every layer below it for at least one field
   const profile = resolveVendorProfile("default", sources);
   assert.equal(profile.model, "flag-model", "flags must win over env/project/user/default");
   assert.equal(profile.sandboxMode, "env-sandbox", "env must win over project/user/default");
+  assert.equal(
+    profile.permissionMode,
+    "project-permission",
+    "project must win over user when both set the same field and flags/env are silent",
+  );
   assert.equal(profile.effort, "user-effort", "user must win over the built-in default when project is silent");
   assert.equal(profile.executable, "codex", "an unset field falls all the way through to the built-in default");
 });
