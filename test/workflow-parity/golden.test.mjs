@@ -45,9 +45,8 @@ function readRoleRegister(conventionsText) {
   return roles;
 }
 
-// Restricted-dialect YAML reader for workflows/manifests/*.yaml, copied from the
-// same reading approach as test/workflow-parity/static.test.mjs (not imported:
-// that file exports nothing and is out of scope to modify for this task).
+// Restricted-dialect YAML reader for workflows/manifests/*.yaml.
+// Duplicates the reader in static.test.mjs; see follow-ups for why.
 
 function dialectError(filePath, lineNum, message) {
   return new Error(`${filePath}:${lineNum}: ${message}`);
