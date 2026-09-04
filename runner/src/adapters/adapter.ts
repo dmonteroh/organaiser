@@ -1,7 +1,7 @@
 // The durable, vendor-neutral process adapter contract (goals spec section 13). Every
-// vendor adapter (the fake one here, and the real Claude/Codex ones P6 authors) is a
-// concrete `ProcessAdapter`. This module declares types only: no vendor logic, no
-// process spawning, no I/O.
+// vendor adapter (the fake one here, and vendor-specific adapters for real CLI tools,
+// implemented separately) is a concrete `ProcessAdapter`. This module declares types
+// only: no vendor logic, no process spawning, no I/O.
 
 /** Input to `probe`: what to probe and where (goals spec section 13.1). */
 export interface ProbeConfiguration {

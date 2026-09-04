@@ -18,9 +18,9 @@ export interface PacketFieldRendering {
 
 /**
  * One entry per goals spec section 16 field (all twenty-three), keyed by its snake_case
- * name. Five fields render as the fixture spellings P3d-ii already froze; the rest are
- * lines and subsections this compiler adds. Tests read this table directly rather than
- * a second hardcoded list.
+ * name. Five fields render using the existing golden-fixture header key spellings, to
+ * avoid renaming already-shipped keys; the rest are lines and subsections this compiler
+ * adds. Tests read this table directly rather than a second hardcoded list.
  */
 export const PACKET_FIELD_RENDERING: Readonly<Record<string, PacketFieldRendering>> = {
   role_id: { section: "Packet Header", locus: "- role: " },
