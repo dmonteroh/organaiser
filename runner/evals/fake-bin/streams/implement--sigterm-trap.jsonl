@@ -1,0 +1,4 @@
+{"op":"output","text":"ignoring termination"}
+{"op":"trap-sigterm"}
+{"op":"sleep","ms":60000}
+{"op":"exit","code":0}

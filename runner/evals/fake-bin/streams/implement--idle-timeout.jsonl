@@ -1,0 +1,4 @@
+{"op":"sleep","ms":400}
+{"op":"output","text":"finally made progress"}
+{"op":"report","report":{"protocolVersion":"1","workflowId":"dev-workflow","workflowVersion":"2.0.0","runId":"run_test","taskId":"task_test","attemptId":"attempt_test","stageId":"implement","roleId":"implementer","status":"completed","summary":"Implemented after a long silent stretch."}}
+{"op":"exit","code":0}

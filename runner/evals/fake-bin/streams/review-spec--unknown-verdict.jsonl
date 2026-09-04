@@ -1,0 +1,3 @@
+{"op":"output","text":"reviewing"}
+{"op":"report","report":{"protocolVersion":"1","workflowId":"dev-workflow","workflowVersion":"2.0.0","runId":"run_test","taskId":"task_test","attemptId":"attempt_test","stageId":"review-spec","roleId":"spec-reviewer","status":"completed","summary":"Reviewed the diff.","verdict":"maybe"}}
+{"op":"exit","code":0}
