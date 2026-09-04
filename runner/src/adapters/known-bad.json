@@ -1,0 +1,8 @@
+{
+  "codex": [
+    { "version": "0.120.0", "reason": "stdin deadlock" },
+    { "version": "0.120.1", "reason": "stdin deadlock" },
+    { "version": "0.120.2", "reason": "stdin deadlock" }
+  ],
+  "claude": []
+}
