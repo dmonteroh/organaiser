@@ -499,7 +499,7 @@ async function resolveRunnerStage(stage: DevelopmentStageDefinition, ctx: Driver
 // supervisor's cwd is the project root by construction (`supervisor-spawn.ts`
 // spawns it there), while `executionRoot` is a runner-owned worktree for a
 // mutating task and must never receive this write.
-function resolveRecordMinors(input: DevelopmentStageInput, ctx: DriverContext): "true" | "false" {
+export function resolveRecordMinors(input: DevelopmentStageInput, ctx: DriverContext): "true" | "false" {
   const attemptId = ctx.lastAgentAttempt?.attemptId;
   if (!attemptId) return "true";
 

@@ -3,14 +3,19 @@
 // `record-minors`'s crash-safety property (`src/engine/minor-findings.ts`)
 // proven end to end: a real, detached process durably claims the append's
 // guard row, is killed with a real `SIGKILL` before it ever touches the
-// follow-ups file, and a second, ordinary run of the same module then
-// completes the append exactly once. `startFixtureRun`'s own comment notes
-// that this suite always kills the real production supervisor it spawns
-// immediately, before it dispatches anything, so there is no way to drive
-// that same process into this fixture's precise crash window; this fixture
-// instead spawns this file as its own worker process, calling the identical
-// `claimMinorFindingsAppend`/`appendMinorFindings` exports the driver's
-// `record-minors` binding (`workflow-stages.ts`) calls in production.
+// follow-ups file, and a second, ordinary run then completes the append
+// exactly once. `startFixtureRun`'s own comment notes that this suite always
+// kills the real production supervisor it spawns immediately, before it
+// dispatches anything, so there is no way to drive that same process into
+// this fixture's precise crash window; this fixture instead spawns this file
+// as its own worker process. The first (`claim`) phase calls
+// `claimMinorFindingsAppend` directly, proving the guard-row-commit half of
+// the crash window. The restarted (`full`) phase calls `resolveRecordMinors`
+// (`workflow-stages.ts`, exported for this purpose), the same function the
+// driver's `record-minors` binding calls in production, so the fixture also
+// exercises that binding's own wiring — the env-layered follow-ups path
+// resolution and the agent report's finding extraction — rather than only
+// the lower-level append/claim functions.
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -29,13 +34,14 @@ import {
   allRows,
   countRows,
 } from "./harness.ts";
-import { appendMinorFindings, claimMinorFindingsAppend, type MinorFinding } from "../../src/engine/minor-findings.ts";
+import { claimMinorFindingsAppend } from "../../src/engine/minor-findings.ts";
+import { resolveRecordMinors, type DevelopmentStageInput } from "../../src/engine/workflow-stages.ts";
+import type { ProcessAdapter } from "../../src/adapters/adapter.ts";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const TASK_ID = "task-1";
 const ATTEMPT_ID = "attempt-1";
 const FINDING_SUMMARY = "minor-findings-append-once fixture entry";
-const FINDINGS: readonly MinorFinding[] = [{ summary: FINDING_SUMMARY, path: "src/example.ts", line: 1 }];
 
 type WorkerMode = "claim" | "full";
 
@@ -72,14 +78,29 @@ async function runWorker(args: WorkerArgs): Promise<void> {
         setInterval(() => {}, 1000);
       });
     } else {
-      appendMinorFindings({
+      const input: DevelopmentStageInput = {
         db,
+        adapter: {} as unknown as ProcessAdapter,
         runId: args.runId,
         taskId: TASK_ID,
-        attemptId: ATTEMPT_ID,
-        findings: FINDINGS,
-        followUpsFilePath: args.followUpsFilePath,
-      });
+        now: () => Date.now(),
+        taskDir: args.root,
+        executionRoot: args.root,
+        requiredArtifacts: [],
+        checks: {},
+        env: process.env,
+      };
+      const ctx = {
+        input,
+        lastAgentAttempt: { attemptId: ATTEMPT_ID, pgid: 0 },
+        barrierCache: null,
+        lastAgentReport: {
+          findings: [
+            { id: "finding-1", severity: "minor", summary: FINDING_SUMMARY, path: "src/example.ts", line: 1 },
+          ],
+        },
+      };
+      resolveRecordMinors(input, ctx);
     }
   } finally {
     db.close();
@@ -111,6 +132,7 @@ function spawnWorker(mode: WorkerMode, root: string, runId: string, followUpsFil
   const child = spawn(process.execPath, [THIS_FILE, mode, root, runId, followUpsFilePath], {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ORGA_FOLLOWUPS_FILE: followUpsFilePath },
   });
   child.stdout?.resume();
   child.stderr?.resume();

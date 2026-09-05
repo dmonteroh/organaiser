@@ -25,7 +25,7 @@ function schemaMigrationVersions(db: DatabaseSync): number[] {
   ).map((row) => row.version);
 }
 
-// ── AC1: migration version 2 ─────────────────────────────────────────────
+// ── migration version 2 ───────────────────────────────────────────────────
 
 test("a store initialized from empty reaches version 2", async () => {
   await withTempWorkspace(async (dir) => {
@@ -81,7 +81,7 @@ test("a store already at version 1 migrates to 2 without data loss", async () =>
   });
 });
 
-// ── AC2/AC3: idempotent append keyed by (run, task, attempt) ────────────
+// ── idempotent append keyed by (run, task, attempt) ─────────────────────
 
 function countAppendRows(db: DatabaseSync, attemptId: string): number {
   const row = db
@@ -142,7 +142,7 @@ test("a different attempt id for the same run and task appends again", async () 
   });
 });
 
-// ── AC4: crash-safety between the guard row and the file append ─────────
+// ── crash-safety between the guard row and the file append ──────────────
 
 test("a process that stops after the guard row commits but before the file append still reaches exactly one append on retry", async () => {
   await withTempWorkspace(async (dir) => {
@@ -190,7 +190,7 @@ test("an empty findings list never claims a row and never touches the file", asy
   });
 });
 
-// ── AC5: the follow-ups file path is configuration, not a hard-coded literal ──
+// ── the follow-ups file path is configuration, not a hard-coded literal ──
 
 test("the follow-ups file path is whatever the caller's configuration supplies, not a literal inside the module", async () => {
   await withTempWorkspace(async (dir) => {
