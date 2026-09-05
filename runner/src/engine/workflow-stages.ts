@@ -523,6 +523,19 @@ function resumeGateRounds(
       gateRounds[row.gate_type] = row.maxRound;
     }
   }
+
+  // This call has not yet written a pending row of its own, so any row still
+  // `verdict IS NULL` here belongs to an earlier invocation that never
+  // reached its own `finalizeGate`/`discardPendingGate` call. Its round is
+  // already folded into `gateRounds` above; the row itself is discarded so
+  // it is never left permanently undecided for `executeGates` to find once
+  // this task later reaches a terminal disposition.
+  const orphaned = db
+    .prepare(`SELECT id FROM gates WHERE run_id = ? AND task_id = ? AND verdict IS NULL`)
+    .all(runId, taskId) as Array<{ id: string }>;
+  for (const orphan of orphaned) {
+    discardPendingGate(db, orphan.id);
+  }
 }
 
 // Commits the pending row a gated stage's dispatch durably claims before it
@@ -546,6 +559,9 @@ function insertPendingGate(
   return id;
 }
 
+// Only a gate's counted-failure edge is ever finalized; a passing round is
+// discarded instead (`discardPendingGate`), so `verdict` is always "fail"
+// here.
 function finalizeGate(db: DatabaseSync, id: string, evidenceRef: string | null, nowMs: number): void {
   withTransaction(db, () => {
     db.prepare(`UPDATE gates SET verdict = ?, evidence_ref = ?, decided_at = ? WHERE id = ?`).run(

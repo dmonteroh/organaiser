@@ -8,6 +8,8 @@ import { initProject } from "../src/store/init.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
 import type { AttemptDescriptor } from "../src/adapters/adapter.ts";
 import { runDevelopmentStages, type DevelopmentStageInput } from "../src/engine/workflow-stages.ts";
+import { createSchedulerRuntime, executeGates } from "../src/engine/scheduler.ts";
+import type { TickContext } from "../src/engine/tick.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 
 const RUN_ID = "run-1";
@@ -290,5 +292,96 @@ test("a speculative round that ultimately passes is discarded, not left as a dan
 
     const rows = gateRows(env.db, "specReviewGate");
     assert.deepEqual(rows.map((row) => row.round), [1], "no dangling row is left for the passing attempt");
+  });
+});
+
+test("a genuinely pending gate row orphaned by a crashed invocation is discarded on restart, and the resumed count still reaches its cap without leaving a permanent invariant violation behind", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const taskDir = path.join(dir, "task-dir");
+    fs.mkdirSync(taskDir, { recursive: true });
+    const streamsDir = path.join(dir, "streams");
+    fs.mkdirSync(streamsDir, { recursive: true });
+    const clock = fakeClock(1_000_000);
+
+    let db = openStore(dir);
+    withTransaction(db, () => {
+      db.prepare(
+        "INSERT INTO runs (id, board_path, desired_state, state, created_at) VALUES (?, ?, ?, ?, ?)",
+      ).run(RUN_ID, "board.yaml", "running", "starting", 1_000_000);
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(TASK_ID, RUN_ID, TASK_ID, "Task", null, "dev-workflow", "review-spec", "[]", 0, "spec-review", null, 1_000_000, 1_000_000);
+      // A genuinely pending row: `insertPendingGate` wrote it before
+      // dispatch, but the invocation that wrote it never reached its own
+      // `finalizeGate`/`discardPendingGate` call.
+      db.prepare(
+        `INSERT INTO gates (id, run_id, task_id, gate_type, round, cap, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run("gate-orphan", RUN_ID, TASK_ID, "specReviewGate", 1, 3, 1_000_000);
+    });
+    db.close();
+
+    // Simulate a restart: a fresh connection to the same on-disk store, with
+    // no in-memory state carried over from the crashed invocation that left
+    // "gate-orphan" pending.
+    db = openStore(dir);
+    try {
+      const { adapter, queue } = makeAdapter(streamsDir);
+      queueImplementerScenario(streamsDir, "implement", "completed", "completed");
+      queue("implement", "completed");
+      queueReviewerScenario(streamsDir, "review-spec", "spec-reviewer", "fail-2", "fail", [finding("spec-finding-2")]);
+      queue("review-spec", "fail-2");
+      queueImplementerScenario(streamsDir, "fix-spec", "completed-2", "completed");
+      queue("fix-spec", "completed-2");
+      queueReviewerScenario(streamsDir, "review-spec", "spec-reviewer", "fail-3", "fail", [finding("spec-finding-3")]);
+      queue("review-spec", "fail-3");
+
+      const outcome = await runDevelopmentStages({
+        db,
+        adapter,
+        runId: RUN_ID,
+        taskId: TASK_ID,
+        now: clock.now,
+        taskDir,
+        executionRoot: dir,
+        requiredArtifacts: [],
+        checks: {},
+        env: process.env,
+      });
+
+      assert.equal(outcome.outcome, "parked", "the resumed count reaches the cap after only two more real rounds");
+      assert.equal(outcome.gateRounds.specReviewGate, 3);
+
+      const rows = gateRows(db, "specReviewGate");
+      assert.deepEqual(
+        rows.map((row) => row.round),
+        [2, 3],
+        "the orphaned round-1 row is discarded, not re-decided or renumbered",
+      );
+      assert.ok(rows.every((row) => row.verdict === "fail"));
+
+      withTransaction(db, () => {
+        db.prepare(`UPDATE tasks SET disposition = ? WHERE id = ?`).run("parked", TASK_ID);
+      });
+
+      const runtime = createSchedulerRuntime();
+      const ctx: TickContext = {
+        db,
+        runId: RUN_ID,
+        tickIndex: 0,
+        now: clock.now,
+        leaseDeadlineMs: clock.now() + 60000,
+        signal: new AbortController().signal,
+      };
+      executeGates(ctx, runtime);
+      assert.deepEqual(
+        runtime.scratch.invariantViolations,
+        [],
+        "no dangling pending row remains for executeGates to flag once the task resolves to a terminal disposition",
+      );
+    } finally {
+      db.close();
+    }
   });
 });
