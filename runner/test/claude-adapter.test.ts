@@ -23,6 +23,7 @@ import type {
 import {
   buildClaudeAttemptCommand,
   claudeProbeSpec,
+  createClaudeVendorAdapterSpec,
   extractSignals,
   toEvents,
 } from "../src/adapters/claude-adapter.ts";
@@ -187,6 +188,49 @@ test("buildClaudeAttemptCommand: never emits --background, --resume, or --contin
   assert.equal(command.args.includes("--resume"), false);
   assert.equal(command.args.includes("--continue"), false);
   assert.ok(command.args.includes("--json-schema"));
+});
+
+// ── createClaudeVendorAdapterSpec: the closure that wires VendorCommandContext ─
+
+function sampleAttemptDescriptor(attemptId: string): AttemptDescriptor {
+  return {
+    attemptId,
+    runId: "run_claude_context_wiring",
+    taskId: "task_claude_context_wiring",
+    stageId: "implement",
+    roleId: "implementer",
+    timeoutBudget: { spawnMs: 5000, idleMs: 5000, wallMs: 30000 },
+  };
+}
+
+test("createClaudeVendorAdapterSpec: buildCommand pushes context.schemaText, not context.schemaPath, after --json-schema", () => {
+  const profile = baseProfile();
+  const context: VendorCommandContext = {
+    attempt: sampleAttemptDescriptor("schema-text-wiring"),
+    packet: "packet body",
+    surface: baseSurface(),
+    schemaPath: "/schema/path.json",
+    schemaText: SAMPLE_SCHEMA_TEXT,
+  };
+  const command = createClaudeVendorAdapterSpec(profile).buildCommand(context);
+  const schemaIndex = command.args.indexOf("--json-schema");
+  const pushedText = command.args[schemaIndex + 1];
+  assert.equal(pushedText, SAMPLE_SCHEMA_TEXT);
+  assert.notEqual(pushedText, context.schemaPath);
+});
+
+test("createClaudeVendorAdapterSpec: buildCommand throws when context.schemaText is undefined", () => {
+  const profile = baseProfile();
+  const context: VendorCommandContext = {
+    attempt: sampleAttemptDescriptor("schema-text-missing"),
+    packet: "packet body",
+    surface: baseSurface(),
+    schemaPath: "/schema/path.json",
+  };
+  assert.throws(
+    () => createClaudeVendorAdapterSpec(profile).buildCommand(context),
+    /createClaudeVendorAdapterSpec: context\.schemaText is required but was undefined/,
+  );
 });
 
 // ── the Claude VendorProbeSpec, verified directly through probeVendor ──────
