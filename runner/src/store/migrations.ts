@@ -183,6 +183,22 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    up: `
+      CREATE TABLE minor_finding_appends (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        appended_at INTEGER,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE UNIQUE INDEX minor_finding_appends_idempotency_key
+        ON minor_finding_appends (run_id, task_id, attempt_id);
+    `,
+  },
 ];
 
 export function appliedMigrationVersions(db: DatabaseSync): Set<number> {

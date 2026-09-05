@@ -6,6 +6,7 @@ import path from "node:path";
 import { findProjectRoot, openStore, withTransaction, ProjectRootError, StoreSymlinkError } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
+import { MIGRATIONS } from "../src/store/migrations.ts";
 
 test("findProjectRoot finds a directory with orga.yaml and an adjacent .orga/state.sqlite", async () => {
   await withTempWorkspace(async (dir) => {
@@ -71,7 +72,7 @@ test("openStore opens node:sqlite in WAL mode and applies migrations, recording 
       assert.equal(mode.journal_mode, "wal");
 
       const applied = db.prepare("SELECT version FROM schema_migrations").all() as Array<{ version: number }>;
-      assert.deepEqual(applied.map((r) => r.version), [1]);
+      assert.deepEqual(applied.map((r) => r.version), MIGRATIONS.map((m) => m.version));
 
       const tables = db
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -107,7 +108,7 @@ test("openStore applying migrations twice is idempotent", async () => {
     const db = openStore(dir);
     try {
       const applied = db.prepare("SELECT version FROM schema_migrations").all() as Array<{ version: number }>;
-      assert.deepEqual(applied.map((r) => r.version), [1]);
+      assert.deepEqual(applied.map((r) => r.version), MIGRATIONS.map((m) => m.version));
     } finally {
       db.close();
     }
