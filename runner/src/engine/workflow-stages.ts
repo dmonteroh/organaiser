@@ -252,7 +252,7 @@ export interface DevelopmentStageInput {
   model?: string;
   configJson?: string;
   timeoutBudget?: TimeoutBudget;
-  packet?: (stageId: string, role: string) => string;
+  packet?: (stageId: string, role: string, priorReport: Record<string, unknown> | null) => string;
 }
 
 const DEFAULT_TIMEOUT_BUDGET: TimeoutBudget = { spawnMs: 30000, idleMs: 30000, wallMs: 300000 };
@@ -358,6 +358,7 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
   const inputVersion = computeInputVersion({ taskId: input.taskId, stageId: stage.id, round: String(round) });
   const mutating = stage.authority === "workspace-write";
   const packetFn = input.packet ?? ((stageId: string) => `packet for task ${input.taskId} at stage ${stageId}`);
+  const packetText = packetFn(stage.id, stage.role ?? "", ctx.lastAgentReport);
 
   let workingDirectory = input.workspace?.path ?? input.executionRoot;
   let reviewerWorkspace: ReviewerWorkspaceHandle | null = null;
@@ -386,7 +387,7 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
       timeoutBudget: input.timeoutBudget ?? DEFAULT_TIMEOUT_BUDGET,
       workingDirectory,
       environment: input.env,
-      packet: packetFn(stage.id, stage.role ?? ""),
+      packet: packetText,
     };
 
     const dispatched = await dispatchAttempt(input.db, input.adapter, dispatchInput, input.now);

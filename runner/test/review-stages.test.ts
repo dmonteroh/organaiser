@@ -234,8 +234,8 @@ function baseInput(env: TestEnv, adapter: FakeAdapter, overrides: Partial<Develo
   };
 }
 
-// ── AC1, AC2, AC3, AC4, AC7: a fail-then-repair round's two review-spec
-// rounds each run fresh, in their own worktree, and both are cleaned up ──
+// ── a fail-then-repair round's two review-spec rounds each run fresh, in
+// their own worktree, and both are cleaned up ──
 
 test("two review-spec rounds run in distinct fresh worktrees with distinct attempts, pids, and authority, and both worktrees are cleaned up", async () => {
   await withEnv(async (env) => {
@@ -272,6 +272,7 @@ test("two review-spec rounds run in distinct fresh worktrees with distinct attem
     queue("review-quality", "pass");
 
     let reviewedRef = mainBaseCommit;
+    const reviewSpecRefs: string[] = [];
     const reviewerWorkspace = createReviewerWorkspaceResolver({
       db: env.db,
       projectRoot: env.dir,
@@ -289,6 +290,7 @@ test("two review-spec rounds run in distinct fresh worktrees with distinct attem
           if (stageId === "review-spec" || stageId === "review-quality") {
             reviewedRef = commitAll(mainWorkspace.path, `snapshot for ${stageId}`);
           }
+          if (stageId === "review-spec") reviewSpecRefs.push(reviewedRef);
           return `packet ${stageId}`;
         },
       }),
@@ -312,7 +314,7 @@ test("two review-spec rounds run in distinct fresh worktrees with distinct attem
       ],
     );
 
-    // AC3: every review-spec/review-quality descriptor's stage maps to
+    // every review-spec/review-quality descriptor's stage maps to
     // `authority: read-only` in the mirrored table; every implement/fix-spec
     // descriptor maps to `workspace-write`.
     const authorityById = new Map(DEVELOPMENT_STAGES.map((s) => [s.id, s.authority]));
@@ -331,7 +333,7 @@ test("two review-spec rounds run in distinct fresh worktrees with distinct attem
     assert.equal(reviewSpecAttempts.length, 2);
     assert.notEqual(reviewSpecAttempts[0]!.id, reviewSpecAttempts[1]!.id);
 
-    // AC2: two distinct attempts.id values, two distinct pids.
+    // two distinct attempts.id values, two distinct pids.
     const pids = reviewSpecAttempts.map((attempt) => {
       const worker = env.db
         .prepare(`SELECT pid FROM workers WHERE attempt_id = ?`)
@@ -340,7 +342,7 @@ test("two review-spec rounds run in distinct fresh worktrees with distinct attem
     });
     assert.notEqual(pids[0], pids[1]);
 
-    // AC1: two distinct reviewer worktree paths, one per round, on branches
+    // two distinct reviewer worktree paths, one per round, on branches
     // that were never merged or pushed (both checks below only see local
     // state, so "never pushed" holds vacuously in a fixture with no remote).
     const reviewSpecWorktrees = env.db
@@ -357,7 +359,7 @@ test("two review-spec rounds run in distinct fresh worktrees with distinct attem
     assert.equal(reviewSpecWorktrees[0]!.branch, `${DEFAULT_BRANCH_PREFIX}${TASK_KEY}-review-spec-r1`);
     assert.equal(reviewSpecWorktrees[1]!.branch, `${DEFAULT_BRANCH_PREFIX}${TASK_KEY}-review-spec-r2`);
 
-    // AC4: every reviewer worktree's row reached cleanup_state = 'cleaned',
+    // every reviewer worktree's row reached cleanup_state = 'cleaned',
     // and none of them remain in `git worktree list`.
     const allReviewerWorktrees = env.db
       .prepare(
@@ -374,10 +376,28 @@ test("two review-spec rounds run in distinct fresh worktrees with distinct attem
       assert.equal(row.cleanup_state, "cleaned", row.path);
     }
     assert.deepEqual(reviewerWorktreePaths(env.dir), []);
+
+    // Each round's ref genuinely reflects that round's own state, checked
+    // with `git show <ref>:<path>` against the repository's own object
+    // store (still readable after the reviewer worktrees themselves are
+    // removed, since the commit objects persist) rather than trusting that
+    // a distinct sha necessarily carries distinct content.
+    assert.equal(reviewSpecRefs.length, 2);
+    assert.notEqual(reviewSpecRefs[0], reviewSpecRefs[1]);
+    const round1Content = execFileSync("git", ["show", `${reviewSpecRefs[0]}:output.txt`], {
+      cwd: env.dir,
+      encoding: "utf8",
+    });
+    assert.equal(round1Content, "first\n");
+    const round2Content = execFileSync("git", ["show", `${reviewSpecRefs[1]}:output.txt`], {
+      cwd: env.dir,
+      encoding: "utf8",
+    });
+    assert.equal(round2Content, "fixed\n");
   });
 });
 
-// ── AC4: the reviewer worktree is removed on the throw path too ─────────
+// ── the reviewer worktree is removed on the throw path too ─────────
 
 test("a review-spec attempt that throws before dispatch still removes its reviewer worktree", async () => {
   await withEnv(async (env) => {
@@ -427,7 +447,7 @@ test("a review-spec attempt that throws before dispatch still removes its review
   });
 });
 
-// ── AC5: schema validation rejects a critical/important finding lacking
+// ── schema validation rejects a critical/important finding lacking
 // proof, and accepts one that carries it ─────────────────────────────────
 
 test("partitionFindings rejects a critical/important finding lacking proof", () => {
@@ -462,7 +482,7 @@ test("partitionFindings accepts a critical finding that carries proof", () => {
   assert.equal((partition.blocking[0] as ReviewFinding).id, "f-2");
 });
 
-// ── AC6: fix-spec/fix-quality receive only accepted critical/important
+// ── fix-spec/fix-quality receive only accepted critical/important
 // findings; a minor finding is never in a repair packet ─────────────────
 
 test("a repair packet built from a mixed-severity round carries only the blocking findings", () => {
@@ -498,7 +518,60 @@ test("a repair packet built from a mixed-severity round carries only the blockin
   assert.ok(!packet.findings.some((f) => f.id === "f-minor"));
 });
 
-// ── AC8's `blockingFindingRequiresProof` shape, proven directly on the
+test("fix-spec's own packet, built by a real 3-arg packet callback from review-spec's prior report, carries only the accepted blocking findings", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "fail", "fail", [
+      {
+        id: "f-critical",
+        severity: "critical",
+        summary: "critical issue",
+        path: "src/a.ts",
+        proof: { path: "src/a.ts", line: 1, snippet: "bug" },
+      },
+      {
+        id: "f-important",
+        severity: "important",
+        summary: "important issue",
+        path: "src/b.ts",
+        proof: { path: "src/b.ts", line: 2, snippet: "bug" },
+      },
+      { id: "f-minor", severity: "minor", summary: "minor issue", path: "src/c.ts" },
+    ]);
+    queue("review-spec", "fail");
+    queueImplementerScenario(env.streamsDir, "fix-spec", "completed", "completed");
+    queue("fix-spec", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "pass", "pass");
+    queue("review-spec", "pass");
+    queueReviewerScenario(env.streamsDir, "review-quality", "code-quality-reviewer", "pass", "pass");
+    queue("review-quality", "pass");
+
+    let fixSpecPacket: string | null = null;
+    const outcome = await runDevelopmentStages(
+      baseInput(env, adapter, {
+        packet: (stageId, _role, priorReport) => {
+          if (stageId === "fix-spec" && priorReport) {
+            const partition = partitionFindings(priorReport.findings as readonly unknown[] | undefined);
+            fixSpecPacket = buildRepairPacket(partition.blocking);
+            return fixSpecPacket;
+          }
+          return `packet ${stageId}`;
+        },
+      }),
+    );
+
+    assert.equal(outcome.outcome, "integrating");
+    assert.ok(fixSpecPacket, "fix-spec must have received a packet built from review-spec's prior report");
+    const packet = JSON.parse(fixSpecPacket as string) as { findings: ReviewFinding[] };
+    const packetIds = packet.findings.map((f) => f.id).sort();
+    assert.deepEqual(packetIds, ["f-critical", "f-important"]);
+    assert.ok(!packet.findings.some((f) => f.id === "f-minor"));
+  });
+});
+
+// ── the `blockingFindingRequiresProof` shape, proven directly on the
 // driver: a proof-less important finding fails the whole report's schema
 // validation, so the driver parks with schema-invalid rather than routing
 // to fix-quality ─────────────────────────────────────────────────────────

@@ -10,8 +10,7 @@
 //
 // `blockingFindingRequiresProof`: a `review-quality` report carrying an
 // `important` finding with no `proof` fails `stage-result.schema.json`'s own
-// bundled `review-finding` validation in full (goals spec section 15's
-// candidate-report classification), so the driver parks with
+// bundled `review-finding` validation in full, so the driver parks with
 // `schema-invalid` rather than ever dispatching `fix-quality`.
 
 import assert from "node:assert/strict";
