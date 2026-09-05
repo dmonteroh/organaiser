@@ -10,10 +10,12 @@ import { MIGRATIONS, applyMigrations, appliedMigrationVersions } from "../src/st
 import {
   appendMinorFindings,
   claimMinorFindingsAppend,
+  writeMinorFindingsFile,
   DEFAULT_FOLLOWUPS_FILE_PATH,
   type MinorFinding,
 } from "../src/engine/minor-findings.ts";
 import { loadConfig } from "../src/cli/config.ts";
+import { resolveRecordMinors, type DevelopmentStageInput } from "../src/engine/workflow-stages.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 
 const RUN_ID = "run-1";
@@ -169,6 +171,112 @@ test("a process that stops after the guard row commits but before the file appen
       assert.equal(occurrences(fs.readFileSync(followUpsFilePath, "utf8"), "crash-safety check"), 1);
       assert.equal(countAppendRows(db, "attempt-1"), 1);
     } finally {
+      db.close();
+    }
+  });
+});
+
+test("a process that stops after the file append but before the guard row is marked done still reaches exactly one append on retry", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      const followUpsFilePath = path.join(dir, "FOLLOWUPS.md");
+      const findings: MinorFinding[] = [{ summary: "write-then-mark crash-safety check", path: "src/example.ts" }];
+
+      // Simulates a process killed exactly between the file write and
+      // `markAppended`: claim the triple, write the file, and stop, leaving
+      // the guard row at `appended_at IS NULL` even though the file already
+      // carries the entry.
+      const claim = claimMinorFindingsAppend({ db, runId: RUN_ID, taskId: TASK_ID, attemptId: "attempt-1" });
+      assert.equal(claim.alreadyAppended, false);
+      writeMinorFindingsFile({ runId: RUN_ID, taskId: TASK_ID, attemptId: "attempt-1", findings, followUpsFilePath });
+      assert.equal(occurrences(fs.readFileSync(followUpsFilePath, "utf8"), "write-then-mark crash-safety check"), 1);
+
+      const guardRowBefore = db
+        .prepare(`SELECT appended_at FROM minor_finding_appends WHERE id = ?`)
+        .get(claim.id) as { appended_at: number | null };
+      assert.equal(guardRowBefore.appended_at, null);
+
+      const retry = appendMinorFindings({ db, runId: RUN_ID, taskId: TASK_ID, attemptId: "attempt-1", findings, followUpsFilePath });
+      assert.equal(retry, "true");
+      assert.equal(occurrences(fs.readFileSync(followUpsFilePath, "utf8"), "write-then-mark crash-safety check"), 1);
+
+      const guardRowAfter = db
+        .prepare(`SELECT appended_at FROM minor_finding_appends WHERE id = ?`)
+        .get(claim.id) as { appended_at: number | null };
+      assert.notEqual(guardRowAfter.appended_at, null);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// ── failure path ──────────────────────────────────────────────────────────
+
+test("appendMinorFindings returns \"false\" and leaves a recoverable guard row when the write fails", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      const blockedParent = path.join(dir, "not-a-directory");
+      fs.writeFileSync(blockedParent, "this is a file, not a directory");
+      const followUpsFilePath = path.join(blockedParent, "nested", "FOLLOWUPS.md");
+      const findings: MinorFinding[] = [{ summary: "unreachable write", path: "src/example.ts" }];
+
+      const result = appendMinorFindings({ db, runId: RUN_ID, taskId: TASK_ID, attemptId: "attempt-1", findings, followUpsFilePath });
+
+      assert.equal(result, "false");
+      const guardRow = db
+        .prepare(`SELECT appended_at FROM minor_finding_appends WHERE run_id = ? AND task_id = ? AND attempt_id = ?`)
+        .get(RUN_ID, TASK_ID, "attempt-1") as { appended_at: number | null } | undefined;
+      assert.ok(guardRow, "the guard row must still exist after a failed write");
+      assert.equal(guardRow.appended_at, null);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("resolveRecordMinors returns \"false\" when the configured follow-ups write fails", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    const originalEnv = process.env.ORGA_FOLLOWUPS_FILE;
+    try {
+      const blockedParent = path.join(dir, "not-a-directory-2");
+      fs.writeFileSync(blockedParent, "this is a file, not a directory");
+      const followUpsFilePath = path.join(blockedParent, "nested", "FOLLOWUPS.md");
+      process.env.ORGA_FOLLOWUPS_FILE = followUpsFilePath;
+
+      const input: DevelopmentStageInput = {
+        db,
+        adapter: {} as unknown as DevelopmentStageInput["adapter"],
+        runId: RUN_ID,
+        taskId: TASK_ID,
+        now: () => Date.now(),
+        taskDir: dir,
+        executionRoot: dir,
+        requiredArtifacts: [],
+        checks: {},
+        env: process.env,
+      };
+      const ctx = {
+        input,
+        lastAgentAttempt: { attemptId: "attempt-1", pgid: 0 },
+        barrierCache: null,
+        lastAgentReport: {
+          findings: [
+            { id: "finding-1", severity: "minor", summary: "resolveRecordMinors failure check", path: "src/example.ts", line: 1 },
+          ],
+        },
+      };
+
+      const result = resolveRecordMinors(input, ctx);
+      assert.equal(result, "false");
+    } finally {
+      if (originalEnv === undefined) delete process.env.ORGA_FOLLOWUPS_FILE;
+      else process.env.ORGA_FOLLOWUPS_FILE = originalEnv;
       db.close();
     }
   });

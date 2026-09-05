@@ -2,17 +2,24 @@
 // `minor` review findings to the configured follow-ups file, guarded by the
 // `minor_finding_appends` table (`store/migrations.ts` version 2).
 //
-// Crash-recovery ordering: the guard row commits first (`appended_at NULL`),
-// then the file append happens, then a second update sets `appended_at`. A
-// process that dies at any point up to and including the guard-row commit
-// leaves no row at all, so a retry starts clean and appends once. A process
-// that dies after the guard-row commit but before `appended_at` is set
-// leaves a row whose `appended_at` is still NULL; a retry finds that row,
-// knows from the NULL that the file append never finished, and performs it
-// now instead of skipping it. A row whose `appended_at` is set means the
-// append already happened, so a retry skips it. Every path other than the
-// crash window itself reaches exactly one append; the crash window itself
-// resolves to exactly one append on the next call, never zero and never two.
+// The append is three phases: a guard row commits first (`appended_at
+// NULL`), then the follow-ups file is written, then a second update sets
+// `appended_at`. The guard row's NULL/non-NULL split alone cannot tell
+// "never written" apart from "written but not yet marked", so the file
+// write carries its own idempotency: every rendered entry embeds a marker
+// naming its `(run_id, task_id, attempt_id)`, and the write phase checks the
+// file for that marker before appending, skipping the write when it is
+// already present. A process that dies before the guard row commits leaves
+// no row at all, so a retry starts clean. A process that dies after the
+// guard row commits but before the marker reaches the file finds the row's
+// `appended_at` still NULL, retries the write, and the marker check finds
+// the file unmarked and appends once. A process that dies after the marker
+// reaches the file but before `appended_at` is set also finds `appended_at`
+// NULL, retries the write, and the marker check now finds the file already
+// marked and skips the write; the row is then marked done. Every path
+// reaches exactly one written entry per triple, never zero and never two;
+// `appended_at` is a fast-path completion flag, never the sole signal that
+// the write happened.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -50,6 +57,14 @@ export interface AppendMinorFindingsInput {
   findings: readonly MinorFinding[];
   followUpsFilePath: string;
   now?: () => number;
+}
+
+export interface WriteMinorFindingsFileInput {
+  runId: string;
+  taskId: string;
+  attemptId: string;
+  findings: readonly MinorFinding[];
+  followUpsFilePath: string;
 }
 
 interface GuardRow {
@@ -120,12 +135,35 @@ export function claimMinorFindingsAppend(input: ClaimMinorFindingsAppendInput): 
   }
 }
 
-function renderEntry(taskId: string, findings: readonly MinorFinding[]): string {
+export function minorFindingsMarker(runId: string, taskId: string, attemptId: string): string {
+  return `<!-- record-minors:${JSON.stringify({ runId, taskId, attemptId })} -->`;
+}
+
+function renderEntry(marker: string, taskId: string, findings: readonly MinorFinding[]): string {
   const lines = findings.map((finding) => {
     const location = finding.line ? `${finding.path}:${finding.line}` : finding.path;
     return `- [${taskId}] ${finding.summary} (${location})`;
   });
-  return `${lines.join("\n")}\n`;
+  return `${marker}\n${lines.join("\n")}\n`;
+}
+
+function fileHasMarker(absolutePath: string, marker: string): boolean {
+  if (!fs.existsSync(absolutePath)) return false;
+  return fs.readFileSync(absolutePath, "utf8").includes(marker);
+}
+
+// The write half, on its own: renders the marker-bearing entry and appends
+// it to `input.followUpsFilePath` unless that file already carries the
+// `(run_id, task_id, attempt_id)` marker. Exported for the same reason
+// `claimMinorFindingsAppend` is exported — so a caller can perform this
+// phase in isolation and stop, which is exactly the window a crash between
+// the write and `markAppended` leaves behind.
+export function writeMinorFindingsFile(input: WriteMinorFindingsFileInput): void {
+  const absolutePath = path.resolve(input.followUpsFilePath);
+  const marker = minorFindingsMarker(input.runId, input.taskId, input.attemptId);
+  if (fileHasMarker(absolutePath, marker)) return;
+  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+  fs.appendFileSync(absolutePath, renderEntry(marker, input.taskId, input.findings), "utf8");
 }
 
 // Appends `input.findings` to `input.followUpsFilePath` exactly once for
@@ -143,9 +181,7 @@ export function appendMinorFindings(input: AppendMinorFindingsInput): "true" | "
     const claim = claimMinorFindingsAppend(input);
     if (claim.alreadyAppended) return "true";
 
-    const absolutePath = path.resolve(input.followUpsFilePath);
-    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-    fs.appendFileSync(absolutePath, renderEntry(input.taskId, input.findings), "utf8");
+    writeMinorFindingsFile(input);
 
     markAppended(input.db, claim.id, nowFn());
     return "true";
