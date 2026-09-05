@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { openStore } from "../store/db.ts";
 import { acquireLease, releaseLease } from "../store/lease.ts";
 import { reconcile } from "./reconcile.ts";
-import { schedulerTick } from "./scheduler.ts";
+import { createProductionSchedulerTick } from "./scheduler.ts";
 import {
   runTickShell,
   DEFAULT_TICK_INTERVAL_MS,
@@ -68,10 +68,11 @@ export async function runSupervisor(args: SupervisorArgs): Promise<number> {
 
     let exitCode: number;
     try {
+      const body = await createProductionSchedulerTick({ db, runId: args.runId, root: args.root, env: process.env });
       const exit = await runTickShell({
         db,
         runId: args.runId,
-        body: withOperatorTermination(schedulerTick, { installSigtermTrap: true }),
+        body: withOperatorTermination(body, { installSigtermTrap: true }),
         tickIntervalMs,
         operatorPollWindowMs,
       });

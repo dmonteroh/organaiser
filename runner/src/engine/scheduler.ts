@@ -16,10 +16,16 @@
 // target-for-target, to the manifest's own parsed transitions.
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { AttemptOutcome, ProcessAdapter, ProcessHandle } from "../adapters/adapter.ts";
 import { FakeAdapter } from "../adapters/fake.ts";
+import { selectAdapter } from "../adapters/select.ts";
+import { claudeProbeSpec } from "../adapters/claude-adapter.ts";
+import { CODEX_VENDOR_PROBE_SPEC } from "../adapters/codex-adapter.ts";
+import { probeVendor, type VendorProbeSpec } from "../adapters/probe.ts";
 import {
   claimSetComplete,
   computeInputVersion,
@@ -32,12 +38,14 @@ import {
 } from "./dispatch.ts";
 import { getPredicate } from "./predicate-registry.ts";
 import { PREDICATE_RETURN_UNIONS, TERMINAL_DISPOSITION_VALUES } from "./board-predicates.ts";
+import { terminateGroups } from "./termination.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
 import { createWorkspace, removeWorkspace, listUntrackedWorktrees, type WorkspaceHandle } from "../git/workspace.ts";
 import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick.ts";
 import type { TaskRow, TaskState } from "../store/types.ts";
+import { resolveVendorProfile, serializeResolvedProfile, type ResolvedVendorProfile } from "../cli/profiles.ts";
 
 export interface StageDefinition {
   id: string;
@@ -166,6 +174,20 @@ export interface WorkspaceProvider {
   projectRoot: string;
   root: string;
   branchPrefix: string;
+}
+
+/**
+ * The resolved vendor selection a dispatched attempt records durably (goals spec
+ * section 24): absent, `dispatchEligible` records today's `"fake"`/`"fake"`/`"{}"`
+ * placeholders unchanged. `cliVersion` and `workflowRevision` ride inside the attempt's
+ * `config_json` envelope rather than a schema migration, since `attempts` has no column
+ * for either.
+ */
+export interface DispatchProfile {
+  vendor: "claude" | "codex" | "fake";
+  profile: ResolvedVendorProfile;
+  cliVersion: string | null;
+  workflowRevision: string | null;
 }
 
 interface TickScratch {
@@ -604,6 +626,7 @@ export async function dispatchEligible(
   runtime: SchedulerRuntime,
   adapter: ProcessAdapter,
   workspace?: WorkspaceProvider,
+  dispatchProfile?: DispatchProfile,
 ): Promise<void> {
   if (runtime.liveAttempt !== null) return;
 
@@ -679,9 +702,15 @@ export async function dispatchEligible(
         role,
         round,
         inputVersion,
-        vendor: "fake",
-        model: "fake",
-        configJson: "{}",
+        vendor: dispatchProfile?.vendor ?? "fake",
+        model: dispatchProfile?.profile.model ?? "fake",
+        configJson: dispatchProfile
+          ? JSON.stringify({
+              profile: JSON.parse(serializeResolvedProfile(dispatchProfile.profile)),
+              cliVersion: dispatchProfile.cliVersion,
+              workflowRevision: dispatchProfile.workflowRevision,
+            })
+          : "{}",
         mutating,
         timeoutBudget: { spawnMs: 30000, idleMs: 30000, wallMs: 300000 },
         workingDirectory,
@@ -822,6 +851,7 @@ export interface SchedulerSteps {
     runtime: SchedulerRuntime,
     adapter: ProcessAdapter,
     workspace?: WorkspaceProvider,
+    dispatchProfile?: DispatchProfile,
   ) => Promise<void>;
 }
 
@@ -843,6 +873,7 @@ export function createSchedulerTick(
   adapter: ProcessAdapter,
   steps: SchedulerSteps = DEFAULT_SCHEDULER_STEPS,
   workspace?: WorkspaceProvider,
+  dispatchProfile?: DispatchProfile,
 ): TickBody {
   const runtime = createSchedulerRuntime();
 
@@ -854,7 +885,7 @@ export function createSchedulerTick(
     steps.advanceTransitions(ctx, runtime);
     steps.executeGates(ctx, runtime);
     steps.reconcileState(ctx, runtime, workspace);
-    await steps.dispatchEligible(ctx, runtime, adapter, workspace);
+    await steps.dispatchEligible(ctx, runtime, adapter, workspace, dispatchProfile);
 
     const summary = gatherBoardSummary(ctx, runtime);
     let outcome = classifyTick(summary);
@@ -898,6 +929,82 @@ async function terminateFakeAttempt(
   return { signalSent: "SIGTERM", exitCode: null, killedProcessTree: !groupAlive(info.pgid), timedOutWaitingForExit: groupAlive(info.pgid) };
 }
 
-// Production binding: a `FakeAdapter` over P5c's committed fixture streams.
-// Real vendor adapter selection is out of this module's scope.
-export const schedulerTick: TickBody = createSchedulerTick(new FakeAdapter({ terminate: terminateFakeAttempt }));
+function parseWorkflowRevision(configSnapshotRef: string | null): string | null {
+  if (!configSnapshotRef) return null;
+  try {
+    const snapshot = JSON.parse(configSnapshotRef) as { workflow?: { sha256?: unknown } };
+    return typeof snapshot.workflow?.sha256 === "string" ? snapshot.workflow.sha256 : null;
+  } catch {
+    return null;
+  }
+}
+
+// A `TerminateFn`-shaped wrapper over `termination.ts`'s `terminateGroups`: the two
+// seams are not interchangeable (`terminateGroups` takes a pgid list and a `graceMs`
+// option object, `TerminateFn` a single `{ pid, pgid }` and a bare grace period), so this
+// is the shim. `killedProcessTree` reflects whether the group is actually gone once
+// `terminateGroups`'s own SIGTERM-then-SIGKILL sequence has run, not merely whether a
+// kill signal was sent.
+async function terminateViaGroups(
+  info: { pid: number; pgid: number },
+  gracePeriodMs: number,
+): Promise<{ signalSent: NodeJS.Signals | null; exitCode: number | null; killedProcessTree: boolean; timedOutWaitingForExit: boolean }> {
+  const [report] = await terminateGroups([info.pgid], { graceMs: gracePeriodMs });
+  const stillAlive = groupAlive(info.pgid);
+  return {
+    signalSent: report?.signalled ? "SIGTERM" : null,
+    exitCode: null,
+    killedProcessTree: !stillAlive,
+    timedOutWaitingForExit: stillAlive,
+  };
+}
+
+export interface CreateProductionSchedulerTickOptions {
+  db: DatabaseSync;
+  runId: string;
+  root: string;
+  env: NodeJS.ProcessEnv;
+}
+
+// Resolves the run's vendor and profile at call time (not at module import time, when
+// no project root or run id exists yet) and selects its adapter through `selectAdapter`.
+// `options.env.ORGA_VENDOR` unset, empty, or anything other than `"claude"`/`"codex"`
+// resolves `"fake"` — never `ResolvedConfig.runner`'s own `"codex"` default, which would
+// make every caller of this factory that never set `ORGA_VENDOR` spawn a real CLI.
+export async function createProductionSchedulerTick(options: CreateProductionSchedulerTickOptions): Promise<TickBody> {
+  const rawVendor = options.env.ORGA_VENDOR;
+  const vendor: "claude" | "codex" | "fake" = rawVendor === "claude" || rawVendor === "codex" ? rawVendor : "fake";
+
+  if (vendor === "fake") {
+    return createSchedulerTick(new FakeAdapter({ terminate: terminateFakeAttempt }));
+  }
+
+  const orgaYamlPath = path.join(options.root, "orga.yaml");
+  const project = fs.existsSync(orgaYamlPath)
+    ? { path: orgaYamlPath, text: fs.readFileSync(orgaYamlPath, "utf8") }
+    : undefined;
+
+  const profile = resolveVendorProfile("default", { vendor, env: options.env, project });
+  const probeSpec: VendorProbeSpec = vendor === "claude" ? claudeProbeSpec : CODEX_VENDOR_PROBE_SPEC;
+  const capabilityReport = await probeVendor(probeSpec, {
+    executablePath: profile.executable,
+    requestedModel: profile.model,
+    requestedEffort: profile.effort,
+    workingDirectory: options.root,
+    environment: options.env,
+  });
+  const cliVersion = capabilityReport.cliVersion === "unknown" ? null : capabilityReport.cliVersion;
+
+  const runRow = options.db.prepare(`SELECT config_snapshot_ref FROM runs WHERE id = ?`).get(options.runId) as
+    | { config_snapshot_ref: string | null }
+    | undefined;
+  const workflowRevision = parseWorkflowRevision(runRow?.config_snapshot_ref ?? null);
+
+  const dispatchProfile: DispatchProfile = { vendor, profile, cliVersion, workflowRevision };
+  const adapter = selectAdapter(vendor, profile, {
+    probe: (configuration) => probeVendor(probeSpec, configuration),
+    terminate: terminateViaGroups,
+  });
+
+  return createSchedulerTick(adapter, DEFAULT_SCHEDULER_STEPS, undefined, dispatchProfile);
+}

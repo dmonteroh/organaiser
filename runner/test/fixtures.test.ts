@@ -10,6 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { callerExitSurvival } from "../evals/fixtures/01-caller-exit-survival.ts";
 import { workerFinalIsData } from "../evals/fixtures/02-worker-final-is-data.ts";
@@ -35,8 +36,18 @@ import {
 } from "../evals/fixtures/10-descendant-process-cleanup.ts";
 import { outOfClaimWrite } from "../evals/fixtures/11-out-of-claim-write.ts";
 import { unrelatedDirtyCheckoutDoesNotAffectTask } from "../evals/fixtures/12-unrelated-dirty-checkout.ts";
+import { knownBadVersionRefused } from "../evals/fixtures/12-known-bad-version-refused.ts";
+import { adapterStreamCases } from "../evals/fixtures/13-adapter-stream-cases.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
+
+// The four required deterministic stream cases (goals spec section 29.4) speak a
+// vendor-neutral four-event wire format, so both vendor labels below replay the same
+// substrate fixture directory that already backs `test/claude-adapter.test.ts` and
+// `test/codex-adapter.test.ts`'s own `adapterStreamCases` registrations — the sanitized
+// `evals/captures/<vendor>/<version>/` directories hold a distinct, fixed ten-file case
+// set enforced by those files' own directory-content assertions, not these four names.
+const ADAPTER_STREAM_CASES_DIR = fileURLToPath(new URL("./fixtures/adapter-substrate/", import.meta.url));
 
 test("caller-exit-survival", { timeout: FIXTURE_TIMEOUT_MS }, callerExitSurvival);
 test("worker-final-is-data", { timeout: FIXTURE_TIMEOUT_MS }, workerFinalIsData);
@@ -56,6 +67,13 @@ test("descendant-process-cleanup: after cancel", { timeout: FIXTURE_TIMEOUT_MS }
 test("descendant-process-cleanup: after wall-timeout kill", { timeout: FIXTURE_TIMEOUT_MS }, descendantProcessCleanupWallTimeout);
 test("out-of-claim-write", { timeout: FIXTURE_TIMEOUT_MS }, outOfClaimWrite);
 test("unrelated-dirty-checkout-does-not-affect-task", { timeout: FIXTURE_TIMEOUT_MS }, unrelatedDirtyCheckoutDoesNotAffectTask);
+test("known-bad-version-refused", { timeout: FIXTURE_TIMEOUT_MS }, knownBadVersionRefused);
+for (const c of adapterStreamCases("claude", ADAPTER_STREAM_CASES_DIR)) {
+  test(c.name, { timeout: FIXTURE_TIMEOUT_MS }, c.run);
+}
+for (const c of adapterStreamCases("codex", ADAPTER_STREAM_CASES_DIR)) {
+  test(c.name, { timeout: FIXTURE_TIMEOUT_MS }, c.run);
+}
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it
