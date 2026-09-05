@@ -209,103 +209,106 @@ export async function liveSingleTask(vendor: LiveVendor): Promise<LiveSingleTask
       appendVendorEnvironmentAllowlist(root, "claude", ["HOME", "PATH"]);
     }
 
-    const tasks: FixtureTaskSpec[] = [{ id: "live-task", title: "live-single-task" }];
-    const { boardPath, workflowPath, templatePath } = writeFixtureFiles(root, tasks);
-    const board = boardWithTasks(tasks);
-
-    // A vague, unbounded packet (`dispatchEligible`'s own fixed placeholder, not this
-    // fixture's to change) left to a real agentic CLI's default `workspace-write`
-    // sandbox and its default reasoning effort produced two observed failure modes on
-    // this machine: sandbox-denied tool calls the model attempted anyway
-    // (`failureClass: "permission-denied"`), and, once denials were removed, a
-    // multi-minute exploration whose eventual reply never arrived
-    // (`failureClass: "worker-crash"`, `no-candidate-report`). `danger-full-access` and
-    // a low reasoning effort are this fixture's own choice of profile overrides to make
-    // one bounded live turn actually converge; they are not part of the shipped
-    // production default for either vendor.
-    const restoreEnv = patchEnv({
-      ORGA_VENDOR: vendor,
-      ...(vendor === "codex"
-        ? {
-            ORGA_MODEL: CODEX_LIVE_MODEL,
-            CODEX_HOME: codexHome as string,
-            ORGA_SANDBOX_MODE: "danger-full-access",
-            ORGA_EFFORT: "low",
-          }
-        : {}),
-    });
-
-    const startedAt = Date.now();
-    let runId: string;
-    let supervisorPid: number;
     try {
-      const result = startRun({ root, boardPath, board, workflowPath, templatePath });
-      if (result.supervisorPid === null) {
-        throw new Error("liveSingleTask: startRun did not spawn a supervisor");
+      const tasks: FixtureTaskSpec[] = [{ id: "live-task", title: "live-single-task" }];
+      const { boardPath, workflowPath, templatePath } = writeFixtureFiles(root, tasks);
+      const board = boardWithTasks(tasks);
+
+      // A vague, unbounded packet (`dispatchEligible`'s own fixed placeholder, not this
+      // fixture's to change) left to a real agentic CLI's default `workspace-write`
+      // sandbox and its default reasoning effort produced two observed failure modes on
+      // this machine: sandbox-denied tool calls the model attempted anyway
+      // (`failureClass: "permission-denied"`), and, once denials were removed, a
+      // multi-minute exploration whose eventual reply never arrived
+      // (`failureClass: "worker-crash"`, `no-candidate-report`). `danger-full-access` and
+      // a low reasoning effort are this fixture's own choice of profile overrides to make
+      // one bounded live turn actually converge; they are not part of the shipped
+      // production default for either vendor.
+      const restoreEnv = patchEnv({
+        ORGA_VENDOR: vendor,
+        ...(vendor === "codex"
+          ? {
+              ORGA_MODEL: CODEX_LIVE_MODEL,
+              CODEX_HOME: codexHome as string,
+              ORGA_SANDBOX_MODE: "danger-full-access",
+              ORGA_EFFORT: "low",
+            }
+          : {}),
+      });
+
+      const startedAt = Date.now();
+      let runId: string;
+      let supervisorPid: number;
+      try {
+        const result = startRun({ root, boardPath, board, workflowPath, templatePath });
+        if (result.supervisorPid === null) {
+          throw new Error("liveSingleTask: startRun did not spawn a supervisor");
+        }
+        runId = result.runId;
+        supervisorPid = result.supervisorPid;
+      } finally {
+        restoreEnv();
       }
-      runId = result.runId;
-      supervisorPid = result.supervisorPid;
-    } finally {
-      restoreEnv();
-    }
-    seedTasks(root, runId, tasks, startedAt);
+      seedTasks(root, runId, tasks, startedAt);
 
-    try {
-      const reachedTerminal = await waitFor(() => {
+      try {
+        const reachedTerminal = await waitFor(() => {
+          const run = readRunRow(root, runId);
+          return ["succeeded", "failed", "blocked", "cancelled"].includes(run.state as string);
+        }, RUN_TERMINAL_TIMEOUT_MS, 500);
+
         const run = readRunRow(root, runId);
-        return ["succeeded", "failed", "blocked", "cancelled"].includes(run.state as string);
-      }, RUN_TERMINAL_TIMEOUT_MS, 500);
+        if (!reachedTerminal) {
+          throw new Error(
+            `live-single-task (${vendor}): run did not reach a terminal state within ${RUN_TERMINAL_TIMEOUT_MS}ms; last state: ${JSON.stringify(run)}`,
+          );
+        }
+        if (run.state !== "succeeded") {
+          throw new Error(
+            `live-single-task (${vendor}): run reached terminal state ${JSON.stringify(run.state)}, expected "succeeded"; reason: ${JSON.stringify(run.terminal_reason)}`,
+          );
+        }
 
-      const run = readRunRow(root, runId);
-      if (!reachedTerminal) {
-        throw new Error(
-          `live-single-task (${vendor}): run did not reach a terminal state within ${RUN_TERMINAL_TIMEOUT_MS}ms; last state: ${JSON.stringify(run)}`,
+        const attempts = allRows<AttemptRowShape>(
+          root,
+          `SELECT vendor, model, config_json, status FROM attempts WHERE run_id = ?`,
+          runId,
         );
-      }
-      if (run.state !== "succeeded") {
-        throw new Error(
-          `live-single-task (${vendor}): run reached terminal state ${JSON.stringify(run.state)}, expected "succeeded"; reason: ${JSON.stringify(run.terminal_reason)}`,
-        );
-      }
+        const completed = attempts.find((a) => a.status === "completed");
+        if (!completed) {
+          throw new Error(
+            `live-single-task (${vendor}): no attempt reached status "completed"; attempts: ${JSON.stringify(attempts)}`,
+          );
+        }
+        const config = JSON.parse(completed.config_json) as AttemptConfigJson;
 
-      const attempts = allRows<AttemptRowShape>(
-        root,
-        `SELECT vendor, model, config_json, status FROM attempts WHERE run_id = ?`,
-        runId,
-      );
-      const completed = attempts.find((a) => a.status === "completed");
-      if (!completed) {
-        throw new Error(
-          `live-single-task (${vendor}): no attempt reached status "completed"; attempts: ${JSON.stringify(attempts)}`,
-        );
-      }
-      const config = JSON.parse(completed.config_json) as AttemptConfigJson;
+        await waitFor(() => !alive(supervisorPid), 10000);
+        const survivors = recordedPgidsForRun(root, runId).filter((pgid) => groupAlive(pgid));
+        if (survivors.length > 0) {
+          throw new Error(`live-single-task (${vendor}): process group(s) survived: ${JSON.stringify(survivors)}`);
+        }
 
-      await waitFor(() => !alive(supervisorPid), 10000);
-      const survivors = recordedPgidsForRun(root, runId).filter((pgid) => groupAlive(pgid));
-      if (survivors.length > 0) {
-        throw new Error(`live-single-task (${vendor}): process group(s) survived: ${JSON.stringify(survivors)}`);
-      }
-
-      return {
-        skipped: false,
-        runId,
-        state: run.state as string,
-        vendor,
-        model: completed.model,
-        effort: config.profile?.effort ?? "unknown",
-        cliVersion: config.cliVersion ?? null,
-        workflowRevision: config.workflowRevision ?? null,
-        wallTimeMs: Date.now() - startedAt,
-      };
-    } finally {
-      if (alive(supervisorPid)) {
-        try {
-          process.kill(-supervisorPid, "SIGKILL");
-        } catch {
-          // already gone
+        return {
+          skipped: false,
+          runId,
+          state: run.state as string,
+          vendor,
+          model: completed.model,
+          effort: config.profile?.effort ?? "unknown",
+          cliVersion: config.cliVersion ?? null,
+          workflowRevision: config.workflowRevision ?? null,
+          wallTimeMs: Date.now() - startedAt,
+        };
+      } finally {
+        if (alive(supervisorPid)) {
+          try {
+            process.kill(-supervisorPid, "SIGKILL");
+          } catch {
+            // already gone
+          }
         }
       }
+    } finally {
       if (codexHome) {
         try {
           fs.rmSync(codexHome, { recursive: true, force: true });
