@@ -211,7 +211,7 @@ test("a dispatched attempt's resolved vendor profile, CLI version, and workflow 
         db.prepare(
           `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run("task-a", runId, "task-a", "Task a", "brief.md", "task-board", "implementation", "[]", 0, "implementing", null, now, now);
+        ).run("task-a", runId, "task-a", "Task a", "brief.md", "task-board", "integration", "[]", 0, "implementing", null, now, now);
       });
 
       const profile = baseProfile({ model: "resolved-model", effort: "high" });
@@ -296,7 +296,7 @@ test("createProductionSchedulerTick resolves the claude branch and records its v
         db.prepare(
           `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run("task-a", runId, "task-a", "Task a", "brief.md", "task-board", "implementation", "[]", 0, "implementing", null, now, now);
+        ).run("task-a", runId, "task-a", "Task a", "brief.md", "task-board", "integration", "[]", 0, "implementing", null, now, now);
       });
 
       const env: NodeJS.ProcessEnv = {

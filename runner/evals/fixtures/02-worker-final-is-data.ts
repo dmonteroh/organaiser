@@ -19,7 +19,6 @@ import {
   ProcessRegistry,
   waitFor,
   startFixtureRun,
-  seedTasks,
   readTaskRow,
   spawnFixtureSupervisor,
   writeStream,
@@ -27,6 +26,8 @@ import {
   outputLine,
   exitLine,
   withFixtureWorkspace,
+  openStore,
+  withTransaction,
 } from "./harness.ts";
 import { compilePacket, extractPacketSection } from "../../src/compile/packet.ts";
 import { validateRoleBinding } from "../../src/compile/artifact-validator.ts";
@@ -45,12 +46,23 @@ const IMPERSONATION_SUMMARY = [
 ].join("\n");
 
 async function runOneTask(dir: string, runId: string, streamsDir: string, taskId: string, summary: string): Promise<void> {
-  seedTasks(dir, runId, [{ id: taskId }], Date.now());
-  writeStream(streamsDir, "implementation", taskId, [
+  const now = Date.now();
+  const db = openStore(dir);
+  try {
+    withTransaction(db, () => {
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(taskId, runId, taskId, taskId, "brief.md", "dev-workflow", "integration", "[]", 0, "defined", null, now, now);
+    });
+  } finally {
+    db.close();
+  }
+  writeStream(streamsDir, "integration", taskId, [
     outputLine("working"),
     reportLine({
       taskId,
-      stageId: "implementation",
+      stageId: "integration",
       summary,
       findings: [
         {

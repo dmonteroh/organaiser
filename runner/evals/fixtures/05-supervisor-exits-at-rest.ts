@@ -45,16 +45,16 @@ export async function supervisorExitsAtRestDraining(): Promise<void> {
           db.prepare(
             `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ).run("task-a", runId, "task-a", "Task A", "brief.md", "dev-workflow", "implementation", "[]", 0, "implementing", null, now, now);
+          ).run("task-a", runId, "task-a", "Task A", "brief.md", "dev-workflow", "integration", "[]", 0, "implementing", null, now, now);
         });
       } finally {
         db.close();
       }
 
       const streamsDir = path.join(dir, "streams");
-      writeStream(streamsDir, "implementation", "task-a", [
+      writeStream(streamsDir, "integration", "task-a", [
         outputLine("working"),
-        reportLine({ taskId: "task-a", stageId: "implementation", summary: "done" }),
+        reportLine({ taskId: "task-a", stageId: "integration", summary: "done" }),
         exitLine(0),
       ]);
       writeStream(streamsDir, "integration", "task-a", [
