@@ -13,6 +13,7 @@
 // extensions of this same table.
 
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { AttemptOutcome, ProcessAdapter, ProcessHandle, TimeoutBudget } from "../adapters/adapter.ts";
@@ -24,6 +25,9 @@ import {
   type DispatchAttemptInput,
 } from "./dispatch.ts";
 import { runVerificationBarrier, taskChecksPass, type BarrierResult } from "./barrier.ts";
+import { partitionFindings } from "./review-stages.ts";
+import { appendMinorFindings } from "./minor-findings.ts";
+import { loadConfig } from "../cli/config.ts";
 import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { WorkspaceHandle } from "../git/workspace.ts";
 import { withTransaction } from "../store/db.ts";
@@ -477,12 +481,50 @@ async function resolveRunnerStage(stage: DevelopmentStageDefinition, ctx: Driver
       return taskChecksPass({ verdict: result.verdict });
     }
     case "minor-findings-recorded":
-      return (input.recordMinors ?? (() => "true" as const))();
+      return input.recordMinors ? input.recordMinors() : resolveRecordMinors(input, ctx);
     case "handoff-recorded":
       return (input.handoffRecorded ?? (() => "true" as const))();
     default:
       throw new Error(`unknown runner predicate: ${String(stage.predicate)}`);
   }
+}
+
+// The default behind `input.recordMinors`'s injected seam: the reaped
+// `review-quality` attempt's own report is `ctx.lastAgentReport` by the time
+// this predicate runs, and `ctx.lastAgentAttempt` names that same attempt,
+// so the accepted `minor` findings and their identity triple both come from
+// the driver's own state — no separate lookup. The follow-ups file path is
+// `cli/config.ts`'s resolved `followUpsFilePath`, resolved against
+// `process.cwd()` rather than `input.executionRoot`: the detached
+// supervisor's cwd is the project root by construction (`supervisor-spawn.ts`
+// spawns it there), while `executionRoot` is a runner-owned worktree for a
+// mutating task and must never receive this write.
+function resolveRecordMinors(input: DevelopmentStageInput, ctx: DriverContext): "true" | "false" {
+  const attemptId = ctx.lastAgentAttempt?.attemptId;
+  if (!attemptId) return "true";
+
+  const rawFindings = (ctx.lastAgentReport as Record<string, unknown> | null)?.findings as
+    | readonly unknown[]
+    | undefined;
+  const partition = partitionFindings(rawFindings);
+  if (partition.minor.length === 0) return "true";
+
+  const config = loadConfig({ env: process.env });
+  const followUpsFilePath = path.resolve(config.followUpsFilePath);
+
+  return appendMinorFindings({
+    db: input.db,
+    runId: input.runId,
+    taskId: input.taskId,
+    attemptId,
+    findings: partition.minor.map((finding) => ({
+      summary: finding.summary,
+      path: finding.path,
+      line: finding.line ?? null,
+    })),
+    followUpsFilePath,
+    now: input.now,
+  });
 }
 
 async function runBarrierForCurrentAttempt(ctx: DriverContext): Promise<BarrierResult> {

@@ -41,6 +41,7 @@ import { adapterStreamCases } from "../evals/fixtures/13-adapter-stream-cases.ts
 import { gateCapParksTask } from "../evals/fixtures/13-gate-caps.ts";
 import { blockingFindingRequiresProof, gateOrder } from "../evals/fixtures/14-review-gates.ts";
 import { freshReviewer } from "../evals/fixtures/15-fresh-reviewer.ts";
+import { minorFindingsAppendOnce } from "../evals/fixtures/16-minor-findings.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -81,6 +82,7 @@ test("gate-caps: a capped task parks while an unrelated task drains", { timeout:
 test("review-gates: review-quality never runs before review-spec has passed", { timeout: FIXTURE_TIMEOUT_MS }, gateOrder);
 test("review-gates: a proof-less blocking finding is rejected and routes to no repair", { timeout: FIXTURE_TIMEOUT_MS }, blockingFindingRequiresProof);
 test("fresh-reviewer: two review rounds run in distinct fresh worktrees with distinct attempts and pids", { timeout: FIXTURE_TIMEOUT_MS }, freshReviewer);
+test("minor-findings-append-once: a supervisor restart mid-append still reaches exactly one append", { timeout: FIXTURE_TIMEOUT_MS }, minorFindingsAppendOnce);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it
