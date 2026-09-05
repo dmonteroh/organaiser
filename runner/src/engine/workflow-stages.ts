@@ -197,6 +197,27 @@ const TERMINAL_OUTCOME_IDS = new Set<string>([
 
 const DEVELOPMENT_STAGES_BY_ID = new Map(DEVELOPMENT_STAGES.map((stage) => [stage.id, stage]));
 
+// A `kind: agent` stage whose mirrored `authority` is `read-only` dispatches
+// at `workspace.path` like any other stage unless a `reviewerWorkspace`
+// resolver is supplied; when it is, the resolver's own handle replaces
+// `workspace` as that one attempt's dispatch directory, and its `release` is
+// awaited once the attempt ends, on every exit path.
+export interface ReviewerWorkspaceHandle {
+  workspace: WorkspaceHandle;
+  release: () => Promise<void>;
+}
+
+export interface ReviewerWorkspaceRequest {
+  runId: string;
+  taskId: string;
+  stageId: string;
+  round: number;
+}
+
+export type ReviewerWorkspaceResolver = (
+  request: ReviewerWorkspaceRequest,
+) => Promise<ReviewerWorkspaceHandle>;
+
 export interface DevelopmentStageInput {
   // Store and process surface. Required.
   db: DatabaseSync;
@@ -217,6 +238,10 @@ export interface DevelopmentStageInput {
   // stages and sets the dispatch working directory to `workspace.path`;
   // absent skips claim validation and dispatches at `executionRoot`.
   workspace?: WorkspaceHandle;
+
+  // Optional; consulted only for stages whose mirrored `authority` is
+  // `read-only`. Absent, those stages dispatch exactly like any other stage.
+  reviewerWorkspace?: ReviewerWorkspaceResolver;
 
   // Optional injected `kind: runner` predicates. Each defaults to `() => "true"`.
   recordMinors?: () => "true" | "false";
@@ -332,90 +357,105 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
   const round = nextAttemptRound(input.db, input.runId, input.taskId, stage.id);
   const inputVersion = computeInputVersion({ taskId: input.taskId, stageId: stage.id, round: String(round) });
   const mutating = stage.authority === "workspace-write";
-  const workingDirectory = input.workspace?.path ?? input.executionRoot;
   const packetFn = input.packet ?? ((stageId: string) => `packet for task ${input.taskId} at stage ${stageId}`);
 
-  const dispatchInput: DispatchAttemptInput = {
-    runId: input.runId,
-    taskId: input.taskId,
-    stageId: stage.id,
-    role: stage.role ?? "",
-    round,
-    inputVersion,
-    vendor: input.vendor ?? "fake",
-    model: input.model ?? "fake",
-    configJson: input.configJson ?? "{}",
-    mutating,
-    timeoutBudget: input.timeoutBudget ?? DEFAULT_TIMEOUT_BUDGET,
-    workingDirectory,
-    environment: input.env,
-    packet: packetFn(stage.id, stage.role ?? ""),
-  };
-
-  const dispatched = await dispatchAttempt(input.db, input.adapter, dispatchInput, input.now);
-  if (!dispatched.dispatched) {
-    throw new Error(
-      `dispatch of stage ${stage.id} round ${round} collided with an already-recorded attempt`,
-    );
-  }
-  const { attemptId, handle } = dispatched;
-
-  await waitForExit(handle);
-
-  const reapedAt = input.now();
-  withTransaction(input.db, () => {
-    input.db
-      .prepare(`UPDATE workers SET termination_state = 'exited', ended_at = ? WHERE attempt_id = ?`)
-      .run(reapedAt, attemptId);
-  });
-
-  // Invalidate the barrier cache from any prior attempt now that a new one
-  // has been reaped; `collect-implementation-artifacts` repopulates it for
-  // this attempt.
-  ctx.barrierCache = null;
-  ctx.lastAgentAttempt = { attemptId, pgid: handle.pgid };
-
-  const artifacts = await input.adapter.collect(handle);
-  const outcome = await input.adapter.classify(artifacts);
-  ctx.lastAgentReport = outcome.report;
-
-  const claimViolation = input.workspace
-    ? await validateAttemptClaims(input.db, input.runId, input.taskId, input.workspace)
-    : null;
-
-  const normalizedAt = input.now();
-  withTransaction(input.db, () => {
-    input.db
-      .prepare(`UPDATE attempts SET status = ?, exit_code = ?, ended_at = ? WHERE id = ?`)
-      .run(claimViolation ? "failed" : outcome.ok ? "completed" : "failed", artifacts.exitCode, normalizedAt, attemptId);
-    appendEvent(input.db, {
-      id: randomUUID(),
-      run_id: input.runId,
-      task_id: input.taskId,
-      attempt_id: attemptId,
-      type: "attempt.normalized",
-      payload: JSON.stringify({ ok: outcome.ok, failureClass: outcome.failureClass, reason: outcome.reason }),
-      created_at: normalizedAt,
+  let workingDirectory = input.workspace?.path ?? input.executionRoot;
+  let reviewerWorkspace: ReviewerWorkspaceHandle | null = null;
+  if (stage.authority === "read-only" && input.reviewerWorkspace) {
+    reviewerWorkspace = await input.reviewerWorkspace({
+      runId: input.runId,
+      taskId: input.taskId,
+      stageId: stage.id,
+      round,
     });
-    if (claimViolation) {
+    workingDirectory = reviewerWorkspace.workspace.path;
+  }
+
+  try {
+    const dispatchInput: DispatchAttemptInput = {
+      runId: input.runId,
+      taskId: input.taskId,
+      stageId: stage.id,
+      role: stage.role ?? "",
+      round,
+      inputVersion,
+      vendor: input.vendor ?? "fake",
+      model: input.model ?? "fake",
+      configJson: input.configJson ?? "{}",
+      mutating,
+      timeoutBudget: input.timeoutBudget ?? DEFAULT_TIMEOUT_BUDGET,
+      workingDirectory,
+      environment: input.env,
+      packet: packetFn(stage.id, stage.role ?? ""),
+    };
+
+    const dispatched = await dispatchAttempt(input.db, input.adapter, dispatchInput, input.now);
+    if (!dispatched.dispatched) {
+      throw new Error(
+        `dispatch of stage ${stage.id} round ${round} collided with an already-recorded attempt`,
+      );
+    }
+    const { attemptId, handle } = dispatched;
+
+    await waitForExit(handle);
+
+    const reapedAt = input.now();
+    withTransaction(input.db, () => {
+      input.db
+        .prepare(`UPDATE workers SET termination_state = 'exited', ended_at = ? WHERE attempt_id = ?`)
+        .run(reapedAt, attemptId);
+    });
+
+    // Invalidate the barrier cache from any prior attempt now that a new one
+    // has been reaped; `collect-implementation-artifacts` repopulates it for
+    // this attempt.
+    ctx.barrierCache = null;
+    ctx.lastAgentAttempt = { attemptId, pgid: handle.pgid };
+
+    const artifacts = await input.adapter.collect(handle);
+    const outcome = await input.adapter.classify(artifacts);
+    ctx.lastAgentReport = outcome.report;
+
+    const claimViolation = input.workspace
+      ? await validateAttemptClaims(input.db, input.runId, input.taskId, input.workspace)
+      : null;
+
+    const normalizedAt = input.now();
+    withTransaction(input.db, () => {
+      input.db
+        .prepare(`UPDATE attempts SET status = ?, exit_code = ?, ended_at = ? WHERE id = ?`)
+        .run(claimViolation ? "failed" : outcome.ok ? "completed" : "failed", artifacts.exitCode, normalizedAt, attemptId);
       appendEvent(input.db, {
         id: randomUUID(),
         run_id: input.runId,
         task_id: input.taskId,
         attempt_id: attemptId,
-        type: "attempt.claim-violation",
-        payload: JSON.stringify(
-          claimViolation.internalError === undefined
-            ? { outOfClaim: claimViolation.outOfClaim }
-            : { outOfClaim: claimViolation.outOfClaim, internalError: claimViolation.internalError },
-        ),
+        type: "attempt.normalized",
+        payload: JSON.stringify({ ok: outcome.ok, failureClass: outcome.failureClass, reason: outcome.reason }),
         created_at: normalizedAt,
       });
-    }
-  });
+      if (claimViolation) {
+        appendEvent(input.db, {
+          id: randomUUID(),
+          run_id: input.runId,
+          task_id: input.taskId,
+          attempt_id: attemptId,
+          type: "attempt.claim-violation",
+          payload: JSON.stringify(
+            claimViolation.internalError === undefined
+              ? { outOfClaim: claimViolation.outOfClaim }
+              : { outOfClaim: claimViolation.outOfClaim, internalError: claimViolation.internalError },
+          ),
+          created_at: normalizedAt,
+        });
+      }
+    });
 
-  if (claimViolation) return "failed";
-  return extractVerdict(stage, outcome);
+    if (claimViolation) return "failed";
+    return extractVerdict(stage, outcome);
+  } finally {
+    if (reviewerWorkspace) await reviewerWorkspace.release();
+  }
 }
 
 async function resolveRunnerStage(stage: DevelopmentStageDefinition, ctx: DriverContext): Promise<string> {
