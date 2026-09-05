@@ -2,11 +2,14 @@
 // one bounded task dispatched once through a real vendor adapter): creates a throwaway
 // git repository in a temporary directory with a fake application credential, drives
 // one task through the real production supervisor (`createProductionSchedulerTick`,
-// selected via `ORGA_VENDOR`) with the real vendor CLI, and asserts the run reaches
-// `succeeded` with no surviving process group. Schema validity is proved durably rather
-// than by re-reading vendor output: `classifyAttempt` (`src/adapters/classify.ts`) only
-// marks an attempt `completed` once its candidate report has passed schema validation,
-// so a `completed` attempt row is proof the report was schema-valid.
+// selected via `ORGA_VENDOR`) with the real vendor CLI, and asserts the task's
+// `implement` stage reaches attempt status `completed` against a real, brief-sourced
+// packet, with no surviving process group; the run's own terminal state is recorded but
+// not asserted, since the reviewer/integrator stages still dispatch on a placeholder
+// packet. Schema validity is proved durably rather than by re-reading vendor output:
+// `classifyAttempt` (`src/adapters/classify.ts`) only marks an attempt `completed` once
+// its candidate report has passed schema validation, so a `completed` attempt row is
+// proof the report was schema-valid.
 //
 // Opt-in: this runs only when `ORGA_LIVE=1` and the vendor's real readiness probe
 // reports the CLI installed and authenticated; otherwise it returns a stated skip
@@ -26,16 +29,14 @@ import { CODEX_VENDOR_PROBE_SPEC } from "../../src/adapters/codex-adapter.ts";
 import { probeVendor } from "../../src/adapters/probe.ts";
 import {
   withFixtureWorkspace,
-  writeFixtureFiles,
-  boardWithTasks,
-  seedTasks,
+  openStore,
+  withTransaction,
   readRunRow,
   allRows,
   recordedPgidsForRun,
   waitFor,
   alive,
   groupAlive,
-  type FixtureTaskSpec,
 } from "./harness.ts";
 
 export type LiveVendor = "claude" | "codex";
@@ -52,11 +53,94 @@ export type LiveSingleTaskResult =
       cliVersion: string | null;
       workflowRevision: string | null;
       wallTimeMs: number;
+      stages: readonly string[];
     };
 
 const OLLAMA_MODELS_URL = "http://localhost:11434/v1/models";
 const RUN_TERMINAL_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_LIVE_MODEL = "gpt-oss:20b";
+
+const LIVE_TASK_ID = "live-task";
+const LIVE_TASK_TITLE = "Create a NOTES.md fixture marker file";
+const LIVE_TASK_BRIEF_PATH = "live-task-brief.md";
+const LIVE_TASK_MARKER_LINE = "live dispatch packet fixture check";
+
+const LIVE_TASK_BRIEF = [
+  "# live-single-task: create a fixture marker file",
+  "",
+  "## Objective",
+  "",
+  `Create a file named \`NOTES.md\` in the repository root containing exactly the`,
+  `line \`${LIVE_TASK_MARKER_LINE}\`.`,
+  "",
+  "## Acceptance Criteria",
+  "",
+  "- A file named `NOTES.md` exists at the repository root.",
+  `- \`NOTES.md\` contains the line \`${LIVE_TASK_MARKER_LINE}\`.`,
+  "",
+  "## Verification Commands",
+  "",
+  "- test -f NOTES.md",
+  `- grep -Fq "${LIVE_TASK_MARKER_LINE}" NOTES.md`,
+  "",
+  "## Stop Condition",
+  "",
+  "Once `NOTES.md` exists with the required line and both verification",
+  "commands above pass, the task is complete. Make no other changes.",
+  "",
+].join("\n");
+
+function buildLiveBoard(): unknown {
+  return {
+    apiVersion: "ai-workflows.dev/v1alpha1",
+    kind: "Board",
+    metadata: { id: "live-single-task-board", contractVersion: "v1" },
+    spec: {
+      tasks: [
+        {
+          id: LIVE_TASK_ID,
+          title: LIVE_TASK_TITLE,
+          briefPath: LIVE_TASK_BRIEF_PATH,
+          entry: { workflowId: "dev-workflow", stageId: "implementation" },
+          dependencies: [],
+          priority: 0,
+          requiredWorkflowVersions: {},
+          claims: "unknown",
+          verification: [],
+          enabled: true,
+        },
+      ],
+    },
+  };
+}
+
+function insertLiveTask(root: string, runId: string, now: number): void {
+  const db = openStore(root);
+  try {
+    withTransaction(db, () => {
+      db.prepare(
+        `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        LIVE_TASK_ID,
+        runId,
+        LIVE_TASK_ID,
+        LIVE_TASK_TITLE,
+        LIVE_TASK_BRIEF_PATH,
+        "dev-workflow",
+        null,
+        JSON.stringify([]),
+        0,
+        "defined",
+        null,
+        now,
+        now,
+      );
+    });
+  } finally {
+    db.close();
+  }
+}
 
 function gitCapture(cwd: string, args: readonly string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }).trim();
@@ -175,10 +259,12 @@ function patchEnv(values: Record<string, string>): () => void {
 }
 
 interface AttemptRowShape {
+  stage_id: string;
   vendor: string;
   model: string;
   config_json: string;
   status: string;
+  exit_code: number | null;
 }
 
 interface AttemptConfigJson {
@@ -210,9 +296,14 @@ export async function liveSingleTask(vendor: LiveVendor): Promise<LiveSingleTask
     }
 
     try {
-      const tasks: FixtureTaskSpec[] = [{ id: "live-task", title: "live-single-task" }];
-      const { boardPath, workflowPath, templatePath } = writeFixtureFiles(root, tasks);
-      const board = boardWithTasks(tasks);
+      fs.writeFileSync(path.join(root, LIVE_TASK_BRIEF_PATH), LIVE_TASK_BRIEF);
+      const boardPath = path.join(root, "board.json");
+      const workflowPath = path.join(root, "workflow.md");
+      const templatePath = path.join(root, "template.md");
+      const board = buildLiveBoard();
+      fs.writeFileSync(boardPath, JSON.stringify(board, null, 2));
+      fs.writeFileSync(workflowPath, "# workflow\n");
+      fs.writeFileSync(templatePath, "# template\n");
 
       // A vague, unbounded packet (`dispatchEligible`'s own fixed placeholder, not this
       // fixture's to change) left to a real agentic CLI's default `workspace-write`
@@ -249,7 +340,7 @@ export async function liveSingleTask(vendor: LiveVendor): Promise<LiveSingleTask
       } finally {
         restoreEnv();
       }
-      seedTasks(root, runId, tasks, startedAt);
+      insertLiveTask(root, runId, startedAt);
 
       try {
         const reachedTerminal = await waitFor(() => {
@@ -263,24 +354,24 @@ export async function liveSingleTask(vendor: LiveVendor): Promise<LiveSingleTask
             `live-single-task (${vendor}): run did not reach a terminal state within ${RUN_TERMINAL_TIMEOUT_MS}ms; last state: ${JSON.stringify(run)}`,
           );
         }
-        if (run.state !== "succeeded") {
-          throw new Error(
-            `live-single-task (${vendor}): run reached terminal state ${JSON.stringify(run.state)}, expected "succeeded"; reason: ${JSON.stringify(run.terminal_reason)}`,
-          );
-        }
 
         const attempts = allRows<AttemptRowShape>(
           root,
-          `SELECT vendor, model, config_json, status FROM attempts WHERE run_id = ?`,
+          `SELECT stage_id, vendor, model, config_json, status, exit_code FROM attempts WHERE run_id = ? ORDER BY created_at ASC`,
           runId,
         );
-        const completed = attempts.find((a) => a.status === "completed");
-        if (!completed) {
+        const implementCompleted = attempts.find((a) => a.stage_id === "implement" && a.status === "completed");
+        if (!implementCompleted) {
+          const diagnosticEvents = allRows<{ type: string; payload: string }>(
+            root,
+            `SELECT type, payload FROM events WHERE run_id = ? AND type IN ('attempt.normalized', 'attempt.claim-violation', 'attempt.spawn-failed') ORDER BY seq ASC`,
+            runId,
+          );
           throw new Error(
-            `live-single-task (${vendor}): no attempt reached status "completed"; attempts: ${JSON.stringify(attempts)}`,
+            `live-single-task (${vendor}): no attempt at stage_id "implement" reached status "completed"; runId ${runId}; run reached terminal state ${JSON.stringify(run.state)} (reason: ${JSON.stringify(run.terminal_reason)}); attempts: ${JSON.stringify(attempts)}; events: ${JSON.stringify(diagnosticEvents)}`,
           );
         }
-        const config = JSON.parse(completed.config_json) as AttemptConfigJson;
+        const config = JSON.parse(implementCompleted.config_json) as AttemptConfigJson;
 
         await waitFor(() => !alive(supervisorPid), 10000);
         const survivors = recordedPgidsForRun(root, runId).filter((pgid) => groupAlive(pgid));
@@ -293,11 +384,12 @@ export async function liveSingleTask(vendor: LiveVendor): Promise<LiveSingleTask
           runId,
           state: run.state as string,
           vendor,
-          model: completed.model,
+          model: implementCompleted.model,
           effort: config.profile?.effort ?? "unknown",
           cliVersion: config.cliVersion ?? null,
           workflowRevision: config.workflowRevision ?? null,
           wallTimeMs: Date.now() - startedAt,
+          stages: attempts.map((a) => `${a.stage_id}:${a.status}`),
         };
       } finally {
         if (alive(supervisorPid)) {
