@@ -3,8 +3,9 @@
 // Three scenarios, none of which need a spawned supervisor: the first two
 // drive `runIntegrationStages` directly (mirroring `17-destination-and-
 // conflict.ts`'s own setup); the third calls `predicates.ts`'s `accept()`
-// directly, since AC9's "reuses accept() rather than a new acceptance rule"
-// is a property of that pure function, not of this stage machine.
+// directly, since integration acceptance reuses that function rather than a
+// new acceptance rule, which is a property of that pure function, not of
+// this stage machine.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

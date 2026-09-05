@@ -33,7 +33,7 @@ import { runVerificationBarrier, taskChecksPass } from "./barrier.ts";
 import { positiveInt, type Read } from "../cli/config.ts";
 import { removeWorkspace, type WorkspaceHandle, type WorkspaceRemovalResult } from "../git/workspace.ts";
 import {
-  advanceDestination,
+  advanceIntegration,
   createCandidateWorkspace,
   headSha,
   readRefSha,
@@ -534,7 +534,8 @@ async function advanceDestinationStage(ctx: IntegrationDriverContext): Promise<"
   }
 
   const newSha = headSha(candidate.path);
-  const ok = advanceDestination({
+  const ok = advanceIntegration({
+    strategy: "replay-and-fast-forward",
     projectRoot: input.projectRoot,
     ref: input.destinationRef,
     newSha,
@@ -744,10 +745,10 @@ function evidenceForStage(stage: IntegrationStageDefinition, ctx: IntegrationDri
 
 // Resumes a task whose `integrations` row already durably reports
 // `disposition: 'integrated'` but whose worktrees are not all `cleaned`: the
-// prior attempt's evidence is already committed (AC9's durability
-// requirement), so this call retries only the removal rather than
-// re-running the whole pipeline (which would rebuild a candidate, re-dispatch
-// `cross-task-review`, and re-attempt an already-satisfied compare-and-swap).
+// prior attempt's evidence is already committed, so this call retries only
+// the removal rather than re-running the whole pipeline (which would rebuild
+// a candidate, re-dispatch `cross-task-review`, and re-attempt an
+// already-satisfied compare-and-swap).
 async function resumePendingCleanup(input: IntegrationStagesInput): Promise<IntegrationStagesOutcome | null> {
   const row = input.db
     .prepare(

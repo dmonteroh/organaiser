@@ -152,3 +152,26 @@ export interface AdvanceDestinationInput {
 export function advanceDestination(input: AdvanceDestinationInput): boolean {
   return git(["update-ref", input.ref, input.newSha, input.expectedOldSha], { cwd: input.projectRoot, tolerant: true }) !== null;
 }
+
+// The integration strategies a destination can be landed with. This module
+// implements only `replay-and-fast-forward` (candidate worktree, replay,
+// compare-and-swap, all above). `commit-on-branch` is the `in-place`
+// workspace mode's landing step — a commit on the current branch, with no
+// candidate worktree and no compare-and-swap.
+export type IntegrationStrategy = "replay-and-fast-forward" | "commit-on-branch";
+
+export interface AdvanceIntegrationInput extends AdvanceDestinationInput {
+  strategy: IntegrationStrategy;
+}
+
+// The strategy switch every caller lands an integration through.
+// `replay-and-fast-forward` reduces to `advanceDestination`'s compare-and-
+// swap above; every current call site uses this branch exclusively.
+export function advanceIntegration(input: AdvanceIntegrationInput): boolean {
+  switch (input.strategy) {
+    case "replay-and-fast-forward":
+      return advanceDestination(input);
+    case "commit-on-branch":
+      throw new Error("commit-on-branch: not implemented — P7e fills this in"); // P7e: commit-on-branch integration is not implemented.
+  }
+}
