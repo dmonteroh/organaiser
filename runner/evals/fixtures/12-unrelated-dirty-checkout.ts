@@ -18,7 +18,6 @@ import {
   waitFor,
   startGitFixtureRun,
   assertOperatorCheckoutUnchanged,
-  seedTasks,
   allRows,
   countRows,
   spawnFixtureSupervisor,
@@ -62,12 +61,23 @@ export async function unrelatedDirtyCheckoutDoesNotAffectTask(): Promise<void> {
 
     await assertOperatorCheckoutUnchanged(dir, async () => {
       try {
-        seedTasks(dir, runId, [{ id: "task-a" }], Date.now());
+        const now = Date.now();
+        const db = openStore(dir);
+        try {
+          withTransaction(db, () => {
+            db.prepare(
+              `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run("task-a", runId, "task-a", "task-a", "brief.md", "dev-workflow", "integration", "[]", 0, "defined", null, now, now);
+          });
+        } finally {
+          db.close();
+        }
         seedFilesClaim(dir, runId, "task-a", []);
 
-        writeStream(streamsDir, "implementation", "task-a", [
+        writeStream(streamsDir, "integration", "task-a", [
           outputLine("working"),
-          reportLine({ taskId: "task-a", stageId: "implementation", status: "completed", summary: "did the work" }),
+          reportLine({ taskId: "task-a", stageId: "integration", status: "completed", summary: "did the work" }),
           exitLine(0),
         ]);
 

@@ -315,6 +315,7 @@ interface DriverContext {
   input: DevelopmentStageInput;
   lastAgentAttempt: LastAgentAttempt | null;
   barrierCache: { attemptId: string; result: BarrierResult } | null;
+  lastAgentReport: Record<string, unknown> | null;
 }
 
 function extractVerdict(stage: DevelopmentStageDefinition, outcome: AttemptOutcome): string {
@@ -376,6 +377,7 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
 
   const artifacts = await input.adapter.collect(handle);
   const outcome = await input.adapter.classify(artifacts);
+  ctx.lastAgentReport = outcome.report;
 
   const claimViolation = input.workspace
     ? await validateAttemptClaims(input.db, input.runId, input.taskId, input.workspace)
@@ -492,11 +494,106 @@ function gateForEdge(stageId: string, verdict: string, target: string): string |
   return null;
 }
 
+// The single `DEVELOPMENT_CAPS` key a stage could ever advance, known before
+// that stage's verdict is resolved (unlike `gateForEdge`, which additionally
+// needs the verdict and target). Every gate name in `DEVELOPMENT_CAPS` has
+// exactly one entry here.
+function gateForStage(stageId: string): string | null {
+  if (stageId === "review-spec") return "specReviewGate";
+  if (stageId === "review-quality") return "qualityReviewGate";
+  if (stageId === "collect-implementation-artifacts") return "artifactRepair";
+  if (stageId === "verify-task") return "taskChecksGate";
+  if (stageId === "implement" || stageId === "fix-spec" || stageId === "fix-quality") return "questionsLoop";
+  return null;
+}
+
+// Resumes `gateRounds` from the run's durable `gates` rows for this task, so
+// a driver restarted after a crash never re-starts a gate's count at zero.
+function resumeGateRounds(
+  db: DatabaseSync,
+  runId: string,
+  taskId: string,
+  gateRounds: Record<string, number>,
+): void {
+  const rows = db
+    .prepare(`SELECT gate_type, MAX(round) AS maxRound FROM gates WHERE run_id = ? AND task_id = ? GROUP BY gate_type`)
+    .all(runId, taskId) as Array<{ gate_type: string; maxRound: number }>;
+  for (const row of rows) {
+    if (Object.prototype.hasOwnProperty.call(gateRounds, row.gate_type)) {
+      gateRounds[row.gate_type] = row.maxRound;
+    }
+  }
+
+  // This call has not yet written a pending row of its own, so any row still
+  // `verdict IS NULL` here belongs to an earlier invocation that never
+  // reached its own `finalizeGate`/`discardPendingGate` call. Its round is
+  // already folded into `gateRounds` above; the row itself is discarded so
+  // it is never left permanently undecided for `executeGates` to find once
+  // this task later reaches a terminal disposition.
+  const orphaned = db
+    .prepare(`SELECT id FROM gates WHERE run_id = ? AND task_id = ? AND verdict IS NULL`)
+    .all(runId, taskId) as Array<{ id: string }>;
+  for (const orphan of orphaned) {
+    discardPendingGate(db, orphan.id);
+  }
+}
+
+// Commits the pending row a gated stage's dispatch durably claims before it
+// runs: a crash between this write and the round's resolution leaves a
+// `verdict IS NULL` row a restart resumes from, rather than losing the round.
+function insertPendingGate(
+  db: DatabaseSync,
+  runId: string,
+  taskId: string,
+  gateType: string,
+  round: number,
+  cap: number,
+  nowMs: number,
+): string {
+  const id = randomUUID();
+  withTransaction(db, () => {
+    db.prepare(
+      `INSERT INTO gates (id, run_id, task_id, gate_type, round, cap, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, runId, taskId, gateType, round, cap, nowMs);
+  });
+  return id;
+}
+
+// Only a gate's counted-failure edge is ever finalized; a passing round is
+// discarded instead (`discardPendingGate`), so `verdict` is always "fail"
+// here.
+function finalizeGate(db: DatabaseSync, id: string, evidenceRef: string | null, nowMs: number): void {
+  withTransaction(db, () => {
+    db.prepare(`UPDATE gates SET verdict = ?, evidence_ref = ?, decided_at = ? WHERE id = ?`).run(
+      "fail",
+      evidenceRef,
+      nowMs,
+      id,
+    );
+  });
+}
+
+// A speculative round that turned out not to be the gate's counted edge (the
+// stage passed, or its verdict fell outside its declared transitions): the
+// pending row committed before dispatch never became a round, so it is
+// removed rather than left as a permanently unresolved row.
+function discardPendingGate(db: DatabaseSync, id: string): void {
+  withTransaction(db, () => {
+    db.prepare(`DELETE FROM gates WHERE id = ?`).run(id);
+  });
+}
+
+function evidenceForStage(stage: DevelopmentStageDefinition, ctx: DriverContext): string | null {
+  const value = stage.kind === "agent" ? ctx.lastAgentReport : ctx.barrierCache?.result ?? null;
+  return value ? JSON.stringify(value) : null;
+}
+
 export async function runDevelopmentStages(input: DevelopmentStageInput): Promise<DevelopmentOutcome> {
-  const ctx: DriverContext = { input, lastAgentAttempt: null, barrierCache: null };
+  const ctx: DriverContext = { input, lastAgentAttempt: null, barrierCache: null, lastAgentReport: null };
   const gateRounds: Record<string, number> = Object.fromEntries(
     Object.keys(DEVELOPMENT_CAPS).map((name) => [name, 0]),
   );
+  resumeGateRounds(input.db, input.runId, input.taskId, gateRounds);
   const stages: DevelopmentStageVisit[] = [];
 
   let currentId = DEVELOPMENT_ENTRY_STAGE;
@@ -507,11 +604,38 @@ export async function runDevelopmentStages(input: DevelopmentStageInput): Promis
       throw new Error(`unknown development stage id: ${currentId}`);
     }
 
+    const gateName = gateForStage(stage.id);
+    let pendingGateId: string | null = null;
+    let pendingRound = 0;
+    if (gateName) {
+      pendingRound = (gateRounds[gateName] ?? 0) + 1;
+      pendingGateId = insertPendingGate(
+        input.db,
+        input.runId,
+        input.taskId,
+        gateName,
+        pendingRound,
+        DEVELOPMENT_CAPS[gateName]!,
+        input.now(),
+      );
+    }
+
     const verdict = stage.kind === "agent" ? await runAgentStage(stage, ctx) : await resolveRunnerStage(stage, ctx);
 
     const target = Object.prototype.hasOwnProperty.call(stage.transitions, verdict)
       ? stage.transitions[verdict]
       : undefined;
+
+    const resolvedGate = target === undefined ? null : gateForEdge(stage.id, verdict, target);
+
+    if (pendingGateId) {
+      if (resolvedGate === gateName) {
+        gateRounds[gateName!] = pendingRound;
+        finalizeGate(input.db, pendingGateId, evidenceForStage(stage, ctx), input.now());
+      } else {
+        discardPendingGate(input.db, pendingGateId);
+      }
+    }
 
     if (target === undefined) {
       stages.push({ stageId: stage.id, verdict: "schema-invalid" });
@@ -520,12 +644,8 @@ export async function runDevelopmentStages(input: DevelopmentStageInput): Promis
 
     stages.push({ stageId: stage.id, verdict });
 
-    const gateName = gateForEdge(stage.id, verdict, target);
-    if (gateName) {
-      gateRounds[gateName] = (gateRounds[gateName] ?? 0) + 1;
-      if (gateRounds[gateName]! >= DEVELOPMENT_CAPS[gateName]!) {
-        return { outcome: "parked", stages, gateRounds };
-      }
+    if (resolvedGate && gateRounds[resolvedGate]! >= DEVELOPMENT_CAPS[resolvedGate]!) {
+      return { outcome: "parked", stages, gateRounds };
     }
 
     if (TERMINAL_OUTCOME_IDS.has(target)) {

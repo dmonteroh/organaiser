@@ -28,6 +28,7 @@ import {
   withFixtureWorkspace,
   TEST_SUPERVISOR_PATH,
   openStore,
+  withTransaction,
 } from "./harness.ts";
 import { dispatchAttempt, computeInputVersion } from "../../src/engine/dispatch.ts";
 import { FakeAdapter, type TerminateFn } from "../../src/adapters/fake.ts";
@@ -40,13 +41,24 @@ export async function duplicateDispatchSupervisorRace(): Promise<void> {
     const registry = new ProcessRegistry();
     try {
       const { runId } = startFixtureRun(dir, [{ id: "task-a" }]);
-      seedTasks(dir, runId, [{ id: "task-a" }], Date.now());
+      const now = Date.now();
+      const db = openStore(dir);
+      try {
+        withTransaction(db, () => {
+          db.prepare(
+            `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run("task-a", runId, "task-a", "task-a", "brief.md", "dev-workflow", "integration", "[]", 0, "defined", null, now, now);
+        });
+      } finally {
+        db.close();
+      }
 
       const streamsDir = path.join(dir, "streams");
-      writeStream(streamsDir, "implementation", "task-a", [
+      writeStream(streamsDir, "integration", "task-a", [
         outputLine("working"),
         sleepLine(TICK_INTERVAL_MS * 20),
-        reportLine({ taskId: "task-a", stageId: "implementation", summary: "done" }),
+        reportLine({ taskId: "task-a", stageId: "integration", summary: "done" }),
         exitLine(0),
       ]);
 

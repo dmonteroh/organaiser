@@ -28,7 +28,6 @@ import {
   ProcessRegistry,
   waitFor,
   startFixtureRun,
-  seedTasks,
   readTaskRow,
   allRows,
   countRows,
@@ -37,6 +36,8 @@ import {
   outputLine,
   exitLine,
   withFixtureWorkspace,
+  openStore,
+  withTransaction,
 } from "./harness.ts";
 import { FakeAdapter, type TerminateFn } from "../../src/adapters/fake.ts";
 import type { AttemptDescriptor, ExecutionSurface } from "../../src/adapters/adapter.ts";
@@ -55,12 +56,23 @@ export async function invalidReportMissingField(): Promise<void> {
     const registry = new ProcessRegistry();
     try {
       const { runId } = startFixtureRun(dir, [{ id: "task-a" }]);
-      seedTasks(dir, runId, [{ id: "task-a" }], Date.now());
+      const seedNow = Date.now();
+      const seedDb = openStore(dir);
+      try {
+        withTransaction(seedDb, () => {
+          seedDb.prepare(
+            `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run("task-a", runId, "task-a", "task-a", "brief.md", "dev-workflow", "integration", "[]", 0, "defined", null, seedNow, seedNow);
+        });
+      } finally {
+        seedDb.close();
+      }
 
       const streamsDir = path.join(dir, "streams");
       const filesBefore = listFilesRecursive(dir);
 
-      writeStream(streamsDir, "implementation", "task-a", [
+      writeStream(streamsDir, "integration", "task-a", [
         outputLine("starting work"),
         JSON.stringify({
           op: "report",
@@ -71,7 +83,7 @@ export async function invalidReportMissingField(): Promise<void> {
             runId,
             taskId: "task-a",
             attemptId: "attempt_test",
-            stageId: "implementation",
+            stageId: "integration",
             roleId: "implementer",
             status: "completed",
             // `summary` deliberately omitted: a required field.
@@ -98,14 +110,14 @@ export async function invalidReportMissingField(): Promise<void> {
       );
       assert.equal(attempts.length, 1, "at most one attempt (zero repair attempts; P5 implements none)");
       assert.equal(attempts[0]?.status, "failed", "the attempt must be recorded invalid, not completed");
-      assert.equal(attempts[0]?.stage_id, "implementation", "the task must never advance past implementation");
+      assert.equal(attempts[0]?.stage_id, "integration", "the task must never advance past integration");
 
       const noIntegration = countRows(
         dir,
-        `SELECT COUNT(*) AS n FROM attempts WHERE run_id = ? AND task_id = 'task-a' AND stage_id = 'integration'`,
+        `SELECT COUNT(*) AS n FROM attempts WHERE run_id = ? AND task_id = 'task-a' AND stage_id = 'implementation'`,
         runId,
       );
-      assert.equal(noIntegration, 0, "no transition may advance the task past implementation");
+      assert.equal(noIntegration, 0, "no transition may advance the task past integration");
 
       const normalizedEvents = allRows<{ payload: string }>(
         dir,

@@ -66,11 +66,11 @@ export async function supervisorRestart(): Promise<void> {
           db.prepare(
             `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ).run("task-a", runId, "task-a", "Task A", "brief.md", "dev-workflow", "implementation", "[]", 0, "implementing", null, now, now);
+          ).run("task-a", runId, "task-a", "Task A", "brief.md", "dev-workflow", "integration", "[]", 0, "implementing", null, now, now);
           db.prepare(
             `INSERT INTO attempts (id, run_id, task_id, stage_id, role, round, input_version, vendor, model, config_json, mutating, status, created_at, started_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ).run("att-crashed", runId, "task-a", "implementation", "implementer", 1, "v-crash", "fake", "fake", "{}", 0, "running", now, now);
+          ).run("att-crashed", runId, "task-a", "integration", "implementer", 1, "v-crash", "fake", "fake", "{}", 0, "running", now, now);
           db.prepare(
             `INSERT INTO workers (id, run_id, attempt_id, pid, pgid, heartbeat_at, started_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -81,10 +81,10 @@ export async function supervisorRestart(): Promise<void> {
       }
 
       const streamsDir = path.join(dir, "streams");
-      writeStream(streamsDir, "implementation", "task-a", [
+      writeStream(streamsDir, "integration", "task-a", [
         outputLine("working"),
         sleepLine(TICK_INTERVAL_MS * 2),
-        reportLine({ taskId: "task-a", stageId: "implementation", summary: "done" }),
+        reportLine({ taskId: "task-a", stageId: "integration", summary: "done" }),
         exitLine(0),
       ]);
       writeStream(streamsDir, "integration", "task-a", [
@@ -119,7 +119,7 @@ export async function supervisorRestart(): Promise<void> {
       const round2Live = await waitFor(() => {
         const rows = allRows<{ round: number; status: string }>(
           dir,
-          `SELECT round, status FROM attempts WHERE run_id = ? AND task_id = 'task-a' AND stage_id = 'implementation' AND round = 2`,
+          `SELECT round, status FROM attempts WHERE run_id = ? AND task_id = 'task-a' AND stage_id = 'integration' AND round = 2`,
           runId,
         );
         return rows.length === 1 && rows[0]?.status === "running";
@@ -181,7 +181,7 @@ export async function supervisorRestart(): Promise<void> {
 
       const allImplementationAttempts = allRows<{ round: number }>(
         dir,
-        `SELECT round FROM attempts WHERE run_id = ? AND task_id = 'task-a' AND stage_id = 'implementation'`,
+        `SELECT round FROM attempts WHERE run_id = ? AND task_id = 'task-a' AND stage_id = 'integration'`,
         runId,
       );
       const rounds = allImplementationAttempts.map((row) => row.round);

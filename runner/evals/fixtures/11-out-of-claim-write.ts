@@ -20,7 +20,6 @@ import {
   waitFor,
   startGitFixtureRun,
   assertOperatorCheckoutUnchanged,
-  seedTasks,
   readTaskRow,
   allRows,
   countRows,
@@ -61,14 +60,25 @@ export async function outOfClaimWrite(): Promise<void> {
 
     await assertOperatorCheckoutUnchanged(dir, async () => {
       try {
-        seedTasks(dir, runId, [{ id: "task-a" }], Date.now());
+        const now = Date.now();
+        const db = openStore(dir);
+        try {
+          withTransaction(db, () => {
+            db.prepare(
+              `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run("task-a", runId, "task-a", "task-a", "brief.md", "dev-workflow", "integration", "[]", 0, "defined", null, now, now);
+          });
+        } finally {
+          db.close();
+        }
         seedFilesClaim(dir, runId, "task-a", ["claimed.txt"]);
 
-        writeStream(streamsDir, "implementation", "task-a", [
+        writeStream(streamsDir, "integration", "task-a", [
           writeFileLine("claimed.txt", "claimed contents\n"),
           writeFileLine("unclaimed.txt", "unclaimed contents\n"),
           outputLine("writing files"),
-          reportLine({ taskId: "task-a", stageId: "implementation", status: "completed", summary: "wrote two files" }),
+          reportLine({ taskId: "task-a", stageId: "integration", status: "completed", summary: "wrote two files" }),
           exitLine(0),
         ]);
 
@@ -105,7 +115,7 @@ export async function outOfClaimWrite(): Promise<void> {
         assert.deepEqual(payload.outOfClaim, ["unclaimed.txt"]);
 
         const taskAfter = readTaskRow(dir, "task-a");
-        assert.equal(taskAfter?.stage_id, "implementation", "the rejected attempt must not advance the task's stage");
+        assert.equal(taskAfter?.stage_id, "integration", "the rejected attempt must not advance the task's stage");
 
         const worktreeRows = allRows<{ path: string; cleanup_state: string }>(
           dir,

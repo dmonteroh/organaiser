@@ -25,7 +25,6 @@ import {
   groupAlive,
   waitFor,
   startFixtureRun,
-  seedTasks,
   readRunRow,
   allRows,
   writeStream,
@@ -35,6 +34,8 @@ import {
   exitLine,
   withFixtureWorkspace,
   TEST_SUPERVISOR_PATH,
+  openStore,
+  withTransaction,
 } from "./harness.ts";
 import { spawn } from "node:child_process";
 
@@ -47,15 +48,26 @@ export async function callerExitSurvival(): Promise<void> {
 
     try {
       const { runId } = startFixtureRun(dir, [{ id: "task-a" }]);
-      seedTasks(dir, runId, [{ id: "task-a" }], Date.now());
+      const now = Date.now();
+      const db = openStore(dir);
+      try {
+        withTransaction(db, () => {
+          db.prepare(
+            `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run("task-a", runId, "task-a", "task-a", "brief.md", "dev-workflow", "integration", "[]", 0, "defined", null, now, now);
+        });
+      } finally {
+        db.close();
+      }
 
       const streamsDir = path.join(dir, "streams");
       // Well past two tick intervals (2 * 200ms), so the run is still
       // actively ticking (a live worker) when the caller is killed.
-      writeStream(streamsDir, "implementation", "task-a", [
+      writeStream(streamsDir, "integration", "task-a", [
         outputLine("starting"),
         sleepLine(TICK_INTERVAL_MS * 6),
-        ...wellFormedStream({ taskId: "task-a", stageId: "implementation" }).slice(1),
+        ...wellFormedStream({ taskId: "task-a", stageId: "integration" }).slice(1),
       ]);
 
       const logPath = path.join(dir, ".orga", "runs", runId, "supervisor.log");
