@@ -29,7 +29,7 @@ export function buildClaudeAttemptCommand(
   profile: ResolvedVendorProfile,
   packet: string,
   surface: ExecutionSurface,
-  schemaPath: string,
+  schemaText: string,
 ): VendorCommand {
   const args: string[] = [
     "--print",
@@ -37,7 +37,7 @@ export function buildClaudeAttemptCommand(
     "stream-json",
     "--verbose",
     "--json-schema",
-    schemaPath,
+    schemaText,
     "--model",
     profile.model,
     "--effort",
@@ -243,8 +243,12 @@ export function extractSignals(input: VendorSignalInput): ClaudeVendorSignals {
 export function createClaudeVendorAdapterSpec(profile: ResolvedVendorProfile): VendorAdapterSpec {
   return {
     vendor: "claude",
-    buildCommand: (context: VendorCommandContext): VendorCommand =>
-      buildClaudeAttemptCommand(profile, context.packet, context.surface, context.schemaPath),
+    buildCommand: (context: VendorCommandContext): VendorCommand => {
+      if (context.schemaText === undefined) {
+        throw new Error("createClaudeVendorAdapterSpec: context.schemaText is required but was undefined");
+      }
+      return buildClaudeAttemptCommand(profile, context.packet, context.surface, context.schemaText);
+    },
     toEvents,
     extractSignals,
   };

@@ -41,6 +41,7 @@ export interface VendorCommandContext {
   packet: string;
   surface: ExecutionSurface;
   schemaPath: string;
+  schemaText?: string;
 }
 
 /** What `toEvents` returns for one framed stdout value. */
@@ -200,7 +201,9 @@ function notifyWaiters(waiters: Array<() => void>): void {
  */
 export function createVendorAdapter(spec: VendorAdapterSpec, options: VendorAdapterOptions): ProcessAdapter {
   const schemaPath = options.schemaPath ?? DEFAULT_SCHEMA_PATH;
-  const reportValidator: ReportValidator = createReportValidator(loadBundledStageResultSchema(schemaPath));
+  const bundledSchema = loadBundledStageResultSchema(schemaPath);
+  const reportValidator: ReportValidator = createReportValidator(bundledSchema);
+  const schemaText = JSON.stringify(bundledSchema);
   const attempts = new Map<string, RuntimeAttempt>();
 
   function requireAttempt(attemptId: string): RuntimeAttempt {
@@ -215,7 +218,7 @@ export function createVendorAdapter(spec: VendorAdapterSpec, options: VendorAdap
     },
 
     async start(attempt: AttemptDescriptor, packet: string, surface: ExecutionSurface): Promise<ProcessHandle> {
-      const command = spec.buildCommand({ attempt, packet, surface, schemaPath });
+      const command = spec.buildCommand({ attempt, packet, surface, schemaPath, schemaText });
       const child = spawn(command.command, [...command.args], {
         cwd: command.cwd,
         env: command.env,
