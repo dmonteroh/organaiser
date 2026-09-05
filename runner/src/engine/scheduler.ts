@@ -47,6 +47,7 @@ import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick
 import type { TaskRow, TaskState } from "../store/types.ts";
 import { resolveVendorProfile, serializeResolvedProfile, type ResolvedVendorProfile } from "../cli/profiles.ts";
 import { runDevelopmentStages, type DevelopmentOutcome } from "./workflow-stages.ts";
+import { buildDispatchPacketInput } from "../compile/dispatch-packet-input.ts";
 
 export interface StageDefinition {
   id: string;
@@ -760,6 +761,10 @@ export async function dispatchEligible(
         vendor: dispatchProfile?.vendor ?? "fake",
         model: dispatchProfile?.profile.model ?? "fake",
         configJson,
+        packet: buildDispatchPacketInput(
+          { id: task.id, title: task.title, briefPath: task.brief_path },
+          { db: ctx.db, runId: ctx.runId, projectRoot: workspace?.projectRoot ?? process.cwd() },
+        ),
         ...(workspaceHandle ? { workspace: workspaceHandle } : {}),
       });
       runtime.developmentOutcomeByTaskId.set(task.id, developmentOutcome);
