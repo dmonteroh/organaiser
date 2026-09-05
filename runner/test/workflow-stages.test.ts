@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -16,6 +17,7 @@ import {
   runDevelopmentStages,
   type DevelopmentStageInput,
 } from "../src/engine/workflow-stages.ts";
+import type { WorkspaceHandle } from "../src/git/workspace.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 
 // A minimal reader for `development.v1.yaml` only, following the pattern and
@@ -406,6 +408,45 @@ async function withEnv(fn: (env: TestEnv) => Promise<void>): Promise<void> {
   });
 }
 
+// Mirrors `claims.test.ts:11-54`'s own git and `WorkspaceHandle` fixtures:
+// a real repo, seeded with one commit, so `observedPaths` has a
+// `baseCommit` to diff against.
+function runGit(dir: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: dir,
+    stdio: ["ignore", "pipe", "pipe"],
+    encoding: "utf8",
+  }).trim();
+}
+
+function initGitWorkspace(dir: string): string {
+  runGit(dir, ["init", "-q"]);
+  runGit(dir, ["config", "commit.gpgsign", "false"]);
+  fs.writeFileSync(path.join(dir, "seed.txt"), "seed\n", "utf8");
+  runGit(dir, ["add", "-A"]);
+  runGit(dir, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "-q", "-m", "seed"]);
+  return runGit(dir, ["rev-parse", "HEAD"]);
+}
+
+function handleFor(dir: string, baseCommit: string): WorkspaceHandle {
+  return {
+    mode: "worktree",
+    root: ".orga/worktrees",
+    path: dir,
+    branch: "orga/task/task-1",
+    baseCommit,
+    recordedDirt: [],
+  };
+}
+
+function seedFilesClaim(db: ReturnType<typeof openStore>, runId: string, taskId: string, paths: string[]): void {
+  withTransaction(db, () => {
+    db.prepare(
+      `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(`claim-${taskId}`, runId, taskId, "files", JSON.stringify(paths), 1000);
+  });
+}
+
 function baseInput(env: TestEnv, adapter: FakeAdapter, overrides: Partial<DevelopmentStageInput> = {}): DevelopmentStageInput {
   return {
     db: env.db,
@@ -708,4 +749,111 @@ test("mutating DEVELOPMENT_CAPS.specReviewGate changes the round count the drive
   }
 
   assert.equal(DEVELOPMENT_CAPS.specReviewGate, 3);
+});
+
+// ── Claim validation on `authority: workspace-write` stages ─────────────
+
+test("an implement attempt whose write stays inside the recorded claim proceeds past implement normally", async () => {
+  await withEnv(async (env) => {
+    seedFilesClaim(env.db, RUN_ID, TASK_ID, ["output.txt"]);
+
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed", {
+      path: "output.txt",
+      text: "done\n",
+    });
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "pass", "pass");
+    queue("review-spec", "pass");
+    queueReviewerScenario(env.streamsDir, "review-quality", "code-quality-reviewer", "pass", "pass");
+    queue("review-quality", "pass");
+
+    // A dedicated directory, separate from `env.taskDir` and
+    // `env.streamsDir`, so the barrier's own ledger writes under `taskDir`
+    // and the queued scenario files under `streamsDir` never land inside
+    // the git repo `observedPaths` diffs.
+    const workspaceDir = path.join(env.dir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const baseCommit = initGitWorkspace(workspaceDir);
+    const workspace = handleFor(workspaceDir, baseCommit);
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter, { workspace }));
+
+    assert.equal(outcome.outcome, "integrating");
+    assert.deepEqual(
+      outcome.stages.map((s) => s.stageId),
+      [
+        "implement",
+        "collect-implementation-artifacts",
+        "verify-task",
+        "review-spec",
+        "review-quality",
+        "record-minors",
+        "ready-to-integrate",
+      ],
+    );
+
+    const implementAttempt = env.db
+      .prepare(`SELECT status FROM attempts WHERE run_id = ? AND task_id = ? AND stage_id = 'implement'`)
+      .get(RUN_ID, TASK_ID) as { status: string };
+    assert.equal(implementAttempt.status, "completed");
+
+    const violationEvents = env.db
+      .prepare(`SELECT id FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`)
+      .all(RUN_ID);
+    assert.equal(violationEvents.length, 0);
+  });
+});
+
+test("an implement attempt that writes an out-of-claim file is failed and routed to parked regardless of its own verdict", async () => {
+  await withEnv(async (env) => {
+    seedFilesClaim(env.db, RUN_ID, TASK_ID, ["claimed.txt"]);
+
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed", {
+      path: "unclaimed.txt",
+      text: "surprise\n",
+    });
+    queue("implement", "completed");
+
+    // See the sibling test above: a dedicated workspace directory keeps
+    // `taskDir`'s barrier ledger and `streamsDir`'s scenario files out of
+    // what `observedPaths` diffs.
+    const workspaceDir = path.join(env.dir, "workspace");
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    const baseCommit = initGitWorkspace(workspaceDir);
+    const workspace = handleFor(workspaceDir, baseCommit);
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter, { workspace }));
+
+    assert.equal(outcome.outcome, "parked");
+    assert.deepEqual(outcome.stages, [{ stageId: "implement", verdict: "failed" }]);
+    assert.equal(outcome.schemaInvalid, undefined);
+
+    const implementAttempt = env.db
+      .prepare(`SELECT status FROM attempts WHERE run_id = ? AND task_id = ? AND stage_id = 'implement'`)
+      .get(RUN_ID, TASK_ID) as { status: string };
+    assert.equal(
+      implementAttempt.status,
+      "failed",
+      "the claim violation overrides the adapter's own completed verdict",
+    );
+
+    const normalizedEvents = env.db
+      .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.normalized'`)
+      .all(RUN_ID) as Array<{ payload: string }>;
+    assert.equal(normalizedEvents.length, 1);
+    assert.equal(
+      (JSON.parse(normalizedEvents[0]!.payload) as { ok: boolean }).ok,
+      true,
+      "the adapter's own classification is unaffected; only the recorded attempt status is overridden",
+    );
+
+    const violationEvents = env.db
+      .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`)
+      .all(RUN_ID) as Array<{ payload: string }>;
+    assert.equal(violationEvents.length, 1);
+    const payload = JSON.parse(violationEvents[0]!.payload) as { outOfClaim: string[] };
+    assert.deepEqual(payload.outOfClaim, ["unclaimed.txt"]);
+  });
 });
