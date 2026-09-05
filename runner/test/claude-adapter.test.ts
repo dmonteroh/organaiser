@@ -74,16 +74,27 @@ function baseSurface(overrides: Partial<ExecutionSurface> = {}): ExecutionSurfac
 
 // ── buildClaudeAttemptCommand: the argument array ───────────────────────────
 
+const SAMPLE_SCHEMA_TEXT = JSON.stringify({
+  $id: "https://ai-workflows.dev/schemas/stage-result.schema.json",
+  type: "object",
+  properties: {
+    openQuestions: { type: "array", items: { $ref: "#/$defs/openQuestion" } },
+  },
+  $defs: {
+    openQuestion: { type: "object", properties: { id: { type: "string" } } },
+  },
+});
+
 test("buildClaudeAttemptCommand: base array begins with the goals spec section 15 shape", () => {
   const profile = baseProfile({ model: "sonnet", effort: "medium", permissionMode: "default" });
-  const command = buildClaudeAttemptCommand(profile, "packet body", baseSurface(), "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "packet body", baseSurface(), SAMPLE_SCHEMA_TEXT);
   assert.deepEqual(command.args.slice(0, 12), [
     "--print",
     "--output-format",
     "stream-json",
     "--verbose",
     "--json-schema",
-    "/schema/path.json",
+    SAMPLE_SCHEMA_TEXT,
     "--model",
     "sonnet",
     "--effort",
@@ -93,10 +104,21 @@ test("buildClaudeAttemptCommand: base array begins with the goals spec section 1
   ]);
 });
 
+test("buildClaudeAttemptCommand: the --json-schema argument is bundled schema JSON text, parseable with no unresolved $refs", () => {
+  const profile = baseProfile();
+  const command = buildClaudeAttemptCommand(profile, "packet body", baseSurface(), SAMPLE_SCHEMA_TEXT);
+  const schemaIndex = command.args.indexOf("--json-schema");
+  const pushedText = command.args[schemaIndex + 1];
+  assert.equal(pushedText.startsWith("/"), false, "the pushed argument must not be a filesystem path");
+  const parsed = JSON.parse(pushedText);
+  assert.equal(typeof parsed, "object");
+  assert.equal(/"\$ref"\s*:\s*"https:\/\/ai-workflows\.dev\/schemas\/[^"]+\.json/.test(pushedText), false);
+});
+
 test("buildClaudeAttemptCommand: the packet is stdin input, cwd is the assigned worktree", () => {
   const profile = baseProfile();
   const surface = baseSurface({ workingDirectory: "/worktrees/attempt-1" });
-  const command = buildClaudeAttemptCommand(profile, "the packet body", surface, "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "the packet body", surface, SAMPLE_SCHEMA_TEXT);
   assert.equal(command.input, "the packet body");
   assert.equal(command.cwd, "/worktrees/attempt-1");
   assert.equal(command.command, profile.executable);
@@ -104,7 +126,7 @@ test("buildClaudeAttemptCommand: the packet is stdin input, cwd is the assigned 
 
 test("buildClaudeAttemptCommand: omits --allowedTools/--disallowedTools/--max-budget-usd when the profile carries none of them", () => {
   const profile = baseProfile();
-  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface(), "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface(), SAMPLE_SCHEMA_TEXT);
   assert.equal(command.args.includes("--allowedTools"), false);
   assert.equal(command.args.includes("--disallowedTools"), false);
   assert.equal(command.args.includes("--max-budget-usd"), false);
@@ -114,7 +136,7 @@ test("buildClaudeAttemptCommand: pushes --allowedTools and --disallowedTools onc
   const profile = baseProfile({
     toolPolicy: { allowedTools: ["Read", "Edit"], disallowedTools: ["Bash"] },
   });
-  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface(), "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface(), SAMPLE_SCHEMA_TEXT);
   const allowedIndex = command.args.indexOf("--allowedTools");
   const disallowedIndex = command.args.indexOf("--disallowedTools");
   assert.ok(allowedIndex >= 0 && disallowedIndex >= 0);
@@ -126,7 +148,7 @@ test("buildClaudeAttemptCommand: pushes --allowedTools and --disallowedTools onc
 
 test("buildClaudeAttemptCommand: pushes --max-budget-usd once when profile.budgetUsd is non-null", () => {
   const profile = baseProfile({ budgetUsd: 12.5 });
-  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface(), "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface(), SAMPLE_SCHEMA_TEXT);
   const index = command.args.indexOf("--max-budget-usd");
   assert.ok(index >= 0);
   assert.equal(command.args[index + 1], "12.5");
@@ -138,7 +160,7 @@ test("buildClaudeAttemptCommand: env contains exactly the allowlisted names pres
   const surface = baseSurface({
     environment: { ORGA_ALLOWED: "yes", ORGA_NOT_ALLOWED: "should not appear", PATH: "/usr/bin" },
   });
-  const command = buildClaudeAttemptCommand(profile, "packet", surface, "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "packet", surface, SAMPLE_SCHEMA_TEXT);
   assert.deepEqual(command.env, { ORGA_ALLOWED: "yes" });
   assert.equal("ORGA_NOT_ALLOWED" in command.env, false);
   assert.equal("PATH" in command.env, false);
@@ -146,7 +168,7 @@ test("buildClaudeAttemptCommand: env contains exactly the allowlisted names pres
 
 test("buildClaudeAttemptCommand: an allowlisted name absent from surface.environment is not fabricated into env", () => {
   const profile = baseProfile({ environmentAllowlist: ["ORGA_MISSING"] });
-  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface({ environment: {} }), "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "packet", baseSurface({ environment: {} }), SAMPLE_SCHEMA_TEXT);
   assert.deepEqual(command.env, {});
 });
 
@@ -160,7 +182,7 @@ test("buildClaudeAttemptCommand: never emits --background, --resume, or --contin
     budgetUsd: 5,
   });
   const surface = baseSurface({ environment: { ORGA_ALLOWED: "1" } });
-  const command = buildClaudeAttemptCommand(profile, "packet", surface, "/schema/path.json");
+  const command = buildClaudeAttemptCommand(profile, "packet", surface, SAMPLE_SCHEMA_TEXT);
   assert.equal(command.args.includes("--background"), false);
   assert.equal(command.args.includes("--resume"), false);
   assert.equal(command.args.includes("--continue"), false);
