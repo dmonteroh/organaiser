@@ -6,13 +6,13 @@
 // --until succeeded,failed,blocked` must exit 11.
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 
 import {
   ProcessRegistry,
   waitFor,
   startFixtureRun,
-  seedTasks,
   readRunRow,
   readTaskRow,
   countRows,
@@ -23,6 +23,8 @@ import {
   outputLine,
   exitLine,
   withFixtureWorkspace,
+  openStore,
+  withTransaction,
 } from "./harness.ts";
 import { main } from "../../bin/orga.ts";
 import { EXIT_CODES } from "../../src/cli/exit-codes.ts";
@@ -47,17 +49,29 @@ export async function boardNotDrained(): Promise<void> {
     const registry = new ProcessRegistry();
     try {
       const { runId } = startFixtureRun(dir, [{ id: "task-a" }, { id: "task-b", dependsOn: ["task-a"] }]);
-      seedTasks(
-        dir,
-        runId,
-        [{ id: "task-a" }, { id: "task-b", dependsOn: ["task-a"] }],
-        Date.now(),
-      );
+      const briefPath = path.join(dir, "brief.md");
+      fs.writeFileSync(briefPath, "# Task A\n", "utf8");
+      const now = Date.now();
+      const db = openStore(dir);
+      try {
+        withTransaction(db, () => {
+          db.prepare(
+            `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run("task-a", runId, "task-a", "task-a", briefPath, "dev-workflow", "implementation", "[]", 0, "defined", null, now, now);
+          db.prepare(
+            `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run("task-b", runId, "task-b", "task-b", "brief.md", "dev-workflow", "implementation", '["task-a"]', 1, "defined", null, now, now);
+        });
+      } finally {
+        db.close();
+      }
 
       const streamsDir = path.join(dir, "streams");
-      writeStream(streamsDir, "implementation", "task-a", [
+      writeStream(streamsDir, "implement", "task-a", [
         outputLine("failing"),
-        reportLine({ taskId: "task-a", stageId: "implementation", status: "failed", summary: "could not implement" }),
+        reportLine({ taskId: "task-a", stageId: "implement", status: "failed", summary: "could not implement" }),
         exitLine(0),
       ]);
       // task-b's stream deliberately does not exist: if it were ever

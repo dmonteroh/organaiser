@@ -514,7 +514,7 @@ test("the scheduler never emits succeeded while a live worker exists, even if ev
 
 test("the scheduler never emits succeeded while a dispatchable task exists", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
 
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
     const body = createSchedulerTick(adapter);
@@ -823,7 +823,7 @@ test("reconcileState with a workspace provider: a worktree present on disk with 
 
 test("a composed tick with a workspace provider and a seeded claims row does not rest blocked on stray-claims evidence", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
     const provider = defaultProvider(dir);
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
@@ -883,8 +883,9 @@ test("an orphaned worktree cleanup withholds a succeeded verdict", async () => {
 
 test("both dispatch paths coexist in one run: an implementation task's development pipeline and an integration task's dispatchAttempt", async () => {
   await withRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, briefPath: path.join(dir, "brief.md"), now: clock.now() });
     insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
+    fs.writeFileSync(path.join(dir, "brief.md"), "# Task A\n", "utf8");
 
     const streamsDir = path.join(dir, "dev-streams");
     writeDevStream(streamsDir, "implement", "completed", devImplementerReport("implement", "completed"));
@@ -950,8 +951,9 @@ test("both dispatch paths coexist in one run: an implementation task's developme
 
 test("the scheduler dispatches an unrelated eligible task on the next tick after a task parks at a gate cap", async () => {
   await withRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, briefPath: path.join(dir, "brief.md"), now: clock.now() });
     insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
+    fs.writeFileSync(path.join(dir, "brief.md"), "# Task A\n", "utf8");
 
     const streamsDir = path.join(dir, "dev-streams");
     writeDevStream(streamsDir, "implement", "completed", devImplementerReport("implement", "completed"));
