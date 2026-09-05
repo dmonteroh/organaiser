@@ -1,0 +1,33 @@
+{
+  "units": {
+    "claude-adapter": {
+      "deterministic": [
+        "known-bad-version-refused",
+        "exit-zero-permission-denial",
+        "partial-jsonl",
+        "partial-stream-survives-kill",
+        "structured-error-source"
+      ],
+      "live": ["live-single-task"]
+    },
+    "codex-adapter": {
+      "deterministic": [
+        "known-bad-version-refused",
+        "exit-zero-permission-denial",
+        "partial-jsonl",
+        "partial-stream-survives-kill",
+        "structured-error-source"
+      ],
+      "live": ["live-single-task"]
+    },
+    "fake-adapter": {
+      "deterministic": [
+        "caller-exit-survival",
+        "worker-final-is-data",
+        "board-not-drained",
+        "duplicate-dispatch"
+      ],
+      "live": ["caller-exit-survival"]
+    }
+  }
+}
