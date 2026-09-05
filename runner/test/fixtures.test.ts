@@ -38,6 +38,7 @@ import { outOfClaimWrite } from "../evals/fixtures/11-out-of-claim-write.ts";
 import { unrelatedDirtyCheckoutDoesNotAffectTask } from "../evals/fixtures/12-unrelated-dirty-checkout.ts";
 import { knownBadVersionRefused } from "../evals/fixtures/12-known-bad-version-refused.ts";
 import { adapterStreamCases } from "../evals/fixtures/13-adapter-stream-cases.ts";
+import { gateCapParksTask } from "../evals/fixtures/13-gate-caps.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -74,6 +75,7 @@ for (const c of adapterStreamCases("claude", ADAPTER_STREAM_CASES_DIR)) {
 for (const c of adapterStreamCases("codex", ADAPTER_STREAM_CASES_DIR)) {
   test(c.name, { timeout: FIXTURE_TIMEOUT_MS }, c.run);
 }
+test("gate-caps: a capped task parks while an unrelated task drains", { timeout: FIXTURE_TIMEOUT_MS }, gateCapParksTask);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

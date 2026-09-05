@@ -25,7 +25,7 @@ import {
 } from "../src/engine/scheduler.ts";
 import { createWorkspace, DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../src/git/workspace.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
-import type { ProcessAdapter } from "../src/adapters/adapter.ts";
+import type { AttemptDescriptor, ProcessAdapter } from "../src/adapters/adapter.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 
 const fixturesStreamsDir = fileURLToPath(new URL("./fixtures/fake-streams/", import.meta.url));
@@ -197,6 +197,63 @@ function noWorkAdapter(): ProcessAdapter {
     classify: async () => {
       throw new Error("not used in this test");
     },
+  };
+}
+
+// Writes one `dev-workflow` sub-stage's FakeAdapter stream file, mirroring
+// `workflow-stages.test.ts`'s own `writeStreamFile`/`implementerReport`/
+// `reviewerReport` helpers: a scheduler-level test drives `implementation`
+// tasks through `runDevelopmentStages`, so its stream fixtures are keyed by
+// the manifest's own sub-stage ids (`implement`, `review-spec`, ...), not by
+// the board's `implementation`/`integration` stage ids `FakeAdapter`'s own
+// checked-in fixtures use.
+function writeDevStream(
+  streamsDir: string,
+  stageId: string,
+  scenario: string,
+  report: Record<string, unknown>,
+): void {
+  const ops = [
+    { op: "output", text: "working" },
+    { op: "report", report },
+    { op: "exit", code: 0 },
+  ];
+  fs.mkdirSync(streamsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(streamsDir, `${stageId}--${scenario}.jsonl`),
+    `${ops.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
+function devImplementerReport(stageId: string, status: string): Record<string, unknown> {
+  return {
+    protocolVersion: "1",
+    workflowId: "dev-workflow",
+    workflowVersion: "2.0.0",
+    runId: "run-1",
+    taskId: "task-a",
+    attemptId: "attempt-fixture",
+    stageId,
+    roleId: "implementer",
+    status,
+    summary: `implementer reported ${status}`,
+  };
+}
+
+function devReviewerReport(stageId: string, roleId: string, verdict: string): Record<string, unknown> {
+  return {
+    protocolVersion: "1",
+    workflowId: "dev-workflow",
+    workflowVersion: "2.0.0",
+    runId: "run-1",
+    taskId: "task-a",
+    attemptId: "attempt-fixture",
+    stageId,
+    roleId,
+    status: "completed",
+    verdict,
+    summary: `reviewer reported ${verdict}`,
   };
 }
 
@@ -487,8 +544,8 @@ test("executeGates and reconcileState record invariant evidence instead of throw
 
 test("the scheduler dispatches a two-task board strictly one attempt at a time", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, now: clock.now() });
-    insertTask(db, { id: "task-b", runId, stageId: "implementation", priority: 1, now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", priority: 0, now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
 
     const adapter = new FakeAdapter({
       terminate: noopTerminate,
@@ -520,12 +577,12 @@ test("priority filtering never bypasses eligibility: a higher-priority ineligibl
     insertTask(db, {
       id: "task-a",
       runId,
-      stageId: "implementation",
+      stageId: "integration",
       priority: 0,
       dependsOn: ["missing-dependency"],
       now: clock.now(),
     });
-    insertTask(db, { id: "task-b", runId, stageId: "implementation", priority: 1, now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
 
     const adapter = new FakeAdapter({
       terminate: noopTerminate,
@@ -542,7 +599,7 @@ test("priority filtering never bypasses eligibility: a higher-priority ineligibl
 
 test("dispatchEligible: a mutating task with no claims rows is not dispatched when a workspace provider is present, and is dispatched once a claims row exists", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     const provider = defaultProvider(dir);
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
 
@@ -566,7 +623,7 @@ test("dispatchEligible: a mutating task with no claims rows is not dispatched wh
 
 test("dispatchEligible with no workspace provider: unchanged behavior — zero worktrees rows, process.cwd() as the working directory", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
 
     const runtime = createSchedulerRuntime();
@@ -583,7 +640,7 @@ test("dispatchEligible with no workspace provider: unchanged behavior — zero w
 
 test("dispatchEligible with a workspace provider: a mutating dispatch runs inside a runner-owned worktree, and the operator checkout is left untouched", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
     const provider = defaultProvider(dir);
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
@@ -612,7 +669,7 @@ test("dispatchEligible with a workspace provider: a mutating dispatch runs insid
 
 test("normalizeResults: a mutating attempt whose observed diff exceeds its claims is rejected without touching the worktree, and reconcileState still finds no invariant to flag", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
     const provider = defaultProvider(dir);
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
@@ -661,7 +718,7 @@ test("normalizeResults: a mutating attempt whose observed diff exceeds its claim
     // withheld it), so the task advances no board transition.
     advanceTransitions(buildCtx(db, runId, clock), runtime);
     const taskAfter = getTask(db, "task-a");
-    assert.equal(taskAfter.stage_id, "implementation", "the rejected task's stage is unchanged");
+    assert.equal(taskAfter.stage_id, "integration", "the rejected task's stage is unchanged");
 
     const reconcileRuntime = createSchedulerRuntime();
     reconcileState(buildCtx(db, runId, clock), reconcileRuntime, provider);
@@ -675,7 +732,7 @@ test("normalizeResults: a mutating attempt whose observed diff exceeds its claim
 
 test("normalizeResults: a genuine git failure inside observedPaths still fails the attempt closed, but is recorded distinctly from an empty-violation rejection", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
     const provider = defaultProvider(dir);
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
@@ -724,7 +781,7 @@ test("normalizeResults: a genuine git failure inside observedPaths still fails t
 
 test("a task whose out-of-claim rejection left an active worktrees row is not redispatched: worktreeMatchesRecordedBase blocks it on the next tick", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
-    insertTask(db, { id: "task-a", runId, stageId: "implementation", now: clock.now() });
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
     const provider = defaultProvider(dir);
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
@@ -821,5 +878,129 @@ test("an orphaned worktree cleanup withholds a succeeded verdict", async () => {
       .prepare(`SELECT cleanup_state FROM worktrees WHERE run_id = ? AND task_id = ?`)
       .get(runId, "task-a") as { cleanup_state: string };
     assert.equal(row.cleanup_state, "orphaned");
+  });
+});
+
+test("both dispatch paths coexist in one run: an implementation task's development pipeline and an integration task's dispatchAttempt", async () => {
+  await withRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
+
+    const streamsDir = path.join(dir, "dev-streams");
+    writeDevStream(streamsDir, "implement", "completed", devImplementerReport("implement", "completed"));
+    writeDevStream(streamsDir, "review-spec", "pass", devReviewerReport("review-spec", "spec-reviewer", "pass"));
+    writeDevStream(
+      streamsDir,
+      "review-quality",
+      "pass",
+      devReviewerReport("review-quality", "code-quality-reviewer", "pass"),
+    );
+    writeDevStream(streamsDir, "integration", "well-formed", devImplementerReport("integration", "completed"));
+
+    const adapter = new FakeAdapter({
+      terminate: noopTerminate,
+      streamsDir,
+      scenarioFor: (attempt: AttemptDescriptor) => {
+        if (attempt.stageId === "review-spec" || attempt.stageId === "review-quality") return "pass";
+        if (attempt.stageId === "integration") return "well-formed";
+        return "completed";
+      },
+    });
+
+    const body = createSchedulerTick(adapter);
+
+    await body(buildCtx(db, runId, clock));
+
+    const devStageIds = db
+      .prepare(`SELECT stage_id FROM attempts WHERE run_id = ? AND task_id = ? ORDER BY rowid ASC`)
+      .all(runId, "task-a") as Array<{ stage_id: string }>;
+    assert.deepEqual(
+      devStageIds.map((row) => row.stage_id),
+      ["implement", "review-spec", "review-quality"],
+      "task-a's whole development pipeline ran to completion inside the tick that dispatched it",
+    );
+
+    assert.equal(
+      getTask(db, "task-a").stage_id,
+      "implementation",
+      "the recorded outcome is only consumed by the next tick's advanceTransitions",
+    );
+
+    const taskBAttemptsAfterTick1 = db
+      .prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-b") as { n: number };
+    assert.equal(taskBAttemptsAfterTick1.n, 0, "single-lane: task-b is untouched while task-a occupies the tick");
+
+    await body(buildCtx(db, runId, clock));
+
+    assert.equal(
+      getTask(db, "task-a").stage_id,
+      "integration-candidate",
+      "task-a's recorded development outcome advanced it off implementation",
+    );
+
+    const taskBAttempt = db
+      .prepare(`SELECT stage_id, role FROM attempts WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-b") as { stage_id: string; role: string } | undefined;
+    assert.ok(taskBAttempt, "task-b was dispatched through the untouched integration path");
+    assert.equal(taskBAttempt?.stage_id, "integration");
+    assert.equal(taskBAttempt?.role, "integrator");
+  });
+});
+
+test("the scheduler dispatches an unrelated eligible task on the next tick after a task parks at a gate cap", async () => {
+  await withRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
+
+    const streamsDir = path.join(dir, "dev-streams");
+    writeDevStream(streamsDir, "implement", "completed", devImplementerReport("implement", "completed"));
+    writeDevStream(streamsDir, "fix-spec", "completed", devImplementerReport("fix-spec", "completed"));
+    writeDevStream(streamsDir, "review-spec", "fail", devReviewerReport("review-spec", "spec-reviewer", "fail"));
+    writeDevStream(streamsDir, "integration", "well-formed", devImplementerReport("integration", "completed"));
+
+    const adapter = new FakeAdapter({
+      terminate: noopTerminate,
+      streamsDir,
+      scenarioFor: (attempt: AttemptDescriptor) => {
+        if (attempt.stageId === "review-spec") return "fail";
+        if (attempt.stageId === "integration") return "well-formed";
+        return "completed";
+      },
+    });
+
+    const body = createSchedulerTick(adapter);
+
+    await body(buildCtx(db, runId, clock));
+
+    const gateRows = db
+      .prepare(
+        `SELECT round, verdict, cap FROM gates WHERE run_id = ? AND task_id = ? AND gate_type = ? ORDER BY round ASC`,
+      )
+      .all(runId, "task-a", "specReviewGate") as Array<{ round: number; verdict: string | null; cap: number }>;
+    assert.equal(gateRows.length, 3, "all three specReviewGate rounds are durably recorded");
+    assert.ok(
+      gateRows.every((row) => row.verdict === "fail" && row.cap === 3),
+      "every recorded round resolved as the gate's failing edge, capped at 3",
+    );
+
+    assert.equal(
+      getTask(db, "task-a").stage_id,
+      "implementation",
+      "the capped outcome is only consumed by the next tick's advanceTransitions",
+    );
+    const taskBAttemptsAfterTick1 = db
+      .prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-b") as { n: number };
+    assert.equal(taskBAttemptsAfterTick1.n, 0, "single-lane: task-b is untouched while task-a occupies the tick");
+
+    await body(buildCtx(db, runId, clock));
+
+    const taskBAttempt = db
+      .prepare(`SELECT stage_id FROM attempts WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-b") as { stage_id: string } | undefined;
+    assert.ok(taskBAttempt, "task-b, unrelated to task-a's capped gate, is dispatched once the lane frees up");
+    assert.equal(taskBAttempt?.stage_id, "integration");
+    assert.notEqual(getTask(db, "task-a").stage_id, "implementation", "task-a has moved off the stage it parked at");
   });
 });

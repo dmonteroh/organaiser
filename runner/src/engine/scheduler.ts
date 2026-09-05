@@ -46,6 +46,7 @@ import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick.ts";
 import type { TaskRow, TaskState } from "../store/types.ts";
 import { resolveVendorProfile, serializeResolvedProfile, type ResolvedVendorProfile } from "../cli/profiles.ts";
+import { runDevelopmentStages, type DevelopmentOutcome } from "./workflow-stages.ts";
 
 export interface StageDefinition {
   id: string;
@@ -210,11 +211,21 @@ function freshScratch(): TickScratch {
 export interface SchedulerRuntime {
   liveAttempt: LiveAttempt | null;
   priorOutcomeByTaskId: Map<string, string>;
+  // Cross-tick, consume-on-read, same shape as `priorOutcomeByTaskId`: a
+  // development pipeline runs to completion inside a single `dispatchEligible`
+  // call, but `advanceTransitions` (where `gatherFacts` reads this) runs
+  // before `dispatchEligible` in the next tick, never the same one.
+  developmentOutcomeByTaskId: Map<string, DevelopmentOutcome>;
   scratch: TickScratch;
 }
 
 export function createSchedulerRuntime(): SchedulerRuntime {
-  return { liveAttempt: null, priorOutcomeByTaskId: new Map(), scratch: freshScratch() };
+  return {
+    liveAttempt: null,
+    priorOutcomeByTaskId: new Map(),
+    developmentOutcomeByTaskId: new Map(),
+    scratch: freshScratch(),
+  };
 }
 
 function pidAlive(pid: number): boolean {
@@ -439,13 +450,18 @@ function gatherFacts(
     case "refinement-outcome":
       // Same as above, for task-refinement.
       return { decision: "skipped" };
-    case "implementation-outcome":
+    case "implementation-outcome": {
+      const outcome = runtime.developmentOutcomeByTaskId.get(task.id);
+      if (!outcome) return null;
+      runtime.developmentOutcomeByTaskId.delete(task.id);
+      if (outcome.outcome === "waiting-operator") {
+        return { attemptOk: false, hasBlockingOperatorQuestion: true };
+      }
+      return { attemptOk: outcome.outcome === "integrating", hasBlockingOperatorQuestion: false };
+    }
     case "integration-outcome": {
       const outcome = runtime.scratch.outcomeByTaskId.get(task.id);
       if (!outcome) return null;
-      if (predicateName === "implementation-outcome") {
-        return { attemptOk: outcome.ok, hasBlockingOperatorQuestion: false };
-      }
       return { attemptOk: outcome.ok, hasIntegrationRejection: false, hasBlockingOperatorQuestion: false };
     }
     case "integration-slot-available":
@@ -558,19 +574,28 @@ export function advanceTransitions(ctx: TickContext, runtime: SchedulerRuntime):
   }
 }
 
-// Step 4: execute verification and integration gates. In P5, gate execution
-// is folded into the dispatched attempt's own `classify` result (per
-// `task-board-workflow.md`'s `implementation`/`integration` stage notes), so
-// this step's own responsibility is limited to confirming no `gates` row is
-// left pending; nothing in P5 ever inserts one. A pending gate is recorded as
-// invariant evidence rather than thrown, so the tick still returns a
-// `blocked` outcome instead of killing the detached supervisor process.
+// Step 4: execute verification and integration gates. A gate row now stays
+// `verdict IS NULL` while its task is still in flight or resumable (P7c-i's
+// driver owns writing it, and reads its own durable round count back on
+// entry); that is legitimate, resumable state, not a defect. Only a pending
+// row whose task has already reached a terminal disposition is one no
+// in-flight pipeline can ever decide, so only that case is recorded as
+// invariant evidence rather than thrown, keeping the tick's `blocked` outcome
+// instead of killing the detached supervisor process.
 export function executeGates(ctx: TickContext, runtime: SchedulerRuntime): void {
   const row = ctx.db
-    .prepare(`SELECT COUNT(*) AS n FROM gates WHERE run_id = ? AND verdict IS NULL`)
+    .prepare(
+      `SELECT COUNT(*) AS n
+         FROM gates g
+         LEFT JOIN tasks t ON t.id = g.task_id
+        WHERE g.run_id = ? AND g.verdict IS NULL
+          AND (t.id IS NULL OR t.disposition IS NOT NULL)`,
+    )
     .get(ctx.runId) as { n: number };
   if (row.n > 0) {
-    runtime.scratch.invariantViolations.push(`${row.n} pending gate(s) exist but P5 dispatches none`);
+    runtime.scratch.invariantViolations.push(
+      `${row.n} pending gate(s) exist whose task has already reached a terminal disposition`,
+    );
   }
 }
 
@@ -692,6 +717,56 @@ export async function dispatchEligible(
       workingDirectory = workspaceHandle.path;
     }
 
+    const configJson = dispatchProfile
+      ? JSON.stringify({
+          profile: JSON.parse(serializeResolvedProfile(dispatchProfile.profile)),
+          cliVersion: dispatchProfile.cliVersion,
+          workflowRevision: dispatchProfile.workflowRevision,
+        })
+      : "{}";
+
+    // `implementation` runs the whole `dev-workflow` pipeline to completion
+    // inside this one call: `runDevelopmentStages` owns its own attempts'
+    // dispatch/reap/normalize lifecycle, so `runtime.liveAttempt` is never
+    // set for it and no `workers` row is left live once it returns.
+    if (stageId === "implementation") {
+      // The barrier's evidence ledger writes into `taskDir` (`barrier.ts`'s
+      // `writeLedger`), so `taskDir` cannot be `workingDirectory` when that is
+      // a runner-owned worktree: the ledger file would land inside the
+      // claimed checkout itself and fail every later stage's own claim check
+      // as an out-of-claim write. A `.orga`-rooted directory keyed by run and
+      // task id keeps it out of any worktree while staying unique per task.
+      const taskEvidenceDir = path.join(
+        workspace?.projectRoot ?? process.cwd(),
+        ".orga",
+        "runs",
+        ctx.runId,
+        "tasks",
+        task.id,
+      );
+      fs.mkdirSync(taskEvidenceDir, { recursive: true });
+
+      const developmentOutcome = await runDevelopmentStages({
+        db: ctx.db,
+        adapter,
+        runId: ctx.runId,
+        taskId: task.id,
+        now: ctx.now,
+        taskDir: taskEvidenceDir,
+        executionRoot: workingDirectory,
+        requiredArtifacts: [],
+        checks: {},
+        env: process.env,
+        vendor: dispatchProfile?.vendor ?? "fake",
+        model: dispatchProfile?.profile.model ?? "fake",
+        configJson,
+        ...(workspaceHandle ? { workspace: workspaceHandle } : {}),
+      });
+      runtime.developmentOutcomeByTaskId.set(task.id, developmentOutcome);
+      runtime.scratch.dispatchedThisTick = true;
+      return;
+    }
+
     const outcome = await dispatchAttempt(
       ctx.db,
       adapter,
@@ -704,13 +779,7 @@ export async function dispatchEligible(
         inputVersion,
         vendor: dispatchProfile?.vendor ?? "fake",
         model: dispatchProfile?.profile.model ?? "fake",
-        configJson: dispatchProfile
-          ? JSON.stringify({
-              profile: JSON.parse(serializeResolvedProfile(dispatchProfile.profile)),
-              cliVersion: dispatchProfile.cliVersion,
-              workflowRevision: dispatchProfile.workflowRevision,
-            })
-          : "{}",
+        configJson,
         mutating,
         timeoutBudget: { spawnMs: 30000, idleMs: 30000, wallMs: 300000 },
         workingDirectory,
