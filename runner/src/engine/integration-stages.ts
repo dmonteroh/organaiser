@@ -37,10 +37,13 @@ import {
   createCandidateWorkspace,
   headSha,
   readRefSha,
+  refIsCurrentCheckout,
   replayTaskBranch,
 } from "../git/integrate.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
+import { reclaimLease } from "../store/lease.ts";
+import type { LockRow } from "../store/types.ts";
 
 export type IntegrationStageKind = "agent" | "runner";
 export type IntegrationStageAuthority = "workspace-write" | "read-only";
@@ -269,6 +272,10 @@ function integrationRebuildCap(): number {
   return positiveInt(configRead, "INTEGRATION_REBUILD_CAP", 3);
 }
 
+export function integrationLockStaleMs(): number {
+  return positiveInt(configRead, "INTEGRATION_LOCK_STALE_MS", 300000);
+}
+
 function isUniqueConstraintError(err: unknown): boolean {
   return (
     err instanceof Error &&
@@ -282,7 +289,7 @@ interface LastAgentAttempt {
   pgid: number;
 }
 
-interface IntegrationDriverContext {
+export interface IntegrationDriverContext {
   input: IntegrationStagesInput;
   integrationId: string;
   lockId: string | null;
@@ -310,8 +317,9 @@ function sleep(ms: number): Promise<void> {
 
 const EXIT_POLL_INTERVAL_MS = 20;
 
-async function waitForExit(handle: ProcessHandle): Promise<void> {
+async function waitForExit(handle: ProcessHandle, onPollTick?: () => void): Promise<void> {
   while (pidAlive(handle.pid) || groupAlive(handle.pgid)) {
+    onPollTick?.();
     await sleep(EXIT_POLL_INTERVAL_MS);
   }
 }
@@ -400,12 +408,30 @@ function upsertIntegrationRow(
   });
 }
 
-function acquireDestinationLock(ctx: IntegrationDriverContext): "true" | "false" {
+export function acquireDestinationLock(ctx: IntegrationDriverContext): "true" | "false" {
   const { input } = ctx;
+
+  if (refIsCurrentCheckout(input.projectRoot, input.destinationRef)) {
+    upsertIntegrationRow(ctx, {
+      checks: {
+        rebuildCount: ctx.rebuildCount,
+        observedDestinationShas: [...ctx.observedDestinationShas],
+        destinationEqualsOperatorCheckout: true,
+      },
+    });
+    return "false";
+  }
+
   const lockId = randomUUID();
   const nowMs = input.now();
   try {
     withTransaction(input.db, () => {
+      const existing = input.db
+        .prepare(`SELECT * FROM locks WHERE kind = 'integration' AND resource = ? AND released_at IS NULL`)
+        .get(input.destinationRef) as LockRow | undefined;
+      if (existing && nowMs - existing.heartbeat_at > integrationLockStaleMs()) {
+        reclaimLease(input.db, existing, nowMs);
+      }
       input.db
         .prepare(
           `INSERT INTO locks (id, run_id, kind, resource, owner_pid, acquired_at, heartbeat_at, released_at)
@@ -428,6 +454,14 @@ function releaseDestinationLock(ctx: IntegrationDriverContext): void {
     ctx.input.db.prepare(`UPDATE locks SET released_at = ? WHERE id = ?`).run(ctx.input.now(), lockId);
   });
   ctx.lockId = null;
+}
+
+function renewDestinationLock(ctx: IntegrationDriverContext): void {
+  if (!ctx.lockId) return;
+  const lockId = ctx.lockId;
+  withTransaction(ctx.input.db, () => {
+    ctx.input.db.prepare(`UPDATE locks SET heartbeat_at = ? WHERE id = ?`).run(ctx.input.now(), lockId);
+  });
 }
 
 // Always re-reads the destination ref: the first call (following
@@ -533,6 +567,19 @@ async function advanceDestinationStage(ctx: IntegrationDriverContext): Promise<"
     await input.beforeAdvanceDestination();
   }
 
+  if (refIsCurrentCheckout(input.projectRoot, input.destinationRef)) {
+    await removeWorkspace(candidate, { db: input.db, projectRoot: input.projectRoot, runId: input.runId });
+    ctx.candidate = null;
+    upsertIntegrationRow(ctx, {
+      checks: {
+        rebuildCount: ctx.rebuildCount,
+        observedDestinationShas: [...ctx.observedDestinationShas],
+        destinationEqualsOperatorCheckout: true,
+      },
+    });
+    return "false";
+  }
+
   const newSha = headSha(candidate.path);
   const ok = advanceIntegration({
     strategy: "replay-and-fast-forward",
@@ -631,7 +678,7 @@ async function runAgentStage(stage: IntegrationStageDefinition, ctx: Integration
   }
   const { attemptId, handle } = dispatched;
 
-  await waitForExit(handle);
+  await waitForExit(handle, () => renewDestinationLock(ctx));
 
   const reapedAt = input.now();
   withTransaction(input.db, () => {
@@ -822,6 +869,8 @@ export async function runIntegrationStages(input: IntegrationStagesInput): Promi
 
   try {
     for (;;) {
+      renewDestinationLock(ctx);
+
       const stage = INTEGRATION_STAGES_BY_ID.get(currentId);
       if (!stage) {
         throw new Error(`unknown integration stage id: ${currentId}`);

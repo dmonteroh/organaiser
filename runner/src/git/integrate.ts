@@ -54,6 +54,15 @@ export function resolveDestinationRef(projectRoot: string): string {
   return `refs/heads/${branch}`;
 }
 
+// A live re-read of `projectRoot`'s current branch, compared against `ref` in
+// its branch-name form: `tolerant: true` so a detached HEAD (no branch to
+// compare) resolves to "no collision" rather than throwing.
+export function refIsCurrentCheckout(projectRoot: string, ref: string): boolean {
+  const branch = git(["symbolic-ref", "--short", "HEAD"], { cwd: projectRoot, tolerant: true });
+  if (branch === null) return false;
+  return ref === `refs/heads/${branch}`;
+}
+
 export function headSha(cwd: string): string {
   return git(["rev-parse", "HEAD"], { cwd });
 }

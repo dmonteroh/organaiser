@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -11,11 +12,14 @@ import { initProject } from "../src/store/init.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
 import type { AttemptDescriptor } from "../src/adapters/adapter.ts";
 import {
+  acquireDestinationLock,
   INTEGRATION_CAPS,
   INTEGRATION_ENTRY_STAGE,
   INTEGRATION_STAGES,
   INTEGRATION_TERMINAL_OUTCOMES,
+  integrationLockStaleMs,
   runIntegrationStages,
+  type IntegrationDriverContext,
   type IntegrationStagesInput,
 } from "../src/engine/integration-stages.ts";
 import { commitExists, isAncestor } from "../src/git/git.ts";
@@ -363,6 +367,7 @@ interface TestEnv {
 
 const TASK_BRANCH = "orga/task/task-1";
 const TASK_ID = "task-1";
+const OPERATOR_BRANCH = "operator-scratch";
 
 function seedTaskWorktree(env: { dir: string; db: ReturnType<typeof openStore> }, taskWorktreePath: string, baseCommit: string): WorkspaceHandle {
   runGit(env.dir, ["worktree", "add", taskWorktreePath, TASK_BRANCH]);
@@ -389,6 +394,12 @@ async function withEnv(fn: (env: TestEnv) => Promise<void>): Promise<void> {
     runGit(dir, ["checkout", TASK_BRANCH]);
     commitFile(dir, "feature.txt", "feature\n", "add feature");
     runGit(dir, ["checkout", "main"]);
+
+    // The operator's own checkout, resting on something other than the
+    // destination branch: `refIsCurrentCheckout` treats a match between the
+    // two as a collision, so the fixture's default state must not collide
+    // with `destinationRef` ("refs/heads/main") by accident.
+    runGit(dir, ["checkout", "-b", OPERATOR_BRANCH]);
 
     initProject(dir);
 
@@ -497,8 +508,10 @@ test("a failing candidate routes verify-candidate to ready-to-implement, not par
 
 test("a conflicting replay parks the task, leaves the destination ref and operator checkout unchanged, and records the conflicting paths", async () => {
   await withEnv(async (env) => {
+    runGit(env.dir, ["checkout", "main"]);
     commitFile(env.dir, "feature.txt", "destination edit\n", "destination edits the same file");
     const destinationSha = runGit(env.dir, ["rev-parse", "refs/heads/main"]);
+    runGit(env.dir, ["checkout", OPERATOR_BRANCH]);
     const statusBefore = runGit(env.dir, ["status", "--porcelain"]);
 
     const { adapter } = makeAdapter(env.streamsDir);
@@ -555,7 +568,9 @@ test("advance-destination's compare-and-swap: an external move between lock and 
         beforeAdvanceDestination: () => {
           if (!moved) {
             moved = true;
+            runGit(env.dir, ["checkout", "main"]);
             commitFile(env.dir, "external.txt", "external\n", "external move");
+            runGit(env.dir, ["checkout", OPERATOR_BRANCH]);
           }
         },
       }),
@@ -580,7 +595,7 @@ test("advance-destination's compare-and-swap: an external move between lock and 
         "cleanup",
       ],
     );
-    assert.ok(fs.existsSync(path.join(env.dir, "external.txt")), "the external change landed");
+    assert.ok(runGit(env.dir, ["show", "refs/heads/main:external.txt"]).includes("external"), "the external change landed");
     assert.ok(
       runGit(env.dir, ["show", "refs/heads/main:feature.txt"]).includes("feature"),
       "the task's change also landed",
@@ -602,7 +617,9 @@ test("the create-candidate rebuild loop is bounded by integration_rebuild_cap (d
       const outcome = await runIntegrationStages(
         baseInput(env, adapter, {
           beforeAdvanceDestination: () => {
+            runGit(env.dir, ["checkout", "main"]);
             commitFile(env.dir, `external-${env.clock.now()}.txt`, "external\n", "external move");
+            runGit(env.dir, ["checkout", OPERATOR_BRANCH]);
           },
         }),
       );
@@ -714,5 +731,133 @@ test("cleanup: a failed worktree removal never reports integrated, and the retry
       cleanup_state: string;
     }>;
     assert.ok(worktreeRowsAfter.every((r) => r.cleanup_state === "cleaned"));
+  });
+});
+
+test("lock-destination refuses and parks with destinationEqualsOperatorCheckout evidence when destinationRef is the operator's live checkout", async () => {
+  await withEnv(async (env) => {
+    runGit(env.dir, ["checkout", "main"]);
+    const { adapter } = makeAdapter(env.streamsDir);
+
+    const outcome = await runIntegrationStages(baseInput(env, adapter));
+
+    assert.equal(outcome.outcome, "parked");
+    assert.deepEqual(outcome.stages.map((s) => s.stageId), ["lock-destination"]);
+
+    const lockRows = env.db
+      .prepare(`SELECT id FROM locks WHERE run_id = ? AND resource = ?`)
+      .all(RUN_ID, "refs/heads/main");
+    assert.equal(lockRows.length, 0, "no lock row is inserted when the checkout collides");
+
+    const row = env.db.prepare(`SELECT checks FROM integrations WHERE run_id = ? AND task_id = ?`).get(RUN_ID, TASK_ID) as {
+      checks: string;
+    };
+    const checks = JSON.parse(row.checks) as { destinationEqualsOperatorCheckout?: boolean };
+    assert.equal(checks.destinationEqualsOperatorCheckout, true);
+  });
+});
+
+test("advance-destination treats the operator checking out the destination between lock-destination and advance-destination as a lost compare-and-swap, taking the rebuild-loop path with no ref move", async () => {
+  const previous = process.env.ORGA_INTEGRATION_REBUILD_CAP;
+  process.env.ORGA_INTEGRATION_REBUILD_CAP = "1";
+  try {
+    await withEnv(async (env) => {
+      const { adapter, queue } = makeAdapter(env.streamsDir);
+      writeReviewerStream(env.streamsDir, "pass", TASK_ID, "pass");
+      queue("pass");
+
+      const outcome = await runIntegrationStages(
+        baseInput(env, adapter, {
+          beforeAdvanceDestination: () => {
+            runGit(env.dir, ["checkout", "main"]);
+          },
+        }),
+      );
+
+      assert.equal(outcome.outcome, "parked");
+      assert.deepEqual(
+        outcome.stages.map((s) => s.stageId),
+        ["lock-destination", "create-candidate", "replay-task", "verify-candidate", "cross-task-review", "advance-destination", "create-candidate"],
+      );
+      assert.equal(
+        runGit(env.dir, ["rev-parse", "refs/heads/main"]),
+        env.destinationSha0,
+        "no ref move: the live checkout collision skips update-ref entirely",
+      );
+    });
+  } finally {
+    if (previous === undefined) delete process.env.ORGA_INTEGRATION_REBUILD_CAP;
+    else process.env.ORGA_INTEGRATION_REBUILD_CAP = previous;
+  }
+});
+
+function freshCtx(input: IntegrationStagesInput): IntegrationDriverContext {
+  return {
+    input,
+    integrationId: randomUUID(),
+    lockId: null,
+    destinationSha: null,
+    candidate: null,
+    rebuildCount: 0,
+    observedDestinationShas: [],
+    lastAgentAttempt: null,
+    lastAgentReport: null,
+    resultCommit: null,
+  };
+}
+
+test("acquireDestinationLock reclaims a stale unreleased integration lock and leaves exactly one unreleased row", async () => {
+  await withEnv(async (env) => {
+    const { adapter } = makeAdapter(env.streamsDir);
+    const input = baseInput(env, adapter);
+    const staleHeartbeat = env.clock.now() - (integrationLockStaleMs() + 1);
+    withTransaction(env.db, () => {
+      env.db
+        .prepare(
+          `INSERT INTO locks (id, run_id, kind, resource, owner_pid, acquired_at, heartbeat_at, released_at)
+           VALUES (?, ?, 'integration', ?, ?, ?, ?, NULL)`,
+        )
+        .run("stale-lock", RUN_ID, "refs/heads/main", 999999, staleHeartbeat, staleHeartbeat);
+    });
+
+    const ctx = freshCtx(input);
+    const verdict = acquireDestinationLock(ctx);
+
+    assert.equal(verdict, "true");
+    const rows = env.db.prepare(`SELECT id, released_at FROM locks WHERE resource = ?`).all("refs/heads/main") as Array<{
+      id: string;
+      released_at: number | null;
+    }>;
+    const unreleased = rows.filter((r) => r.released_at === null);
+    assert.equal(unreleased.length, 1, "the stale row is reclaimed and exactly one unreleased row remains");
+    assert.equal(unreleased[0]?.id, ctx.lockId, "the surviving unreleased row is the one just acquired");
+  });
+});
+
+test("acquireDestinationLock still rejects a fresh unreleased integration lock for the same resource", async () => {
+  await withEnv(async (env) => {
+    const { adapter } = makeAdapter(env.streamsDir);
+    const input = baseInput(env, adapter);
+    const freshHeartbeat = env.clock.now();
+    withTransaction(env.db, () => {
+      env.db
+        .prepare(
+          `INSERT INTO locks (id, run_id, kind, resource, owner_pid, acquired_at, heartbeat_at, released_at)
+           VALUES (?, ?, 'integration', ?, ?, ?, ?, NULL)`,
+        )
+        .run("fresh-lock", RUN_ID, "refs/heads/main", 999999, freshHeartbeat, freshHeartbeat);
+    });
+
+    const ctx = freshCtx(input);
+    const verdict = acquireDestinationLock(ctx);
+
+    assert.equal(verdict, "false");
+    const rows = env.db.prepare(`SELECT id, released_at FROM locks WHERE resource = ?`).all("refs/heads/main") as Array<{
+      id: string;
+      released_at: number | null;
+    }>;
+    assert.equal(rows.length, 1, "no new row is inserted when the existing one is still fresh");
+    assert.equal(rows[0]?.released_at, null);
+    assert.equal(ctx.lockId, null, "the loser records no lock of its own");
   });
 });
