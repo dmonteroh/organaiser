@@ -25,6 +25,8 @@ import {
 import { runSupervisor } from "../engine/supervisor.ts";
 import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts";
+import { validateBoard } from "../board/validate.ts";
+import { renderBoard } from "../board/render.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
@@ -472,6 +474,46 @@ function cmdBoardImportMarkdown(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
+function cmdBoardValidate(parsed: ParsedArgs, io: Io): ExitCode {
+  const boardPath = flagString(parsed.flags, "board");
+  if (!boardPath) throw new UsageError("board validate requires --board <path>");
+  const board = readBoardFile(boardPath);
+  const result = validateBoard(board);
+  const json = flagBool(parsed.flags, "json");
+
+  if (json) {
+    io.stdout(JSON.stringify({ valid: result.valid, errors: result.errors }));
+  } else {
+    for (const error of result.errors) {
+      io.stderr(`${error.path || "/"}: ${error.message}`);
+    }
+    io.stdout(
+      result.valid
+        ? `board ${boardPath} is valid`
+        : `board ${boardPath} is invalid (${result.errors.length} error(s))`,
+    );
+  }
+
+  return result.valid ? EXIT_CODES.OK : EXIT_CODES.INVALID_ARGS;
+}
+
+function cmdBoardRender(parsed: ParsedArgs, io: Io): ExitCode {
+  const runId = parsed.positionals[0];
+  if (!runId) throw new UsageError("board render requires <run-id>");
+  const root = resolveRoot(io);
+  readRun(root, runId);
+  const outputPath = flagString(parsed.flags, "output");
+
+  const writtenPath = renderBoard(root, runId, outputPath);
+  emit(
+    io,
+    flagBool(parsed.flags, "json"),
+    { runId, path: writtenPath },
+    `rendered board for run ${runId} to ${writtenPath}`,
+  );
+  return EXIT_CODES.OK;
+}
+
 // ── Dispatch table ───────────────────────────────────────────────────────────
 
 const VALUE_FLAGS = new Set(["board", "workflow", "template", "until", "timeout", "vendor", "input", "output"]);
@@ -492,6 +534,8 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "kill-all": cmdKillAll,
   "run dry-run": cmdRunDryRun,
   "board import-markdown": cmdBoardImportMarkdown,
+  "board validate": cmdBoardValidate,
+  "board render": cmdBoardRender,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);
