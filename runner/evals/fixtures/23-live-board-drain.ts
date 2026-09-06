@@ -75,8 +75,9 @@ const ALL_TASK_IDS = [...FIRST_WAVE_TASK_IDS, ...DEPENDENT_TASK_IDS] as const;
 // proof: `dispatchDependenciesSatisfied` releases a dependent only once every dependency
 // carries one of these three, so if either first-wave task reached one, the four
 // dependents becoming eligible to dispatch is the board scheduler working correctly, not
-// a gating failure — the guard below fails loudly with that diagnosis instead of letting
-// AC5 either pass on an empty coincidence or fail as a bare gate violation.
+// a gating failure. The guard below fails loudly with that diagnosis — naming which
+// first-wave task reached which unexpected disposition — so this scenario can neither
+// pass on a silent coincidence nor fail as a confusing bare gate violation.
 const DEPENDENCY_RELEASING_DISPOSITIONS = new Set(["integrated", "superseded", "shelved"]);
 
 function buildPlaceholderBoard(): unknown {
