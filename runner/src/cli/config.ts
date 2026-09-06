@@ -1,7 +1,7 @@
 import { DEFAULT_BUDGETS, type Budgets } from "../adapters/process-supervisor.ts";
 import { DEFAULT_TICK_INTERVAL_MS, DEFAULT_OPERATOR_POLL_WINDOW_MS } from "../engine/tick.ts";
 import { DEFAULT_CANCEL_GRACE_MS } from "../engine/control-commands.ts";
-import { DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../git/workspace.ts";
+import { DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX, type WorkspaceMode } from "../git/workspace.ts";
 import { DEFAULT_FOLLOWUPS_FILE_PATH } from "../engine/minor-findings.ts";
 
 // All watchdog budgets are seconds; this is the default no-progress budget
@@ -96,7 +96,7 @@ export interface ResolvedConfig {
   runner: RunnerId;
   budgets: Readonly<Budgets>;
   timing: Readonly<RunnerTiming>;
-  workspace: Readonly<{ root: string; branchPrefix: string }>;
+  workspace: Readonly<{ root: string; branchPrefix: string; mode: WorkspaceMode }>;
   followUpsFilePath: string;
 }
 
@@ -159,6 +159,10 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
       branchPrefix: attempt(
         () => stringVal(read, "BRANCH_PREFIX", DEFAULT_BRANCH_PREFIX) ?? DEFAULT_BRANCH_PREFIX,
         DEFAULT_BRANCH_PREFIX,
+      ),
+      mode: attempt(
+        () => enumVal(read, "WORKSPACE_MODE", ["worktree", "in-place"] as const, "worktree"),
+        "worktree",
       ),
     },
     followUpsFilePath: attempt(

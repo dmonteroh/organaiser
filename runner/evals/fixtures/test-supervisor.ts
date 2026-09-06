@@ -60,7 +60,7 @@ export interface TestSupervisorArgs {
   operatorPollWindowMs: number;
   cancelGraceMs: number;
   streamsDir: string;
-  workspaceMode: "none" | "worktree";
+  workspaceMode: "none" | "worktree" | "in-place";
 }
 
 export function parseArgs(argv: readonly string[]): TestSupervisorArgs {
@@ -71,8 +71,10 @@ export function parseArgs(argv: readonly string[]): TestSupervisorArgs {
     );
   }
   const workspaceMode = workspaceModeArg === undefined ? "none" : workspaceModeArg;
-  if (workspaceMode !== "none" && workspaceMode !== "worktree") {
-    throw new Error(`usage: workspaceMode must be "none" or "worktree", got ${JSON.stringify(workspaceModeArg)}`);
+  if (workspaceMode !== "none" && workspaceMode !== "worktree" && workspaceMode !== "in-place") {
+    throw new Error(
+      `usage: workspaceMode must be "none", "worktree", or "in-place", got ${JSON.stringify(workspaceModeArg)}`,
+    );
   }
   return {
     root,
@@ -137,8 +139,13 @@ export async function runTestSupervisor(args: TestSupervisorArgs): Promise<numbe
     }, args.tickIntervalMs);
 
     const workspace: WorkspaceProvider | undefined =
-      args.workspaceMode === "worktree"
-        ? { projectRoot: args.root, root: DEFAULT_WORKTREE_ROOT, branchPrefix: DEFAULT_BRANCH_PREFIX }
+      args.workspaceMode === "worktree" || args.workspaceMode === "in-place"
+        ? {
+            projectRoot: args.root,
+            root: DEFAULT_WORKTREE_ROOT,
+            branchPrefix: DEFAULT_BRANCH_PREFIX,
+            mode: args.workspaceMode,
+          }
         : undefined;
 
     let exitCode: number;

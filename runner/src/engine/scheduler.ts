@@ -41,7 +41,13 @@ import { PREDICATE_RETURN_UNIONS, TERMINAL_DISPOSITION_VALUES } from "./board-pr
 import { terminateGroups } from "./termination.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
-import { createWorkspace, removeWorkspace, listUntrackedWorktrees, type WorkspaceHandle } from "../git/workspace.ts";
+import {
+  createWorkspace,
+  removeWorkspace,
+  listUntrackedWorktrees,
+  type WorkspaceHandle,
+  type WorkspaceMode,
+} from "../git/workspace.ts";
 import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick.ts";
 import type { TaskRow, TaskState } from "../store/types.ts";
@@ -178,6 +184,7 @@ export interface WorkspaceProvider {
   projectRoot: string;
   root: string;
   branchPrefix: string;
+  mode?: WorkspaceMode;
 }
 
 /**
@@ -763,7 +770,7 @@ export async function dispatchEligible(
     } else if (mutating && workspace) {
       try {
         workspaceHandle = await createWorkspace({
-          mode: "worktree",
+          mode: workspace.mode ?? "worktree",
           ref: "HEAD",
           db: ctx.db,
           projectRoot: workspace.projectRoot,

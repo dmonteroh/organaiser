@@ -284,7 +284,7 @@ export interface SpawnSupervisorOptions {
   cancelGraceMs?: number;
   streamsDir: string;
   logPath?: string;
-  workspaceMode?: "none" | "worktree";
+  workspaceMode?: "none" | "worktree" | "in-place";
 }
 
 export interface SpawnedSupervisor {

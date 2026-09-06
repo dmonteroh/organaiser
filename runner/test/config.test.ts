@@ -181,3 +181,22 @@ test("loadConfig freezes config.workspace", () => {
   const config = loadConfig();
   assert.equal(Object.isFrozen(config.workspace), true);
 });
+
+// ── loadConfig.workspace.mode: default, env override, and aggregated error ──
+test("loadConfig.workspace.mode defaults to worktree when unset", () => {
+  const config = loadConfig();
+  assert.equal(config.workspace.mode, "worktree");
+});
+
+test("ORGA_WORKSPACE_MODE in the env layer overrides the default workspace mode", () => {
+  const env: Layer = { ORGA_WORKSPACE_MODE: "in-place" };
+  assert.equal(loadConfig({ env }).workspace.mode, "in-place");
+});
+
+test("loadConfig aggregates an invalid ORGA_WORKSPACE_MODE into the aggregated error", () => {
+  const env: Layer = { ORGA_WORKSPACE_MODE: "bogus" };
+  assert.throws(
+    () => loadConfig({ env }),
+    /invalid WORKSPACE_MODE: bogus \(must be one of worktree\|in-place\)/,
+  );
+});
