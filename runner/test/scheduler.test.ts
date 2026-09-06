@@ -716,14 +716,13 @@ test("dispatchEligible dispatches every eligible candidate once maxWorkerSlots e
   });
 });
 
-// Regression test for the round-3 critical finding: with `maxWorkerSlots >
-// 1`, a free slot alone must not make a task with a still-live attempt
-// dispatchable again. The entry guard at this function's top only compares
-// `runtime.liveAttemptByTaskId.size` against `maxWorkerSlots` in aggregate,
-// so a second `dispatchEligible` call made while task-a's own attempt is
-// still live (no intervening `reapWorkers`, exactly as two real scheduler
-// ticks would see it) must still treat task-a as ineligible, not just
-// slot-constrained.
+// With `maxWorkerSlots > 1`, a free slot alone must not make a task with a
+// still-live attempt dispatchable again. The entry guard at this function's
+// top only compares `runtime.liveAttemptByTaskId.size` against
+// `maxWorkerSlots` in aggregate, so a second `dispatchEligible` call made
+// while task-a's own attempt is still live (no intervening `reapWorkers`,
+// exactly as two real scheduler ticks would see it) must still treat task-a
+// as ineligible, not just slot-constrained.
 test("dispatchEligible does not dispatch a task a second time while its own attempt is still live, even with a free worker slot (maxWorkerSlots > 1)", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
     insertTask(db, { id: "task-a", runId, stageId: "integration", priority: 0, now: clock.now() });
@@ -745,9 +744,9 @@ test("dispatchEligible does not dispatch a task a second time while its own atte
     // No `reapWorkers` call between the two `dispatchEligible` calls: task-a's
     // attempt is still live (its `liveAttemptByTaskId` entry is only removed
     // by `reapWorkers`), and one worker slot is still free
-    // (`maxWorkerSlots: 2`, one live attempt) -- exactly the round-3
-    // reproduction, a second tick's dispatch call while the first attempt is
-    // still running.
+    // (`maxWorkerSlots: 2`, one live attempt) -- a second `dispatchEligible`
+    // call with no intervening `reapWorkers`, simulating a second tick while
+    // the first attempt is still live.
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, undefined, fakeDispatchProfile(2));
 
     assert.equal(
