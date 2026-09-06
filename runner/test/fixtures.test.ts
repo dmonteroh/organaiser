@@ -54,6 +54,13 @@ import {
   inPlaceClaimsExcludeRecordedDirt,
   inPlaceIntegratesWithReview,
 } from "../evals/fixtures/19-in-place.ts";
+import {
+  dependencyOrder,
+  operatorBlockDoesNotGlobalStop,
+  terminalTaskNeverDispatches,
+  claimOverlapSerializes,
+  disjointClaimsParallelize,
+} from "../evals/fixtures/20-board-parallelism.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -104,6 +111,11 @@ test("in-place: a dirty checkout without --allow-dirty refuses to start and disp
 test("in-place: a two-task board never runs two mutating attempts at once", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceSerializes);
 test("in-place: pre-run dirt on an unrelated path never appears in an attempt's out-of-claim list", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceClaimsExcludeRecordedDirt);
 test("in-place: a two-task board requiring cross-task review lands one commit per task with no worktree left behind", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceIntegratesWithReview);
+test("board-parallelism: a task with an unsatisfied dependency never dispatches ahead of it", { timeout: FIXTURE_TIMEOUT_MS }, dependencyOrder);
+test("board-parallelism: an open blocking question stops only its own task, not an unrelated one", { timeout: FIXTURE_TIMEOUT_MS }, operatorBlockDoesNotGlobalStop);
+test("board-parallelism: a task with a non-null disposition is never a dispatch candidate", { timeout: FIXTURE_TIMEOUT_MS }, terminalTaskNeverDispatches);
+test("board-parallelism: two tasks with overlapping claims never hold live attempts simultaneously", { timeout: FIXTURE_TIMEOUT_MS }, claimOverlapSerializes);
+test("board-parallelism: two tasks with disjoint claims both hold live attempts in the same tick", { timeout: FIXTURE_TIMEOUT_MS }, disjointClaimsParallelize);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

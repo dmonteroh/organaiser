@@ -217,7 +217,7 @@ interface TickScratch {
   dispatchedThisTick: boolean;
   invariantViolations: string[];
   outcomeByTaskId: Map<string, AttemptOutcome>;
-  reapedAttempt?: LiveAttempt;
+  reapedAttemptsByTaskId: Map<string, LiveAttempt>;
 }
 
 function freshScratch(): TickScratch {
@@ -226,11 +226,12 @@ function freshScratch(): TickScratch {
     dispatchedThisTick: false,
     invariantViolations: [],
     outcomeByTaskId: new Map(),
+    reapedAttemptsByTaskId: new Map(),
   };
 }
 
 export interface SchedulerRuntime {
-  liveAttempt: LiveAttempt | null;
+  liveAttemptByTaskId: Map<string, LiveAttempt>;
   priorOutcomeByTaskId: Map<string, string>;
   // Cross-tick, consume-on-read, same shape as `priorOutcomeByTaskId`: a
   // development pipeline runs to completion inside a single `dispatchEligible`
@@ -249,7 +250,7 @@ export interface SchedulerRuntime {
 
 export function createSchedulerRuntime(): SchedulerRuntime {
   return {
-    liveAttempt: null,
+    liveAttemptByTaskId: new Map(),
     priorOutcomeByTaskId: new Map(),
     developmentOutcomeByTaskId: new Map(),
     integrationOutcomeByTaskId: new Map(),
@@ -314,24 +315,27 @@ function briefArtifactDeclared(task: TaskRow): boolean {
   return typeof task.brief_path === "string" && task.brief_path.length > 0;
 }
 
-// Step 1 of goals spec section 11: reap the run's single P5-serial live
-// worker once its process has exited. Liveness is polled directly by pid and
-// process group rather than through `adapter.collect`, which blocks until
-// the process has already finished; polling keeps this step cheap on every
-// tick where the worker is still running.
+// Step 1 of goals spec section 11: reap each of the run's live workers once
+// its process has exited. `runtime.liveAttemptByTaskId` can hold more than
+// one entry when `maxWorkerSlots > 1`, so a single call can reap more than
+// one worker; today's only production wiring caps `maxWorkerSlots` at 1,
+// but this loop itself makes no such assumption. Liveness is polled
+// directly by pid and process group rather than through `adapter.collect`,
+// which blocks until the process has already finished; polling keeps this
+// step cheap on every tick where a worker is still running.
 export function reapWorkers(ctx: TickContext, runtime: SchedulerRuntime): void {
-  const live = runtime.liveAttempt;
-  if (live === null) return;
-  if (pidAlive(live.handle.pid) || groupAlive(live.handle.pgid)) return;
-
   const nowMs = ctx.now();
-  withTransaction(ctx.db, () => {
-    ctx.db
-      .prepare(`UPDATE workers SET termination_state = 'exited', ended_at = ? WHERE attempt_id = ?`)
-      .run(nowMs, live.attemptId);
-  });
-  runtime.scratch.reapedAttempt = live;
-  runtime.liveAttempt = null;
+  for (const [taskId, live] of runtime.liveAttemptByTaskId) {
+    if (pidAlive(live.handle.pid) || groupAlive(live.handle.pgid)) continue;
+
+    withTransaction(ctx.db, () => {
+      ctx.db
+        .prepare(`UPDATE workers SET termination_state = 'exited', ended_at = ? WHERE attempt_id = ?`)
+        .run(nowMs, live.attemptId);
+    });
+    runtime.scratch.reapedAttemptsByTaskId.set(taskId, live);
+    runtime.liveAttemptByTaskId.delete(taskId);
+  }
 }
 
 // Reads the task's single `dimension = 'files'` claims row and parses its
@@ -408,51 +412,50 @@ export async function normalizeResults(
   runtime: SchedulerRuntime,
   adapter: ProcessAdapter,
 ): Promise<void> {
-  const reaped = runtime.scratch.reapedAttempt;
-  if (!reaped) return;
+  for (const reaped of runtime.scratch.reapedAttemptsByTaskId.values()) {
+    const artifacts = await adapter.collect(reaped.handle);
+    const outcome = await adapter.classify(artifacts);
+    const nowMs = ctx.now();
 
-  const artifacts = await adapter.collect(reaped.handle);
-  const outcome = await adapter.classify(artifacts);
-  const nowMs = ctx.now();
+    const claimViolation = reaped.workspace
+      ? await validateAttemptClaims(ctx.db, ctx.runId, reaped.taskId, reaped.workspace)
+      : null;
 
-  const claimViolation = reaped.workspace
-    ? await validateAttemptClaims(ctx.db, ctx.runId, reaped.taskId, reaped.workspace)
-    : null;
-
-  withTransaction(ctx.db, () => {
-    ctx.db
-      .prepare(`UPDATE attempts SET status = ?, exit_code = ?, ended_at = ? WHERE id = ?`)
-      .run(claimViolation ? "failed" : outcome.ok ? "completed" : "failed", artifacts.exitCode, nowMs, reaped.attemptId);
-    appendEvent(ctx.db, {
-      id: randomUUID(),
-      run_id: ctx.runId,
-      task_id: reaped.taskId,
-      attempt_id: reaped.attemptId,
-      type: "attempt.normalized",
-      payload: JSON.stringify({ ok: outcome.ok, failureClass: outcome.failureClass, reason: outcome.reason }),
-      created_at: nowMs,
-    });
-    if (claimViolation) {
+    withTransaction(ctx.db, () => {
+      ctx.db
+        .prepare(`UPDATE attempts SET status = ?, exit_code = ?, ended_at = ? WHERE id = ?`)
+        .run(claimViolation ? "failed" : outcome.ok ? "completed" : "failed", artifacts.exitCode, nowMs, reaped.attemptId);
       appendEvent(ctx.db, {
         id: randomUUID(),
         run_id: ctx.runId,
         task_id: reaped.taskId,
         attempt_id: reaped.attemptId,
-        type: "attempt.claim-violation",
-        payload: JSON.stringify(
-          claimViolation.internalError === undefined
-            ? { outOfClaim: claimViolation.outOfClaim }
-            : { outOfClaim: claimViolation.outOfClaim, internalError: claimViolation.internalError },
-        ),
+        type: "attempt.normalized",
+        payload: JSON.stringify({ ok: outcome.ok, failureClass: outcome.failureClass, reason: outcome.reason }),
         created_at: nowMs,
       });
-    }
-  });
+      if (claimViolation) {
+        appendEvent(ctx.db, {
+          id: randomUUID(),
+          run_id: ctx.runId,
+          task_id: reaped.taskId,
+          attempt_id: reaped.attemptId,
+          type: "attempt.claim-violation",
+          payload: JSON.stringify(
+            claimViolation.internalError === undefined
+              ? { outOfClaim: claimViolation.outOfClaim }
+              : { outOfClaim: claimViolation.outOfClaim, internalError: claimViolation.internalError },
+          ),
+          created_at: nowMs,
+        });
+      }
+    });
 
-  if (!claimViolation) {
-    runtime.scratch.outcomeByTaskId.set(reaped.taskId, outcome);
+    if (!claimViolation) {
+      runtime.scratch.outcomeByTaskId.set(reaped.taskId, outcome);
+    }
   }
-  delete runtime.scratch.reapedAttempt;
+  runtime.scratch.reapedAttemptsByTaskId.clear();
 }
 
 function gatherFacts(
@@ -692,17 +695,22 @@ function dispatchDependenciesSatisfied(db: DatabaseSync, task: TaskRow): boolean
   );
 }
 
-// Step 6: dispatch the highest-priority eligible task. P5 is single-lane
-// serial: `workerSlotAvailable` is false whenever a live attempt already
-// exists, so at most one dispatch happens per tick and at most one attempt is
-// ever live for the run.
+// Step 6: dispatch the highest-priority eligible task(s), up to
+// `maxWorkerSlots`. `workerSlotAvailable` is false once the number of live
+// attempts reaches `maxWorkerSlots`, so at most `maxWorkerSlots` dispatches
+// happen per tick and at most `maxWorkerSlots` attempts are ever live for
+// the run at once; today's only production wiring sets `maxWorkerSlots` to
+// 1, which reduces this to the single-lane-serial case, but the function
+// itself bounds concurrency by whatever `maxWorkerSlots` a `DispatchProfile`
+// supplies.
 //
 // With no workspace provider, dispatch runs exactly as it always has: no
 // worktree, no claim requirement, `process.cwd()` as the working directory.
 // With one, a mutating dispatch is guarded by `claimSetComplete` and
 // `worktreeMatchesRecordedBase` and, once past those, runs inside a
 // runner-owned worktree created by `createWorkspace`; the resulting handle
-// is held on `runtime.liveAttempt.workspace` for the reap-time claim check.
+// is held in `runtime.liveAttemptByTaskId`, on the dispatched attempt's
+// `workspace` field, for the reap-time claim check.
 export async function dispatchEligible(
   ctx: TickContext,
   runtime: SchedulerRuntime,
@@ -710,10 +718,13 @@ export async function dispatchEligible(
   workspace?: WorkspaceProvider,
   dispatchProfile?: DispatchProfile,
 ): Promise<void> {
-  if (runtime.liveAttempt !== null) return;
+  const maxWorkerSlots = dispatchProfile?.concurrency.maxWorkerSlots ?? 1;
+  if (runtime.liveAttemptByTaskId.size >= maxWorkerSlots) return;
 
   const candidates = listActiveTasks(ctx.db, ctx.runId).filter((task) =>
-    task.stage_id !== null && DISPATCHABLE_STAGE_IDS.has(task.stage_id),
+    task.stage_id !== null &&
+    DISPATCHABLE_STAGE_IDS.has(task.stage_id) &&
+    !runtime.liveAttemptByTaskId.has(task.id),
   );
 
   for (const task of candidates) {
@@ -722,19 +733,20 @@ export async function dispatchEligible(
       dependenciesSatisfied: dispatchDependenciesSatisfied(ctx.db, task),
       noUnresolvedBlockingQuestion: !hasOpenBlockingQuestion(ctx.db, task),
       stageInputArtifactsValid: briefArtifactDeclared(task),
-      workerSlotAvailable: runtime.liveAttempt === null,
+      workerSlotAvailable: runtime.liveAttemptByTaskId.size < maxWorkerSlots,
       claimSetComplete: claimSetComplete(ctx.db, {
         runId: ctx.runId,
         taskId: task.id,
         mutating,
         workspaceProviderPresent: workspace !== undefined,
       }),
-      // `runtime.liveAttempt` is guaranteed null here (checked at this
-      // function's entry, and this single-lane loop dispatches at most one
-      // attempt before returning), so the held handle for any candidate task
-      // is always none under this child's serial scheduling; the
-      // matching-handle true branch is exercised by
-      // `worktreeMatchesRecordedBase`'s own unit test instead.
+      // `runtime.liveAttemptByTaskId` has no entry for this candidate task
+      // here (the candidates list above excludes any task already holding a
+      // live attempt, so this loop never dispatches the same task a second
+      // time while its own prior attempt is still live), so the held handle
+      // for any candidate task is always none; the matching-handle true
+      // branch is exercised by `worktreeMatchesRecordedBase`'s own unit test
+      // instead.
       worktreeMatchesRecordedBase: worktreeMatchesRecordedBase(ctx.db, {
         runId: ctx.runId,
         taskId: task.id,
@@ -854,8 +866,9 @@ export async function dispatchEligible(
 
     // `implementation` runs the whole `dev-workflow` pipeline to completion
     // inside this one call: `runDevelopmentStages` owns its own attempts'
-    // dispatch/reap/normalize lifecycle, so `runtime.liveAttempt` is never
-    // set for it and no `workers` row is left live once it returns.
+    // dispatch/reap/normalize lifecycle, so `runtime.liveAttemptByTaskId`
+    // never gains an entry for it and no `workers` row is left live once it
+    // returns.
     if (stageId === "implementation") {
       // The barrier's evidence ledger writes into `taskDir` (`barrier.ts`'s
       // `writeLedger`), so `taskDir` cannot be `workingDirectory` when that is
@@ -901,9 +914,10 @@ export async function dispatchEligible(
     // `integration` runs the whole `integration.v1` pipeline to completion
     // inside this one call, exactly as `implementation` does above:
     // `runIntegrationStages` owns its own attempts' dispatch/reap/normalize
-    // lifecycle for `cross-task-review`, so `runtime.liveAttempt` is never
-    // set for it either. A `cleanup-pending` result records no outcome at
-    // all, leaving the task exactly where it is for the next tick's retry.
+    // lifecycle for `cross-task-review`, so `runtime.liveAttemptByTaskId`
+    // never gains an entry for it either. A `cleanup-pending` result records
+    // no outcome at all, leaving the task exactly where it is for the next
+    // tick's retry.
     if (stageId === "integration" && workspace && existingIntegrationWorkspace) {
       const taskEvidenceDir = path.join(workspace.projectRoot, ".orga", "runs", ctx.runId, "tasks", task.id);
       fs.mkdirSync(taskEvidenceDir, { recursive: true });
@@ -960,18 +974,16 @@ export async function dispatchEligible(
     );
 
     if (outcome.dispatched) {
-      runtime.liveAttempt = {
+      runtime.liveAttemptByTaskId.set(task.id, {
         attemptId: outcome.attemptId,
         taskId: task.id,
         stageId,
         handle: outcome.handle,
         workspace: workspaceHandle,
-      };
+      });
       runtime.scratch.dispatchedThisTick = true;
     }
-    // Serial: stop after the first attempted dispatch regardless of outcome,
-    // since either a worker is now live or the round was already claimed.
-    return;
+    if (runtime.liveAttemptByTaskId.size >= maxWorkerSlots) return;
   }
 }
 

@@ -15,8 +15,9 @@
 //
 // 2. Nothing in P5's scope gates dispatch on `interrupt_reason`:
 //    `dispatchEligible` (scheduler.ts) decides purely from a task's
-//    `stage_id`/`disposition` and its own in-memory `runtime.liveAttempt`; it
-//    never reads `attempts.interrupt_reason`. The "never redispatched"
+//    `stage_id`/`disposition` and its own in-memory
+//    `runtime.liveAttemptByTaskId`; it never reads
+//    `attempts.interrupt_reason`. The "never redispatched"
 //    vocabulary documented on `InterruptReason` in store/types.ts is
 //    aspirational for a later phase's controller, not something reconcile()
 //    or the scheduler enforces today. Proving "not redispatched" against a
