@@ -60,7 +60,6 @@ import {
   terminalTaskNeverDispatches,
   claimOverlapSerializes,
   disjointClaimsParallelize,
-  slotCeilingCapsConcurrentDispatch,
 } from "../evals/fixtures/20-board-parallelism.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
@@ -117,7 +116,6 @@ test("board-parallelism: an open blocking question stops only its own task, not 
 test("board-parallelism: a task with a non-null disposition is never a dispatch candidate", { timeout: FIXTURE_TIMEOUT_MS }, terminalTaskNeverDispatches);
 test("board-parallelism: two tasks with overlapping claims never hold live attempts simultaneously", { timeout: FIXTURE_TIMEOUT_MS }, claimOverlapSerializes);
 test("board-parallelism: two tasks with disjoint claims both hold live attempts in the same tick", { timeout: FIXTURE_TIMEOUT_MS }, disjointClaimsParallelize);
-test("board-parallelism: the worker-slot ceiling caps concurrent dispatch below the eligible candidate count", { timeout: FIXTURE_TIMEOUT_MS }, slotCeilingCapsConcurrentDispatch);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

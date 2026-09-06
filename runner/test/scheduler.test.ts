@@ -21,12 +21,14 @@ import {
   reapWorkers,
   reconcileState,
   STAGE_DEFINITIONS,
+  type DispatchProfile,
   type SchedulerSteps,
   type WorkspaceProvider,
 } from "../src/engine/scheduler.ts";
 import { createWorkspace, DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../src/git/workspace.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
 import type { AttemptDescriptor, ProcessAdapter } from "../src/adapters/adapter.ts";
+import type { ResolvedVendorProfile } from "../src/cli/profiles.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 import { parseArgs, runTestSupervisor } from "../evals/fixtures/test-supervisor.ts";
 
@@ -83,6 +85,34 @@ function setupGitProject(dir: string): string {
 
 function defaultProvider(projectRoot: string): WorkspaceProvider {
   return { projectRoot, root: DEFAULT_WORKTREE_ROOT, branchPrefix: DEFAULT_BRANCH_PREFIX };
+}
+
+// A hand-built fake-vendor `DispatchProfile`, mirroring
+// `adapter-selection.test.ts`'s own `baseProfile()` shape. The fallback
+// dispatch path reads only `vendor`, `profile.model`, and `concurrency`, but
+// the whole `ResolvedVendorProfile` is serialized into `attempts.config_json`.
+function fakeDispatchProfile(maxWorkerSlots: number): DispatchProfile {
+  const profile: ResolvedVendorProfile = {
+    executable: "fake",
+    model: "fake",
+    effort: "medium",
+    permissionMode: "default",
+    sandboxMode: "workspace-write",
+    toolPolicy: { allowedTools: [], disallowedTools: [] },
+    environmentAllowlist: [],
+    timeouts: { spawnMs: 5000, idleMs: 5000, wallMs: 30000 },
+    budgetUsd: null,
+    maxConcurrentProcesses: maxWorkerSlots,
+  };
+  return {
+    vendor: "fake",
+    profile,
+    cliVersion: null,
+    workflowRevision: null,
+    authenticationOutcome: "authenticated",
+    isKnownBadVersion: false,
+    concurrency: { maxWorkerSlots, vendorSlots: { codex: maxWorkerSlots, claude: maxWorkerSlots } },
+  };
 }
 
 function seedFilesClaim(db: ReturnType<typeof openStore>, runId: string, taskId: string, paths: string[]): void {
@@ -625,6 +655,64 @@ test("the scheduler dispatches a two-task board strictly one attempt at a time",
       .prepare(`SELECT COUNT(*) AS n FROM workers WHERE run_id = ? AND termination_state IS NULL`)
       .get(runId) as { n: number };
     assert.equal(stillOneWorker.n, 1, "a second call must not dispatch task-b while task-a's worker is still live");
+  });
+});
+
+test("dispatchEligible dispatches at most maxWorkerSlots attempts per tick when more candidates are eligible than slots", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "integration", priority: 0, now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
+    insertTask(db, { id: "task-c", runId, stageId: "integration", priority: 2, now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["a.txt"]);
+    seedFilesClaim(db, runId, "task-b", ["b.txt"]);
+    seedFilesClaim(db, runId, "task-c", ["c.txt"]);
+
+    const adapter = new FakeAdapter({
+      terminate: noopTerminate,
+      streamsDir: fixturesStreamsDir,
+      scenarioFor: () => "well-formed",
+    });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, undefined, fakeDispatchProfile(2));
+
+    assert.equal(runtime.liveAttemptByTaskId.size, 2, "three eligible candidates must not exceed the two-slot ceiling");
+    assert.ok(runtime.liveAttemptByTaskId.has("task-a"), "priority order fills the first slot with task-a");
+    assert.ok(runtime.liveAttemptByTaskId.has("task-b"), "priority order fills the second slot with task-b");
+    assert.equal(runtime.liveAttemptByTaskId.has("task-c"), false, "the ceiling leaves the lowest-priority candidate undispatched");
+    const attempts = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(attempts.n, 2, "no attempts row is created for the candidate the ceiling withheld");
+
+    for (const live of runtime.liveAttemptByTaskId.values()) await waitForExit(live.handle.pid);
+  });
+});
+
+// Control for the ceiling test above: the identical seed with a three-slot
+// profile dispatches all three. Without it, "two of three dispatched" could
+// not distinguish the slot ceiling from task-c being ineligible for some
+// unrelated reason.
+test("dispatchEligible dispatches every eligible candidate once maxWorkerSlots equals the candidate count", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "integration", priority: 0, now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "integration", priority: 1, now: clock.now() });
+    insertTask(db, { id: "task-c", runId, stageId: "integration", priority: 2, now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["a.txt"]);
+    seedFilesClaim(db, runId, "task-b", ["b.txt"]);
+    seedFilesClaim(db, runId, "task-c", ["c.txt"]);
+
+    const adapter = new FakeAdapter({
+      terminate: noopTerminate,
+      streamsDir: fixturesStreamsDir,
+      scenarioFor: () => "well-formed",
+    });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, undefined, fakeDispatchProfile(3));
+
+    assert.equal(runtime.liveAttemptByTaskId.size, 3, "every candidate the two-slot ceiling withheld is dispatchable in itself");
+    for (const id of ["task-a", "task-b", "task-c"]) assert.ok(runtime.liveAttemptByTaskId.has(id), `${id} dispatches`);
+
+    for (const live of runtime.liveAttemptByTaskId.values()) await waitForExit(live.handle.pid);
   });
 });
 
