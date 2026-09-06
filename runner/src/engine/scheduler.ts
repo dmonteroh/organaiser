@@ -56,6 +56,7 @@ import { runDevelopmentStages, type DevelopmentOutcome } from "./workflow-stages
 import { runIntegrationStages, type IntegrationStagesOutcome } from "./integration-stages.ts";
 import { readRefSha, resolveDestinationRef } from "../git/integrate.ts";
 import { buildDispatchPacketInput } from "../compile/dispatch-packet-input.ts";
+import { renderBoard } from "../board/render.ts";
 
 export interface StageDefinition {
   id: string;
@@ -1074,6 +1075,7 @@ export function createSchedulerTick(
   steps: SchedulerSteps = DEFAULT_SCHEDULER_STEPS,
   workspace?: WorkspaceProvider,
   dispatchProfile?: DispatchProfile,
+  renderRoot?: string,
 ): TickBody {
   const runtime = createSchedulerRuntime();
 
@@ -1089,6 +1091,9 @@ export function createSchedulerTick(
 
     const summary = gatherBoardSummary(ctx, runtime);
     let outcome = classifyTick(summary);
+    if (renderRoot !== undefined && summary.transitionedOrDispatchedThisTick) {
+      renderBoard(renderRoot, ctx.runId);
+    }
     if (outcome.kind === "resting" && outcome.state === "succeeded") {
       await cleanRunnerOwnedWorktrees(ctx, workspace);
       const orphaned = ctx.db
@@ -1176,7 +1181,7 @@ export async function createProductionSchedulerTick(options: CreateProductionSch
   const vendor: "claude" | "codex" | "fake" = rawVendor === "claude" || rawVendor === "codex" ? rawVendor : "fake";
 
   if (vendor === "fake") {
-    return createSchedulerTick(new FakeAdapter({ terminate: terminateFakeAttempt }));
+    return createSchedulerTick(new FakeAdapter({ terminate: terminateFakeAttempt }), DEFAULT_SCHEDULER_STEPS, undefined, undefined, options.root);
   }
 
   const orgaYamlPath = path.join(options.root, "orga.yaml");
@@ -1206,5 +1211,5 @@ export async function createProductionSchedulerTick(options: CreateProductionSch
     terminate: terminateViaGroups,
   });
 
-  return createSchedulerTick(adapter, DEFAULT_SCHEDULER_STEPS, undefined, dispatchProfile);
+  return createSchedulerTick(adapter, DEFAULT_SCHEDULER_STEPS, undefined, dispatchProfile, options.root);
 }
