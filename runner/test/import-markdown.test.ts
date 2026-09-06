@@ -482,6 +482,22 @@ test("the real task-board fixture imports cleanly through importMarkdown with no
     }
   }
 
+  for (const task of board.spec.tasks) {
+    assert.ok(!task.id.includes("`"), `id "${task.id}" still has a backtick`);
+    assert.ok(!task.briefPath.includes("`"), `briefPath of ${task.id} still has a backtick`);
+    for (const dep of task.dependencies) {
+      assert.ok(!dep.includes("`"), `dependencies entry "${dep}" of ${task.id} still has a backtick`);
+    }
+  }
+
+  const p0 = board.spec.tasks.find((task) => task.id === "P0");
+  assert.ok(p0, "row P0 not found in fixture");
+  assert.equal((p0 as { briefPath: string }).briefPath, "05-briefs/P0-scaffold.md");
+
+  const p12 = board.spec.tasks.find((task) => task.id === "P1.2");
+  assert.ok(p12, "row P1.2 not found in fixture");
+  assert.deepEqual((p12 as { dependencies: string[] }).dependencies, ["P1.1"]);
+
   const BARE_BACKTICK_SPAN = /^`[^`]+`$/;
   const expectedAnnotationCount = rows.filter((row) => !BARE_BACKTICK_SPAN.test(row[3] ?? "")).length;
   const annotationUncertainties = uncertainties.filter((u) => u.includes("status annotation ignored:"));
@@ -505,4 +521,22 @@ test("the real task-board fixture imports through the real CLI dispatcher", asyn
     const rows = readTasksTableRows(raw);
     assert.equal(written.spec.tasks.length, rows.length);
   });
+});
+
+test("a row whose Id, Brief, and Depends-on cells are whole backtick spans unwraps each; a Title cell starting with a backtick but not ending with one is preserved verbatim after trimming", () => {
+  const md = tasksTable([
+    taskRow({
+      id: "`P2`",
+      title: "`Partial title",
+      brief: "`05-briefs/P2-thing.md`",
+      dependsOn: "`P1`",
+    }),
+  ]);
+  const { board } = importMarkdown(md, outputPathFor("b"));
+  const task = board.spec.tasks[0];
+  assert.ok(task);
+  assert.equal(task?.id, "P2");
+  assert.equal(task?.briefPath, "05-briefs/P2-thing.md");
+  assert.deepEqual(task?.dependencies, ["P1"]);
+  assert.equal(task?.title, "`Partial title");
 });
