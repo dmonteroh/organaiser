@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
 import type { WorktreeCleanupState } from "../store/types.ts";
+import { createInPlaceWorkspace } from "./in-place.ts";
 
 export const DEFAULT_WORKTREE_ROOT = ".orga/worktrees";
 export const DEFAULT_BRANCH_PREFIX = "orga/task/";
@@ -161,14 +162,9 @@ async function createWorktreeWorkspace(input: CreateWorkspaceInput): Promise<Wor
   };
 }
 
-// The seam P7e fills. Only the worktree branch is implemented here; the
-// in-place branch is a stub that throws rather than falling through to
-// worktree behavior.
 export async function createWorkspace(input: CreateWorkspaceInput): Promise<WorkspaceHandle> {
-  if (input.mode === "in-place") { // P7e: in-place workspace mode is not implemented yet.
-    throw new WorkspaceModeNotImplementedError(
-      "in-place workspace mode is not implemented; P7e fills this branch",
-    );
+  if (input.mode === "in-place") {
+    return createInPlaceWorkspace(input);
   }
   return createWorktreeWorkspace(input);
 }

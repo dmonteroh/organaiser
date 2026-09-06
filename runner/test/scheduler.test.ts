@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -668,8 +669,8 @@ test("dispatchEligible with a workspace provider: a mutating dispatch runs insid
   });
 });
 
-test("dispatchEligible with a workspace provider whose mode is \"in-place\": createWorkspace is invoked with mode \"in-place\", and the not-implemented error surfaces as this tick's invariant violation", async () => {
-  await withRunDb(async ({ dir, db, runId, clock }) => {
+test("dispatchEligible with a workspace provider whose mode is \"in-place\": the task dispatches directly into the operator's checkout, with no worktree created", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock, baseCommit }) => {
     insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
     const provider: WorkspaceProvider = {
@@ -680,24 +681,37 @@ test("dispatchEligible with a workspace provider whose mode is \"in-place\": cre
     };
     const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
 
+    const statusBefore = runGit(dir, ["status", "--porcelain"]);
+
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
 
-    assert.equal(runtime.liveAttempt, null, "the failed workspace creation aborts dispatch for this task");
-    assert.equal(runtime.scratch.invariantViolations.length, 1);
-    assert.match(
-      runtime.scratch.invariantViolations[0] as string,
-      /in-place workspace mode is not implemented/,
+    assert.ok(runtime.liveAttempt, "the task dispatches once its claims row exists");
+    const workspace = runtime.liveAttempt!.workspace;
+    assert.ok(workspace, "a workspace handle is held for a provider-backed mutating dispatch");
+    assert.equal(workspace!.mode, "in-place");
+    assert.equal(workspace!.path, dir, "the handle's path is the project root itself, not a runner-owned worktree");
+    assert.equal(workspace!.baseCommit, baseCommit);
+    assert.deepEqual(
+      workspace!.recordedDirt,
+      ["orgaw"],
+      "the pre-existing untracked orgaw wrapper (setupGitProject never commits it) is recorded as dirt",
     );
+    assert.equal(runtime.liveAttempt!.handle.worktree, dir, "the attempt's working directory is the project root");
+
+    await waitForExit(runtime.liveAttempt!.handle.pid);
 
     const worktreeRows = db.prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ?`).get(runId) as { n: number };
     assert.equal(worktreeRows.n, 0, "no worktree is ever created for an in-place dispatch");
+
+    const statusAfter = runGit(dir, ["status", "--porcelain"]);
+    assert.equal(statusAfter, statusBefore, "a well-formed attempt that writes nothing leaves the checkout exactly as found");
   });
 });
 
-test("test-supervisor.ts driven with workspaceMode \"in-place\": the run is durably recorded blocked on the not-implemented error", async () => {
+test("test-supervisor.ts driven with workspaceMode \"in-place\": a well-formed attempt on a task seeded at \"integration\" runs to completion with no worktree ever created", async () => {
   await withTempWorkspace(async (dir) => {
-    initProject(dir);
+    setupGitProject(dir);
     const runId = "run-1";
     const now = 1_000_000;
     const db = openStore(dir);
@@ -709,22 +723,56 @@ test("test-supervisor.ts driven with workspaceMode \"in-place\": the run is dura
       db.close();
     }
 
-    const args = parseArgs([dir, runId, "50", "400", "150", fixturesStreamsDir, "in-place"]);
-    assert.equal(args.workspaceMode, "in-place");
+    // `runTestSupervisor`'s own `FakeAdapter` keys its scenario file by the
+    // dispatched attempt's task id (`test-supervisor.ts`'s `scenarioFor`),
+    // not by a fixed name, so this attempt's stream lives at
+    // `integration--task-a.jsonl` under a streams directory scoped to this
+    // test rather than the shared `fixturesStreamsDir`.
+    const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-scheduler-inplace-streams-"));
+    fs.writeFileSync(
+      path.join(streamsDir, "integration--task-a.jsonl"),
+      [
+        JSON.stringify({ op: "output", text: "working" }),
+        JSON.stringify({
+          op: "report",
+          report: {
+            protocolVersion: "1",
+            workflowId: "dev-workflow",
+            workflowVersion: "2.0.0",
+            runId: "run-1",
+            taskId: "task-a",
+            attemptId: "attempt-fixture",
+            stageId: "integration",
+            roleId: "integrator",
+            status: "completed",
+            summary: "did the work",
+          },
+        }),
+        JSON.stringify({ op: "exit", code: 0 }),
+      ].join("\n") + "\n",
+    );
 
-    const exitCode = await runTestSupervisor(args);
-    assert.equal(exitCode, 0);
-
-    const verifyDb = openStore(dir);
     try {
-      const run = verifyDb.prepare(`SELECT state, terminal_reason FROM runs WHERE id = ?`).get(runId) as {
-        state: string;
-        terminal_reason: string | null;
-      };
-      assert.equal(run.state, "blocked");
-      assert.match(run.terminal_reason ?? "", /in-place workspace mode is not implemented/);
+      const args = parseArgs([dir, runId, "50", "400", "150", streamsDir, "in-place"]);
+      assert.equal(args.workspaceMode, "in-place");
+
+      const exitCode = await runTestSupervisor(args);
+      assert.equal(exitCode, 0);
+
+      const verifyDb = openStore(dir);
+      try {
+        const run = verifyDb.prepare(`SELECT state, terminal_reason FROM runs WHERE id = ?`).get(runId) as {
+          state: string;
+          terminal_reason: string | null;
+        };
+        assert.equal(run.state, "succeeded");
+        const worktreeRows = verifyDb.prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ?`).get(runId) as { n: number };
+        assert.equal(worktreeRows.n, 0, "no worktree is ever created for an in-place run");
+      } finally {
+        verifyDb.close();
+      }
     } finally {
-      verifyDb.close();
+      fs.rmSync(streamsDir, { recursive: true, force: true });
     }
   });
 });

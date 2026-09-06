@@ -48,6 +48,11 @@ import {
   landedWorkRecoveryWithoutFalseSuccess,
   worktreeCleanup,
 } from "../evals/fixtures/18-cleanup-and-recovery.ts";
+import {
+  inPlaceRefusesDirty,
+  inPlaceSerializes,
+  inPlaceClaimsExcludeRecordedDirt,
+} from "../evals/fixtures/19-in-place.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -94,6 +99,9 @@ test("integration-conflict: a conflicting replay parks the task and leaves the d
 test("worktree-cleanup: success is withheld until every recorded worktree is cleaned", { timeout: FIXTURE_TIMEOUT_MS }, worktreeCleanup);
 test("historical-commit-rewrite: a rewritten destination history never reports success", { timeout: FIXTURE_TIMEOUT_MS }, historicalCommitRewrite);
 test("landed-work-recovery-without-false-success: landed commits alone are not counted as success", { timeout: FIXTURE_TIMEOUT_MS }, landedWorkRecoveryWithoutFalseSuccess);
+test("in-place: a dirty checkout without --allow-dirty refuses to start and dispatches nothing", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceRefusesDirty);
+test("in-place: a two-task board never runs two mutating attempts at once", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceSerializes);
+test("in-place: pre-run dirt on an unrelated path never appears in an attempt's out-of-claim list", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceClaimsExcludeRecordedDirt);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

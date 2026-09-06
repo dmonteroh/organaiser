@@ -14,6 +14,7 @@ import { openStore } from "../store/db.ts";
 import { eventsJsonlPath } from "../store/events.ts";
 import type { RunRow } from "../store/types.ts";
 import { startRun, BoardValidationError } from "../engine/supervisor-spawn.ts";
+import { checkInPlaceStart } from "../git/in-place.ts";
 import {
   pauseRun,
   cancelRun,
@@ -173,6 +174,11 @@ async function cmdRunStart(parsed: ParsedArgs, io: Io): Promise<ExitCode> {
   const board = readBoardFile(boardPath);
   const json = flagBool(parsed.flags, "json");
   const foreground = flagBool(parsed.flags, "foreground");
+
+  const config = readConfig(io);
+  if (config.workspace.mode === "in-place") {
+    checkInPlaceStart({ projectRoot: root, allowDirty: flagBool(parsed.flags, "allow-dirty") });
+  }
 
   if (foreground) {
     return cmdRunStartForeground({ root, boardPath, board, workflowPath, templatePath, json, io });
