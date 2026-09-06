@@ -527,6 +527,31 @@ test("the scheduler never emits succeeded while a dispatchable task exists", asy
   });
 });
 
+test("createSchedulerTick renders BOARD.md via the optional renderRoot when the tick dispatches a task", async () => {
+  await withRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
+
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+    const body = createSchedulerTick(adapter, DEFAULT_SCHEDULER_STEPS, undefined, undefined, dir);
+    const outcome = await body(buildCtx(db, runId, clock));
+
+    assert.ok(outcome.kind === "progress" || outcome.kind === "active");
+    const boardPath = path.join(dir, ".orga", "runs", runId, "BOARD.md");
+    assert.ok(fs.existsSync(boardPath));
+  });
+});
+
+test("createSchedulerTick does not render BOARD.md when nothing transitions or dispatches this tick", async () => {
+  await withRunDb(async ({ dir, db, runId, clock }) => {
+    const body = createSchedulerTick(noWorkAdapter(), DEFAULT_SCHEDULER_STEPS, undefined, undefined, dir);
+    const outcome = await body(buildCtx(db, runId, clock));
+
+    assert.equal(outcome.kind, "resting");
+    const boardPath = path.join(dir, ".orga", "runs", runId, "BOARD.md");
+    assert.ok(!fs.existsSync(boardPath));
+  });
+});
+
 test("executeGates and reconcileState record invariant evidence instead of throwing", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
     withTransaction(db, () => {
