@@ -716,6 +716,60 @@ test("dispatchEligible dispatches every eligible candidate once maxWorkerSlots e
   });
 });
 
+// Regression test for the round-3 critical finding: with `maxWorkerSlots >
+// 1`, a free slot alone must not make a task with a still-live attempt
+// dispatchable again. The entry guard at this function's top only compares
+// `runtime.liveAttemptByTaskId.size` against `maxWorkerSlots` in aggregate,
+// so a second `dispatchEligible` call made while task-a's own attempt is
+// still live (no intervening `reapWorkers`, exactly as two real scheduler
+// ticks would see it) must still treat task-a as ineligible, not just
+// slot-constrained.
+test("dispatchEligible does not dispatch a task a second time while its own attempt is still live, even with a free worker slot (maxWorkerSlots > 1)", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "integration", priority: 0, now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["a.txt"]);
+
+    const adapter = new FakeAdapter({
+      terminate: noopTerminate,
+      streamsDir: fixturesStreamsDir,
+      scenarioFor: () => "well-formed",
+    });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, undefined, fakeDispatchProfile(2));
+
+    assert.equal(runtime.liveAttemptByTaskId.size, 1, "task-a dispatches once, leaving one of the two slots free");
+    const firstAttemptId = runtime.liveAttemptByTaskId.get("task-a")?.attemptId;
+    assert.ok(firstAttemptId, "task-a has a live attempt after the first call");
+
+    // No `reapWorkers` call between the two `dispatchEligible` calls: task-a's
+    // attempt is still live (its `liveAttemptByTaskId` entry is only removed
+    // by `reapWorkers`), and one worker slot is still free
+    // (`maxWorkerSlots: 2`, one live attempt) -- exactly the round-3
+    // reproduction, a second tick's dispatch call while the first attempt is
+    // still running.
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, undefined, fakeDispatchProfile(2));
+
+    assert.equal(
+      runtime.liveAttemptByTaskId.size,
+      1,
+      "task-a must not be dispatched a second time while its own attempt is still live",
+    );
+    assert.equal(
+      runtime.liveAttemptByTaskId.get("task-a")?.attemptId,
+      firstAttemptId,
+      "the live-attempt entry for task-a must not be overwritten by a second dispatch",
+    );
+
+    const attempts = db
+      .prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-a") as { n: number };
+    assert.equal(attempts.n, 1, "exactly one attempts row must exist for task-a");
+
+    await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
+  });
+});
+
 test("priority filtering never bypasses eligibility: a higher-priority ineligible task is skipped for a lower-priority eligible one", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
     // task-a is highest priority but has an unmet dependency, so it is not eligible.

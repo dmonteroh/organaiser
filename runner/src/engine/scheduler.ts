@@ -722,7 +722,9 @@ export async function dispatchEligible(
   if (runtime.liveAttemptByTaskId.size >= maxWorkerSlots) return;
 
   const candidates = listActiveTasks(ctx.db, ctx.runId).filter((task) =>
-    task.stage_id !== null && DISPATCHABLE_STAGE_IDS.has(task.stage_id),
+    task.stage_id !== null &&
+    DISPATCHABLE_STAGE_IDS.has(task.stage_id) &&
+    !runtime.liveAttemptByTaskId.has(task.id),
   );
 
   for (const task of candidates) {
@@ -739,10 +741,12 @@ export async function dispatchEligible(
         workspaceProviderPresent: workspace !== undefined,
       }),
       // `runtime.liveAttemptByTaskId` has no entry for this candidate task
-      // here (checked at this function's entry, and this loop never
-      // dispatches the same task twice), so the held handle for any
-      // candidate task is always none; the matching-handle true branch is
-      // exercised by `worktreeMatchesRecordedBase`'s own unit test instead.
+      // here (the candidates list above excludes any task already holding a
+      // live attempt, so this loop never dispatches the same task a second
+      // time while its own prior attempt is still live), so the held handle
+      // for any candidate task is always none; the matching-handle true
+      // branch is exercised by `worktreeMatchesRecordedBase`'s own unit test
+      // instead.
       worktreeMatchesRecordedBase: worktreeMatchesRecordedBase(ctx.db, {
         runId: ctx.runId,
         taskId: task.id,
