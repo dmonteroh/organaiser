@@ -108,6 +108,24 @@ test("validateBoard flags a dependency cycle via DFS-based cycle detection", () 
   assert.ok(result.errors.some((e) => /dependency cycle detected/.test(e.message)));
 });
 
+test("validateBoard flags a 3-node dependency cycle via DFS-based cycle detection", () => {
+  const board = makeBoard([
+    makeTask({ id: "a", dependencies: ["b"] }),
+    makeTask({ id: "b", dependencies: ["c"] }),
+    makeTask({ id: "c", dependencies: ["a"] }),
+  ]);
+  const result = validateBoard(board);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => /dependency cycle detected/.test(e.message)));
+});
+
+test("validateBoard flags a self-loop via DFS-based cycle detection", () => {
+  const board = makeBoard([makeTask({ id: "a", dependencies: ["a"] })]);
+  const result = validateBoard(board);
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((e) => /dependency cycle detected/.test(e.message)));
+});
+
 test("validateBoard flags an empty claims object masquerading as a real claim set", () => {
   const board = makeBoard([makeTask({ id: "t1", claims: {} })]);
   const result = validateBoard(board);

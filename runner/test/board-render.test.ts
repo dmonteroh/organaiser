@@ -9,6 +9,23 @@ import { initProject } from "../src/store/init.ts";
 import { renderBoard } from "../src/board/render.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 import type { TaskState } from "../src/store/types.ts";
+import { main } from "../bin/orga.ts";
+import { EXIT_CODES } from "../src/cli/exit-codes.ts";
+import type { Io } from "../src/cli/commands.ts";
+
+function fakeIo(dir: string): Io & { outLines: string[]; errLines: string[] } {
+  const outLines: string[] = [];
+  const errLines: string[] = [];
+  return {
+    outLines,
+    errLines,
+    stdout: (line: string) => outLines.push(line),
+    stderr: (line: string) => errLines.push(line),
+    cwd: () => dir,
+    now: () => Date.now(),
+    env: {},
+  };
+}
 
 const ALL_TASK_STATES: TaskState[] = [
   "defined",
@@ -308,6 +325,37 @@ test("renderBoard honors a custom --output path with the same atomic-write and p
 
     const defaultPath = path.join(dir, ".orga", "runs", runId, "BOARD.md");
     assert.ok(!fs.existsSync(defaultPath));
+  });
+});
+
+test("board render invoked via main() writes BOARD.md to the default path and exits OK", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    const runId = "run-cli-1";
+    try {
+      insertRun(db, runId, Date.now());
+      insertTask(db, { id: "t1", runId, state: "defined", now: Date.now() });
+    } finally {
+      db.close();
+    }
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "board", "render", runId], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+
+    const expectedPath = path.join(dir, ".orga", "runs", runId, "BOARD.md");
+    assert.ok(fs.existsSync(expectedPath));
+  });
+});
+
+test("board render invoked via main() with a missing run id exits NOT_FOUND", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "board", "render", "missing-run-id"], io);
+    assert.equal(code, EXIT_CODES.NOT_FOUND);
   });
 });
 
