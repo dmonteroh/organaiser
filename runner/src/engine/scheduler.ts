@@ -40,7 +40,11 @@ import {
   type DispatchConditions,
 } from "./dispatch.ts";
 import { getPredicate } from "./predicate-registry.ts";
-import { PREDICATE_RETURN_UNIONS, TERMINAL_DISPOSITION_VALUES } from "./board-predicates.ts";
+import {
+  PREDICATE_RETURN_UNIONS,
+  TERMINAL_DISPOSITION_VALUES,
+  type RefinementOutcome,
+} from "./board-predicates.ts";
 import { terminateGroups } from "./termination.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
@@ -245,6 +249,13 @@ export interface SchedulerRuntime {
   // case sees no outcome for it, exactly as it does before any dispatch, so
   // the task is reconsidered next tick rather than routed anywhere.
   integrationOutcomeByTaskId: Map<string, IntegrationStagesOutcome>;
+  // Same cross-tick, consume-on-read contract as `developmentOutcomeByTaskId`
+  // and `integrationOutcomeByTaskId`, for `task-refinement`'s own verdict.
+  // Nothing in production code ever populates this map: no
+  // task-refinement sub-workflow dispatch exists, so `gatherFacts`'s
+  // `"refinement-outcome"` case falls back to today's unconditional
+  // `{ decision: "skipped" }` whenever no entry is present.
+  refinementOutcomeByTaskId: Map<string, RefinementOutcome>;
   scratch: TickScratch;
 }
 
@@ -254,6 +265,7 @@ export function createSchedulerRuntime(): SchedulerRuntime {
     priorOutcomeByTaskId: new Map(),
     developmentOutcomeByTaskId: new Map(),
     integrationOutcomeByTaskId: new Map(),
+    refinementOutcomeByTaskId: new Map(),
     scratch: freshScratch(),
   };
 }
@@ -486,9 +498,14 @@ function gatherFacts(
       // task always receives the manifest's own "does not require
       // specification" verdict and advances immediately.
       return { decision: "skipped" };
-    case "refinement-outcome":
-      // Same as above, for task-refinement.
+    case "refinement-outcome": {
+      const outcome = runtime.refinementOutcomeByTaskId.get(task.id);
+      if (outcome) {
+        runtime.refinementOutcomeByTaskId.delete(task.id);
+        return { decision: outcome };
+      }
       return { decision: "skipped" };
+    }
     case "implementation-outcome": {
       const outcome = runtime.developmentOutcomeByTaskId.get(task.id);
       if (!outcome) return null;
