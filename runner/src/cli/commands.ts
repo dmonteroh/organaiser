@@ -24,6 +24,7 @@ import {
 } from "../engine/control-commands.ts";
 import { runSupervisor } from "../engine/supervisor.ts";
 import { dryRun, DryRunBoardError } from "./dry-run.ts";
+import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
@@ -434,9 +435,46 @@ function cmdRunDryRun(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
+function cmdBoardImportMarkdown(parsed: ParsedArgs, io: Io): ExitCode {
+  const inputPath = flagString(parsed.flags, "input");
+  if (!inputPath) throw new UsageError("board import-markdown requires --input <path>");
+  const outputPath = flagString(parsed.flags, "output");
+  if (!outputPath) throw new UsageError("board import-markdown requires --output <path>");
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(inputPath, "utf8");
+  } catch (err) {
+    throw new UsageError(`cannot read input file ${inputPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  let result;
+  try {
+    result = importMarkdown(raw, outputPath);
+  } catch (err) {
+    if (err instanceof ImportMarkdownError) throw new UsageError(err.message);
+    throw err;
+  }
+
+  fs.writeFileSync(outputPath, JSON.stringify(result.board, null, 2));
+
+  for (const uncertainty of result.uncertainties) {
+    io.stderr(uncertainty);
+  }
+
+  const json = flagBool(parsed.flags, "json");
+  emit(
+    io,
+    json,
+    { board: result.board, uncertainties: result.uncertainties },
+    `imported ${result.board.spec.tasks.length} task(s) to ${outputPath}`,
+  );
+  return EXIT_CODES.OK;
+}
+
 // ── Dispatch table ───────────────────────────────────────────────────────────
 
-const VALUE_FLAGS = new Set(["board", "workflow", "template", "until", "timeout", "vendor"]);
+const VALUE_FLAGS = new Set(["board", "workflow", "template", "until", "timeout", "vendor", "input", "output"]);
 
 type CommandBody = (parsed: ParsedArgs, io: Io) => ExitCode | Promise<ExitCode>;
 
@@ -453,6 +491,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "run kill": cmdRunKill,
   "kill-all": cmdKillAll,
   "run dry-run": cmdRunDryRun,
+  "board import-markdown": cmdBoardImportMarkdown,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);
