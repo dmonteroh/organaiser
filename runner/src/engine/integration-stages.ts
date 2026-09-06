@@ -34,14 +34,13 @@ import { positiveInt, type Read } from "../cli/config.ts";
 import { removeWorkspace, type WorkspaceHandle, type WorkspaceRemovalResult } from "../git/workspace.ts";
 import {
   advanceIntegration,
+  buildReviewTree,
   commitTree,
   createCandidateWorkspace,
   headSha,
   readRefSha,
   refIsCurrentCheckout,
   replayTaskBranch,
-  stageClaimedPaths,
-  writeTree,
 } from "../git/integrate.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
@@ -514,14 +513,14 @@ async function buildCandidateWorkspace(ctx: IntegrationDriverContext): Promise<"
   // current sha. `in-place` mode has no separate task branch to replay onto
   // it (the task's edits are uncommitted working-tree changes in this same
   // `projectRoot`), so this manufactures a disposable review commit — the
-  // claim set staged and written into a tree and commit object, touching no
-  // ref, no HEAD, and no working tree in the operator's checkout — and
-  // builds the candidate at that sha instead.
+  // claim set staged into a throwaway index and written into a tree and
+  // commit object, touching no ref, no HEAD, no working tree, and no real
+  // index in the operator's checkout — and builds the candidate at that sha
+  // instead.
   let candidateSha = destinationSha;
   if (input.taskWorkspace.mode === "in-place") {
     const claimedPaths = readClaimedPaths(input.db, input.runId, input.taskId);
-    stageClaimedPaths({ projectRoot: input.projectRoot, claimedPaths });
-    const tree = writeTree(input.projectRoot);
+    const tree = buildReviewTree({ projectRoot: input.projectRoot, destinationSha, claimedPaths });
     candidateSha = commitTree({
       projectRoot: input.projectRoot,
       tree,

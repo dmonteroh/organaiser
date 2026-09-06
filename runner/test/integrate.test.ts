@@ -9,6 +9,8 @@ import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import {
   advanceDestination,
+  buildReviewTree,
+  commitOnBranch,
   createCandidateWorkspace,
   headSha,
   readRefSha,
@@ -191,6 +193,86 @@ test("advanceDestination: fails without moving the ref when expectedOldSha is st
     const ok = advanceDestination({ projectRoot: dir, ref: "refs/heads/scratch", newSha: staleNewSha, expectedOldSha: destinationSha });
     assert.equal(ok, false);
     assert.equal(readRefSha(dir, "refs/heads/scratch"), externalSha, "no forced update: the external move stands");
+  });
+});
+
+test("buildReviewTree: excludes unrelated staged content from the returned tree and leaves the real index untouched", async () => {
+  await withTempWorkspace(async (dir) => {
+    const destinationSha = setupProject(dir);
+
+    fs.writeFileSync(path.join(dir, "unrelated.txt"), "unrelated\n", "utf8");
+    runGit(dir, ["add", "--", "unrelated.txt"]);
+    fs.writeFileSync(path.join(dir, "claimed.txt"), "claimed\n", "utf8");
+
+    const indexBefore = fs.readFileSync(path.join(dir, ".git", "index"));
+    const statusBefore = runGit(dir, ["status", "--porcelain"]);
+
+    const tree = buildReviewTree({ projectRoot: dir, destinationSha, claimedPaths: ["claimed.txt"] });
+
+    const treeEntries = runGit(dir, ["ls-tree", "-r", "--name-only", tree]).split("\n").filter(Boolean);
+    assert.deepEqual(
+      treeEntries.sort(),
+      ["claimed.txt", "seed.txt"],
+      "the returned tree carries the destination's content plus only the claimed path, never the unrelated staged file",
+    );
+
+    const indexAfter = fs.readFileSync(path.join(dir, ".git", "index"));
+    assert.ok(indexBefore.equals(indexAfter), "the real index is byte-for-byte unchanged");
+    assert.equal(runGit(dir, ["status", "--porcelain"]), statusBefore, "git status is unchanged after building the review tree");
+  });
+});
+
+test("commitOnBranch: excludes unrelated staged content from the landed commit but leaves it staged afterward", async () => {
+  await withTempWorkspace(async (dir) => {
+    runGit(dir, ["init", "-q"]);
+    runGit(dir, ["config", "commit.gpgsign", "false"]);
+    const before = commitFile(dir, "seed.txt", "seed\n", "seed");
+
+    fs.writeFileSync(path.join(dir, "unrelated.txt"), "unrelated\n", "utf8");
+    runGit(dir, ["add", "--", "unrelated.txt"]);
+    fs.writeFileSync(path.join(dir, "claimed.txt"), "claimed\n", "utf8");
+
+    const sha = commitOnBranch({ projectRoot: dir, claimedPaths: ["claimed.txt"], message: "land claimed.txt" });
+
+    assert.equal(runGit(dir, ["rev-parse", "HEAD"]), sha);
+    assert.equal(runGit(dir, ["rev-parse", "HEAD^"]), before, "exactly one new commit, parented at the prior tip");
+    const landed = runGit(dir, ["ls-tree", "-r", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+    assert.deepEqual(
+      landed.sort(),
+      ["claimed.txt", "seed.txt"],
+      "the landed commit carries only seed.txt and the claimed path, never the unrelated staged file",
+    );
+    assert.equal(
+      runGit(dir, ["diff", "--cached", "--name-only"]),
+      "unrelated.txt",
+      "the unrelated file remains staged after landing, never swept or reset",
+    );
+  });
+});
+
+test("commitOnBranch: an empty claim set lands a true zero-diff commit, its tree identical to its parent's, and leaves staged dirt untouched", async () => {
+  await withTempWorkspace(async (dir) => {
+    runGit(dir, ["init", "-q"]);
+    runGit(dir, ["config", "commit.gpgsign", "false"]);
+    const before = commitFile(dir, "seed.txt", "seed\n", "seed");
+
+    fs.writeFileSync(path.join(dir, "unrelated.txt"), "unrelated\n", "utf8");
+    runGit(dir, ["add", "--", "unrelated.txt"]);
+
+    const sha = commitOnBranch({ projectRoot: dir, claimedPaths: [], message: "empty claim set" });
+
+    assert.equal(runGit(dir, ["rev-parse", "HEAD"]), sha);
+    assert.equal(runGit(dir, ["rev-parse", "HEAD^"]), before, "exactly one new commit, parented at the prior tip");
+    assert.equal(
+      runGit(dir, ["rev-parse", `${sha}^{tree}`]),
+      runGit(dir, ["rev-parse", `${before}^{tree}`]),
+      "the landed commit's tree is identical to its parent's: a true zero-diff commit",
+    );
+    assert.equal(
+      runGit(dir, ["diff", "--cached", "--name-only"]),
+      "unrelated.txt",
+      "staged dirt remains untouched by an empty-claim-set commit",
+    );
   });
 });
 

@@ -8,6 +8,9 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import { withTransaction } from "../store/db.ts";
@@ -16,6 +19,7 @@ import type { WorkspaceHandle } from "./workspace.ts";
 
 interface GitCallOptions {
   cwd: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 function git(
@@ -28,13 +32,14 @@ function git(
 ): string;
 function git(
   args: readonly string[],
-  { cwd, tolerant = false }: GitCallOptions & { tolerant?: boolean },
+  { cwd, env, tolerant = false }: GitCallOptions & { tolerant?: boolean },
 ): string | null {
   try {
     return execFileSync("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
+      env: env ? { ...process.env, ...env } : undefined,
     }).trim();
   } catch (err) {
     if (tolerant) return null;
@@ -176,10 +181,34 @@ export function stageClaimedPaths({ projectRoot, claimedPaths }: StageClaimedPat
   git(["add", "--", ...claimedPaths], { cwd: projectRoot });
 }
 
-// Writes the current index as a tree object: touches no ref, no HEAD, no
-// working tree.
-export function writeTree(projectRoot: string): string {
-  return git(["write-tree"], { cwd: projectRoot });
+export interface BuildReviewTreeInput {
+  projectRoot: string;
+  destinationSha: string;
+  claimedPaths: readonly string[];
+}
+
+// Builds a tree object for the in-place review candidate without ever
+// opening `projectRoot/.git/index` for writing: a throwaway index file,
+// pointed at via `GIT_INDEX_FILE`, is seeded with the destination's tree and
+// then has only the claim set's current working-tree content staged into
+// it, so the resulting tree (and the real index the operator sees in `git
+// status`) never reflects anything staged outside the claim set. Touches no
+// ref, no HEAD, no working tree, and no real index.
+export function buildReviewTree({ projectRoot, destinationSha, claimedPaths }: BuildReviewTreeInput): string {
+  const tmpIndex = path.join(os.tmpdir(), `orga-review-index-${randomUUID()}`);
+  try {
+    git(["read-tree", destinationSha], { cwd: projectRoot, env: { GIT_INDEX_FILE: tmpIndex } });
+    if (claimedPaths.length > 0) {
+      git(["add", "--", ...claimedPaths], { cwd: projectRoot, env: { GIT_INDEX_FILE: tmpIndex } });
+    }
+    return git(["write-tree"], { cwd: projectRoot, env: { GIT_INDEX_FILE: tmpIndex } });
+  } finally {
+    try {
+      fs.unlinkSync(tmpIndex);
+    } catch {
+      // The throwaway index may not exist if an earlier git call above threw.
+    }
+  }
 }
 
 export interface CommitTreeInput {
@@ -204,15 +233,23 @@ export interface CommitOnBranchInput {
 
 // The `in-place` workspace mode's landing step: re-stages the claim set
 // (idempotent — safe whether or not it is already staged from building the
-// review candidate) and runs a plain, argument-array `git commit` directly
-// on whatever the branch's current tip is. No compare-and-swap, no
-// `update-ref`: this is a normal commit on the operator's own checkout.
-// `--allow-empty` so a task whose claim set is empty, or whose edits net out
-// to no diff against the destination, still lands a commit rather than
-// failing the whole integration on git's own "nothing to commit" refusal.
+// review candidate) and runs `git commit` scoped to the claim set's pathspec
+// directly on whatever the branch's current tip is, so anything else staged
+// in the operator's real index (pre-existing dirt, unrelated work) is never
+// swept into the landed commit and is left staged, untouched. No
+// compare-and-swap, no `update-ref`: this is a normal commit on the
+// operator's own checkout. An empty claim set uses the `:(exclude)*` magic
+// pathspec rather than a bare `--`: a trailing `--` with zero pathspec
+// tokens silently degrades to "no restriction" in git, which would commit
+// the whole index again; `:(exclude)*` produces a true zero-diff commit
+// whose tree is identical to its parent's. `--allow-empty` so a task whose
+// claim set is empty, or whose edits net out to no diff against the
+// destination, still lands a commit rather than failing the whole
+// integration on git's own "nothing to commit" refusal.
 export function commitOnBranch({ projectRoot, claimedPaths, message }: CommitOnBranchInput): string {
   stageClaimedPaths({ projectRoot, claimedPaths });
-  git(["commit", "--allow-empty", "-m", message], { cwd: projectRoot });
+  const pathspec = claimedPaths.length > 0 ? claimedPaths : [":(exclude)*"];
+  git(["commit", "--allow-empty", "-m", message, "--", ...pathspec], { cwd: projectRoot });
   return headSha(projectRoot);
 }
 

@@ -956,7 +956,12 @@ async function withInPlaceEnv(claimedPaths: readonly string[], fn: (env: InPlace
         recordedDirt: [],
       };
 
-      const taskDir = path.join(dir, "task-dir");
+      // `.orga`-rooted, mirroring `scheduler.ts`'s own `taskEvidenceDir`
+      // placement: `.orga/` is gitignored, so the barrier's ledger write
+      // (`writeLedger`, run at `verify-candidate` on every attempt) never
+      // shows up as untracked content in the operator's own checkout, here
+      // the same directory as `projectRoot` in `in-place` mode.
+      const taskDir = path.join(dir, ".orga", "task-dir");
       fs.mkdirSync(taskDir, { recursive: true });
       const streamsDir = path.join(dir, "streams");
       fs.mkdirSync(streamsDir, { recursive: true });
@@ -1189,6 +1194,7 @@ test("in-place mode: a failed cross-task-review never resets, checks out, stashe
     const headBefore = runGit(env.dir, ["rev-parse", `refs/heads/${IN_PLACE_BRANCH}`]);
     const branchBefore = runGit(env.dir, ["symbolic-ref", "--short", "HEAD"]);
     const contentBefore = fs.readFileSync(path.join(env.dir, "feature.txt"), "utf8");
+    const statusBefore = runGit(env.dir, ["status", "--porcelain"]);
 
     const outcome = await runIntegrationStages(inPlaceInput(env, adapter));
 
@@ -1203,6 +1209,57 @@ test("in-place mode: a failed cross-task-review never resets, checks out, stashe
       fs.readFileSync(path.join(env.dir, "feature.txt"), "utf8"),
       contentBefore,
       "the claimed path's content is byte-identical to what the task itself wrote, never reset or reverted",
+    );
+    assert.equal(
+      runGit(env.dir, ["status", "--porcelain"]),
+      statusBefore,
+      "the operator's working tree and index are byte-identical to their pre-integration state on a failed review",
+    );
+  });
+});
+
+test("in-place mode: an unrelated file staged in the operator's real index is never leaked into the review candidate or the landed commit, and remains staged throughout", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    fs.writeFileSync(path.join(env.dir, "unrelated.txt"), "unrelated contents\n", "utf8");
+    runGit(env.dir, ["add", "--", "unrelated.txt"]);
+    const stagedBefore = runGit(env.dir, ["diff", "--cached", "--name-only"]);
+
+    const workingDirectories: string[] = [];
+    const candidateUnrelatedPresence: boolean[] = [];
+    const inner = new FakeAdapter({ terminate: noopTerminate, streamsDir: env.streamsDir, scenarioFor: () => "pass" });
+    const capturingAdapter: ProcessAdapter = {
+      probe: (configuration) => inner.probe(configuration),
+      start: async (attempt, packet, surface) => {
+        workingDirectories.push(surface.workingDirectory);
+        candidateUnrelatedPresence.push(fs.existsSync(path.join(surface.workingDirectory, "unrelated.txt")));
+        return inner.start(attempt, packet, surface);
+      },
+      observe: (handle) => inner.observe(handle),
+      cancel: (handle, gracePeriodMs) => inner.cancel(handle, gracePeriodMs),
+      collect: (handle) => inner.collect(handle),
+      classify: (artifacts) => inner.classify(artifacts),
+    };
+    writeReviewerStream(env.streamsDir, "pass", IN_PLACE_TASK_ID, "pass");
+
+    const outcome = await runIntegrationStages(inPlaceInput(env, capturingAdapter));
+
+    assert.equal(outcome.outcome, "integrated", `expected integrated; got ${JSON.stringify(outcome)}`);
+    assert.equal(workingDirectories.length, 1, "cross-task-review dispatches exactly one attempt");
+    assert.deepEqual(
+      candidateUnrelatedPresence,
+      [false],
+      "the unrelated staged file never leaks into the review candidate's working directory",
+    );
+
+    assert.ok(outcome.resultCommit);
+    const landedFiles = runGit(env.dir, ["ls-tree", "-r", "--name-only", "HEAD"]).split("\n");
+    assert.ok(!landedFiles.includes("unrelated.txt"), "the unrelated staged file is absent from the landed commit's tree");
+    assert.ok(landedFiles.includes("feature.txt"), "the claimed file is present in the landed commit's tree");
+
+    assert.equal(
+      runGit(env.dir, ["diff", "--cached", "--name-only"]),
+      stagedBefore,
+      "the unrelated file remains staged, never swept or reset, across the whole integration",
     );
   });
 });
