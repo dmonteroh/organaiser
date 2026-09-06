@@ -241,7 +241,7 @@ test("a dispatched attempt's resolved vendor profile, CLI version, and workflow 
 
       await dispatchEligible(ctx, runtime, adapter, undefined, dispatchProfile);
 
-      assert.ok(runtime.liveAttempt, "the task dispatches");
+      assert.ok(runtime.liveAttemptByTaskId.get("task-a"), "the task dispatches");
       const row = db
         .prepare(`SELECT vendor, model, config_json FROM attempts WHERE run_id = ?`)
         .get(runId) as { vendor: string; model: string; config_json: string };

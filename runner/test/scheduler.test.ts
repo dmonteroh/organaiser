@@ -617,8 +617,8 @@ test("the scheduler dispatches a two-task board strictly one attempt at a time",
       .prepare(`SELECT COUNT(*) AS n FROM workers WHERE run_id = ? AND termination_state IS NULL`)
       .get(runId) as { n: number };
     assert.equal(liveWorkers.n, 1, "only one worker should be live after one dispatchEligible call");
-    assert.ok(runtime.liveAttempt, "runtime should be tracking exactly the one live attempt");
-    assert.equal(runtime.liveAttempt?.taskId, "task-a", "priority order dispatches task-a first");
+    assert.equal(runtime.liveAttemptByTaskId.size, 1, "runtime should be tracking exactly the one live attempt");
+    assert.ok(runtime.liveAttemptByTaskId.has("task-a"), "priority order dispatches task-a first");
 
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
     const stillOneWorker = db
@@ -650,7 +650,7 @@ test("priority filtering never bypasses eligibility: a higher-priority ineligibl
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
 
-    assert.equal(runtime.liveAttempt?.taskId, "task-b", "the eligible, lower-priority task is dispatched instead");
+    assert.ok(runtime.liveAttemptByTaskId.has("task-b"), "the eligible, lower-priority task is dispatched instead");
   });
 });
 
@@ -663,16 +663,14 @@ test("dispatchEligible: a mutating task with no claims rows is not dispatched wh
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
 
-    const liveAfterFirstCall: unknown = runtime.liveAttempt;
-    assert.equal(liveAfterFirstCall, null, "no claims row means claimSetComplete is false");
+    assert.equal(runtime.liveAttemptByTaskId.size, 0, "no claims row means claimSetComplete is false");
     const attemptsBefore = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
     assert.equal(attemptsBefore.n, 0, "no attempts row is created for an ineligible dispatch");
 
     seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
 
-    const liveAfterSecondCall = runtime.liveAttempt as { taskId: string } | null;
-    assert.equal(liveAfterSecondCall?.taskId, "task-a", "the task dispatches once its claims row exists");
+    assert.ok(runtime.liveAttemptByTaskId.has("task-a"), "the task dispatches once its claims row exists");
     const attemptsAfter = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
     assert.equal(attemptsAfter.n, 1);
   });
@@ -686,9 +684,10 @@ test("dispatchEligible with no workspace provider: unchanged behavior — zero w
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
 
-    assert.equal(runtime.liveAttempt?.taskId, "task-a");
-    assert.equal(runtime.liveAttempt?.workspace, null, "no workspace handle is held without a provider");
-    assert.equal(runtime.liveAttempt?.handle.worktree, process.cwd(), "the working directory is unchanged");
+    const attemptTaskA = runtime.liveAttemptByTaskId.get("task-a");
+    assert.ok(attemptTaskA, "task-a dispatches");
+    assert.equal(attemptTaskA!.workspace, null, "no workspace handle is held without a provider");
+    assert.equal(attemptTaskA!.handle.worktree, process.cwd(), "the working directory is unchanged");
 
     const worktreeRows = db.prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ?`).get(runId) as { n: number };
     assert.equal(worktreeRows.n, 0, "no worktree is ever created without a provider");
@@ -708,14 +707,15 @@ test("dispatchEligible with a workspace provider: a mutating dispatch runs insid
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
 
-    assert.ok(runtime.liveAttempt, "the task dispatches once its claims row exists");
-    const workspace = runtime.liveAttempt!.workspace;
+    const attemptTaskA = runtime.liveAttemptByTaskId.get("task-a");
+    assert.ok(attemptTaskA, "the task dispatches once its claims row exists");
+    const workspace = attemptTaskA!.workspace;
     assert.ok(workspace, "a workspace handle is held for a provider-backed mutating dispatch");
     assert.ok(fs.existsSync(workspace!.path), "the worktree directory exists on disk");
-    assert.equal(runtime.liveAttempt!.handle.worktree, workspace!.path, "the attempt's working directory is the worktree path");
+    assert.equal(attemptTaskA!.handle.worktree, workspace!.path, "the attempt's working directory is the worktree path");
 
     // Let the fake worker process finish before inspecting the checkout again.
-    await waitForExit(runtime.liveAttempt!.handle.pid);
+    await waitForExit(attemptTaskA!.handle.pid);
 
     const headAfter = runGit(dir, ["rev-parse", "HEAD"]);
     const statusAfter = runGit(dir, ["status", "--porcelain"]);
@@ -779,8 +779,8 @@ test("dispatchEligible with a workspace provider whose mode is \"in-place\": the
       await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
 
       assert.equal(
-        runtime.liveAttempt,
-        null,
+        runtime.liveAttemptByTaskId.size,
+        0,
         "the in-place integration pipeline runs to completion inside dispatchEligible; no live attempt handle is held",
       );
       const outcome = runtime.integrationOutcomeByTaskId.get("task-a");
@@ -910,12 +910,12 @@ test("normalizeResults: a mutating attempt whose observed diff exceeds its claim
 
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
-    assert.ok(runtime.liveAttempt);
-    const workspacePath = runtime.liveAttempt!.workspace!.path;
+    assert.ok(runtime.liveAttemptByTaskId.get("task-a"));
+    const workspacePath = runtime.liveAttemptByTaskId.get("task-a")!.workspace!.path;
 
     // Simulate the worker writing an out-of-claim file into its worktree.
     fs.writeFileSync(path.join(workspacePath, "unclaimed.txt"), "surprise\n", "utf8");
-    await waitForExit(runtime.liveAttempt!.handle.pid);
+    await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
 
     const diffBefore = runGit(workspacePath, ["diff"]);
     const statusBefore = runGit(workspacePath, ["status", "--porcelain"]);
@@ -923,7 +923,7 @@ test("normalizeResults: a mutating attempt whose observed diff exceeds its claim
     reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
-    assert.equal(runtime.liveAttempt, null);
+    assert.equal(runtime.liveAttemptByTaskId.size, 0);
 
     const attempt = db.prepare(`SELECT status FROM attempts WHERE run_id = ? AND task_id = ?`).get(runId, "task-a") as {
       status: string;
@@ -973,9 +973,9 @@ test("normalizeResults: a genuine git failure inside observedPaths still fails t
 
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
-    assert.ok(runtime.liveAttempt);
-    const workspacePath = runtime.liveAttempt!.workspace!.path;
-    await waitForExit(runtime.liveAttempt!.handle.pid);
+    assert.ok(runtime.liveAttemptByTaskId.get("task-a"));
+    const workspacePath = runtime.liveAttemptByTaskId.get("task-a")!.workspace!.path;
+    await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
 
     // Delete the worktree directory itself (not through `git worktree
     // remove`, so git's own metadata is left dangling too) so that
@@ -987,7 +987,7 @@ test("normalizeResults: a genuine git failure inside observedPaths still fails t
     reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
-    assert.equal(runtime.liveAttempt, null);
+    assert.equal(runtime.liveAttemptByTaskId.size, 0);
 
     const attempt = db.prepare(`SELECT status FROM attempts WHERE run_id = ? AND task_id = ?`).get(runId, "task-a") as {
       status: string;
@@ -1022,20 +1022,20 @@ test("a task whose out-of-claim rejection left an active worktrees row is not re
 
     const runtime = createSchedulerRuntime();
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
-    const workspacePath = runtime.liveAttempt!.workspace!.path;
+    const workspacePath = runtime.liveAttemptByTaskId.get("task-a")!.workspace!.path;
     fs.writeFileSync(path.join(workspacePath, "unclaimed.txt"), "surprise\n", "utf8");
-    await waitForExit(runtime.liveAttempt!.handle.pid);
+    await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
 
     reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
-    assert.equal(runtime.liveAttempt, null);
+    assert.equal(runtime.liveAttemptByTaskId.size, 0);
 
     const attemptsBefore = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
     assert.equal(attemptsBefore.n, 1);
 
     await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
 
-    assert.equal(runtime.liveAttempt, null, "the leftover active worktrees row blocks redispatch");
+    assert.equal(runtime.liveAttemptByTaskId.size, 0, "the leftover active worktrees row blocks redispatch");
     const attemptsAfter = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
     assert.equal(attemptsAfter.n, 1, "no second attempts row is created");
   });

@@ -112,6 +112,7 @@ export interface FixtureTaskSpec {
   dependsOn?: readonly string[];
   briefPath?: string;
   priority?: number;
+  claimedPaths?: readonly string[];
 }
 
 export function boardWithTasks(tasks: readonly FixtureTaskSpec[]): unknown {
@@ -195,6 +196,11 @@ export function seedTasks(root: string, runId: string, tasks: readonly FixtureTa
           now,
           now,
         );
+        if (task.claimedPaths !== undefined) {
+          db.prepare(
+            `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ).run(randomUUID(), runId, task.id, "files", JSON.stringify(task.claimedPaths), now);
+        }
       }
     });
   } finally {
