@@ -1,7 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { importMarkdown, ImportMarkdownError } from "../src/board/import-markdown.ts";
+import { main } from "../bin/orga.ts";
+import { EXIT_CODES } from "../src/cli/exit-codes.ts";
+import type { Io } from "../src/cli/commands.ts";
+import { withTempWorkspace } from "./helpers/workspace.ts";
+
+const REAL_BOARD_FIXTURE = new URL("./fixtures/import-markdown/task-board.md", import.meta.url);
+
+function fakeIo(dir: string): Io & { outLines: string[]; errLines: string[] } {
+  const outLines: string[] = [];
+  const errLines: string[] = [];
+  return {
+    outLines,
+    errLines,
+    stdout: (line: string) => outLines.push(line),
+    stderr: (line: string) => errLines.push(line),
+    cwd: () => dir,
+    now: () => Date.now(),
+    env: {},
+  };
+}
 
 const TASKS_HEADER = "| Id | Title | Brief | Status | Depends on | Parallel | Claims | Branch |";
 const TASKS_SEP = "| --- | --- | --- | --- | --- | --- | --- | --- |";
@@ -254,4 +277,232 @@ test("schema validation refuses an assembled board before any write: zero data r
     () => importMarkdown(md, outputPathFor("b")),
     (err: unknown) => err instanceof ImportMarkdownError && /schema validation/.test(err.message),
   );
+});
+
+test("a bare Status token followed by non-parenthetical free text emits the exact status-annotation uncertainty", () => {
+  const md = tasksTable([taskRow({ id: "P1", status: "drafted needs another look" })]);
+  const { uncertainties } = importMarkdown(md, outputPathFor("b"));
+  assert.ok(uncertainties.includes(`task P1: status annotation ignored: "needs another look"`));
+});
+
+test("a backtick-wrapped Status token outside the vocabulary still refuses, quoting the extracted token", () => {
+  const md = tasksTable([taskRow({ id: "P9", status: "`mystery-status`" })]);
+  assert.throws(
+    () => importMarkdown(md, outputPathFor("b")),
+    (err: unknown) => err instanceof ImportMarkdownError && /P9/.test(err.message) && /"mystery-status"/.test(err.message),
+  );
+});
+
+test("a Claims cell whose every part is shape D maps to 'unknown' with the exact cell-level uncertainty", () => {
+  const md = tasksTable([taskRow({ id: "P1", claims: "some vague thing, another vague thing" })]);
+  const { board, uncertainties } = importMarkdown(md, outputPathFor("b"));
+  assert.equal(board.spec.tasks[0]?.claims, "unknown");
+  assert.ok(
+    uncertainties.includes(
+      `task P1: claims cell "some vague thing, another vague thing" yielded no file claim; claims recorded as unknown`,
+    ),
+  );
+  assert.ok(uncertainties.includes(`task P1: claims part "some vague thing" has no backticked path; dropped`));
+  assert.ok(uncertainties.includes(`task P1: claims part "another vague thing" has no backticked path; dropped`));
+});
+
+test("a Claims part whose trailing parenthetical itself contains a backtick span keeps every backticked path", () => {
+  const claimsPart = "`foo/bar.ts` (see `baz/qux.ts`)";
+  const md = tasksTable([taskRow({ id: "P1", claims: claimsPart })]);
+  const { board, uncertainties } = importMarkdown(md, outputPathFor("b"));
+  assert.deepEqual(board.spec.tasks[0]?.claims, {
+    files: ["foo/bar.ts", "baz/qux.ts"],
+    nonFile: [],
+  });
+  assert.ok(
+    uncertainties.includes(
+      `task P1: claims part "${claimsPart}" mixes prose with backticked paths; kept only the backticked paths`,
+    ),
+  );
+});
+
+function readTasksTableRows(markdown: string): string[][] {
+  const lines = markdown.split(/\r?\n/);
+  const headerIndex = lines.findIndex((line) => line.trim() === TASKS_HEADER);
+  assert.notEqual(headerIndex, -1, "Tasks table header not found in fixture");
+  const rows: string[][] = [];
+  let i = headerIndex + 2;
+  while (i < lines.length) {
+    const trimmed = (lines[i] as string).trim();
+    if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) break;
+    rows.push(
+      trimmed
+        .slice(1, -1)
+        .split("|")
+        .map((cell) => cell.trim()),
+    );
+    i++;
+  }
+  return rows;
+}
+
+function backtickSpansOf(cell: string): string[] {
+  return Array.from(cell.matchAll(/`([^`]+)`/g)).map((match) => match[1] as string);
+}
+
+function claimsFilesFor(
+  tasks: readonly { id: string; claims: "unknown" | { files: string[]; nonFile: string[] } }[],
+  id: string,
+): string[] {
+  const claims = tasks.find((task) => task.id === id)?.claims;
+  assert.ok(claims && claims !== "unknown", `expected ${id} to have file claims`);
+  return (claims as { files: string[] }).files;
+}
+
+function assertRowClaims(
+  rows: readonly string[][],
+  tasks: readonly { id: string; claims: "unknown" | { files: string[]; nonFile: string[] } }[],
+  id: string,
+  quotedCell: string,
+  expectedFiles: readonly string[],
+): void {
+  const row = rows.find((r) => r[0] === id);
+  assert.ok(row, `row ${id} not found in fixture`);
+  const cell = (row as string[])[6] ?? "";
+  const files = claimsFilesFor(tasks, id);
+  if (cell === quotedCell) {
+    assert.deepEqual(files, [...expectedFiles]);
+  } else {
+    for (const span of backtickSpansOf(cell)) {
+      assert.ok(files.includes(span), `expected ${id} claims.files to include "${span}"; got ${JSON.stringify(files)}`);
+    }
+  }
+}
+
+test("the real task-board fixture imports cleanly through importMarkdown with no data loss", () => {
+  const fixturePath = fileURLToPath(REAL_BOARD_FIXTURE);
+  const raw = fs.readFileSync(fixturePath, "utf8");
+  const { board, uncertainties } = importMarkdown(raw, outputPathFor("real-board"));
+
+  const rows = readTasksTableRows(raw);
+  assert.equal(board.spec.tasks.length, rows.length);
+
+  assertRowClaims(
+    rows,
+    board.spec.tasks,
+    "P3",
+    "`workflows/dev-workflow.md`, `workflows/task-refinement-workflow.md`, `workflows/product-spec-workflow.md`, `workflows/task-board-workflow.md`, `workflows/conventions.md`, seven runnable templates, `test/workflow-parity/golden/`",
+    [
+      "workflows/dev-workflow.md",
+      "workflows/task-refinement-workflow.md",
+      "workflows/product-spec-workflow.md",
+      "workflows/task-board-workflow.md",
+      "workflows/conventions.md",
+      "test/workflow-parity/golden/",
+    ],
+  );
+
+  assertRowClaims(
+    rows,
+    board.spec.tasks,
+    "P8b-i",
+    "`runner/src/board/import-markdown.ts`, `runner/test/import-markdown.test.ts`, one new checked-in board fixture",
+    ["runner/src/board/import-markdown.ts", "runner/test/import-markdown.test.ts"],
+  );
+
+  assertRowClaims(
+    rows,
+    board.spec.tasks,
+    "P1",
+    "`workflows/*.md` frontmatter, `workflows/conventions.md`, `test/workflow-parity/`",
+    ["workflows/*.md", "workflows/conventions.md", "test/workflow-parity/"],
+  );
+
+  assertRowClaims(
+    rows,
+    board.spec.tasks,
+    "P1.3",
+    "the nine manual-only `workflows/*-workflow.md`",
+    ["workflows/*-workflow.md"],
+  );
+
+  const p8ciaCell =
+    "`runner/src/adapters/probe.ts`, `runner/src/cli/doctor.ts`, `runner/src/cli/config.ts`, `runner/src/engine/dispatch.ts`, `runner/src/engine/board-predicates.ts`, `runner/src/engine/scheduler.ts`, `runner/test/dispatch-idempotency.test.ts`, `runner/test/board-predicates.test.ts`, `runner/test/config.test.ts`, `runner/test/adapter-selection.test.ts` (undeclared, mechanical follow-up fix — see brief's follow-ups file)";
+  const p8ciaRow = rows.find((r) => r[0] === "P8c-i-a");
+  assert.ok(p8ciaRow, "row P8c-i-a not found in fixture");
+  const p8ciaFiles = claimsFilesFor(board.spec.tasks, "P8c-i-a");
+  if ((p8ciaRow as string[])[6] === p8ciaCell) {
+    assert.equal(p8ciaFiles.length, 10);
+    assert.equal(p8ciaFiles[p8ciaFiles.length - 1], "runner/test/adapter-selection.test.ts");
+  } else {
+    for (const span of backtickSpansOf((p8ciaRow as string[])[6] ?? "")) {
+      assert.ok(p8ciaFiles.includes(span));
+    }
+  }
+
+  const p7eiCell =
+    "`runner/src/cli/config.ts`, `runner/src/engine/scheduler.ts` (one field, one call site), `runner/evals/fixtures/harness.ts` (one type), `runner/evals/fixtures/test-supervisor.ts`, `runner/test/config.test.ts`, `runner/test/scheduler.test.ts`";
+  const p7eiRow = rows.find((r) => r[0] === "P7e-i");
+  assert.ok(p7eiRow, "row P7e-i not found in fixture");
+  const p7eiFiles = claimsFilesFor(board.spec.tasks, "P7e-i");
+  if ((p7eiRow as string[])[6] === p7eiCell) {
+    assert.equal(p7eiFiles.length, 6);
+  } else {
+    for (const span of backtickSpansOf((p7eiRow as string[])[6] ?? "")) {
+      assert.ok(p7eiFiles.includes(span));
+    }
+  }
+
+  const p3diCell = "`workflows/task-board-workflow.md`, `workflows/conventions.md` Workflow ids register, `test/workflow-parity/static.test.mjs`";
+  const p3diRow = rows.find((r) => r[0] === "P3d-i");
+  assert.ok(p3diRow, "row P3d-i not found in fixture");
+  const p3diFiles = claimsFilesFor(board.spec.tasks, "P3d-i");
+  if ((p3diRow as string[])[6] === p3diCell) {
+    assert.equal(p3diFiles.length, 3);
+  } else {
+    for (const span of backtickSpansOf((p3diRow as string[])[6] ?? "")) {
+      assert.ok(p3diFiles.includes(span));
+    }
+  }
+
+  const p10Cell =
+    "`workflows/manifests/`, `workflows/schemas/`, the nine manual-only `workflows/*-workflow.md` frontmatter, `test/workflow-parity/`";
+  const p10Row = rows.find((r) => r[0] === "P10");
+  assert.ok(p10Row, "row P10 not found in fixture");
+  const p10Files = claimsFilesFor(board.spec.tasks, "P10");
+  if ((p10Row as string[])[6] === p10Cell) {
+    assert.equal(p10Files.length, 4);
+    assert.ok(p10Files.includes("workflows/*-workflow.md"));
+  } else {
+    for (const span of backtickSpansOf((p10Row as string[])[6] ?? "")) {
+      assert.ok(p10Files.includes(span));
+    }
+  }
+
+  for (const task of board.spec.tasks) {
+    if (task.claims === "unknown") continue;
+    for (const file of task.claims.files) {
+      assert.ok(!file.includes("`"), `claims.files entry "${file}" for ${task.id} still has a backtick`);
+      assert.ok(!/\s/.test(file), `claims.files entry "${file}" for ${task.id} still has whitespace`);
+    }
+  }
+
+  const BARE_BACKTICK_SPAN = /^`[^`]+`$/;
+  const expectedAnnotationCount = rows.filter((row) => !BARE_BACKTICK_SPAN.test(row[3] ?? "")).length;
+  const annotationUncertainties = uncertainties.filter((u) => u.includes("status annotation ignored:"));
+  assert.equal(annotationUncertainties.length, expectedAnnotationCount);
+});
+
+test("the real task-board fixture imports through the real CLI dispatcher", async () => {
+  await withTempWorkspace(async (dir) => {
+    const fixturePath = fileURLToPath(REAL_BOARD_FIXTURE);
+    const outputPath = path.join(dir, "imported-board.json");
+    const io = fakeIo(dir);
+
+    const code = await main(
+      ["node", "orga", "board", "import-markdown", "--input", fixturePath, "--output", outputPath, "--json"],
+      io,
+    );
+    assert.equal(code, EXIT_CODES.OK);
+
+    const written = JSON.parse(fs.readFileSync(outputPath, "utf8")) as { spec: { tasks: unknown[] } };
+    const raw = fs.readFileSync(fixturePath, "utf8");
+    const rows = readTasksTableRows(raw);
+    assert.equal(written.spec.tasks.length, rows.length);
+  });
 });

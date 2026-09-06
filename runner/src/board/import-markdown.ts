@@ -105,27 +105,112 @@ function isTasksTableHeader(header: string): boolean {
   return headerCells(header).join(" | ") === headerCells(TASKS_TABLE_HEADER).join(" | ");
 }
 
+const PURE_BACKTICK_SPAN = /^`[^`]+`$/;
+
+function unwrapCell(value: string): string {
+  const trimmed = value.trim();
+  if (PURE_BACKTICK_SPAN.test(trimmed)) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function backtickSpans(value: string): string[] {
+  const spans: string[] = [];
+  const pattern = /`([^`]+)`/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    spans.push(match[1] as string);
+  }
+  return spans;
+}
+
+interface StatusCellParts {
+  token: string;
+  trailing: string;
+}
+
+function parseStatusCell(cell: string): StatusCellParts {
+  const trimmed = cell.trim();
+  if (trimmed.startsWith("`")) {
+    const match = /^`([^`]*)`/.exec(trimmed);
+    if (match) {
+      return { token: match[1] as string, trailing: trimmed.slice(match[0].length).trim() };
+    }
+  }
+  const boundary = trimmed.search(/\s/);
+  if (boundary === -1) {
+    return { token: trimmed, trailing: "" };
+  }
+  return { token: trimmed.slice(0, boundary), trailing: trimmed.slice(boundary).trim() };
+}
+
 const TRAILING_PAREN = /\s*\([^)]*\)\s*$/;
 
 function splitCell(cell: string): string[] {
-  return cell
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const char of cell) {
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+    if (char === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
 function mapDependencies(cell: string): string[] {
   if (cell.trim().toLowerCase() === "none") return [];
-  return splitCell(cell);
+  return splitCell(cell).map((part) => unwrapCell(part));
 }
 
-function mapClaims(cell: string): "unknown" | BoardClaims {
-  const trimmed = cell.trim();
-  if (trimmed.length === 0 || trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "unknown") {
+function mapClaims(cell: string, rowId: string, uncertainties: string[]): "unknown" | BoardClaims {
+  const trimmedCell = cell.trim();
+  if (
+    trimmedCell.length === 0 ||
+    trimmedCell.toLowerCase() === "none" ||
+    trimmedCell.toLowerCase() === "unknown"
+  ) {
     return "unknown";
   }
-  const parts = splitCell(cell).map((part) => part.replace(TRAILING_PAREN, "").trim());
-  return { files: parts, nonFile: [] };
+
+  const files: string[] = [];
+  for (const part of splitCell(cell)) {
+    const parenMatch = TRAILING_PAREN.exec(part);
+    const core = parenMatch && !parenMatch[0].includes("`") ? part.replace(TRAILING_PAREN, "").trim() : part;
+
+    if (PURE_BACKTICK_SPAN.test(core)) {
+      files.push(unwrapCell(core));
+      continue;
+    }
+    if (!core.includes("`") && !/\s/.test(core)) {
+      files.push(core);
+      continue;
+    }
+    const spans = backtickSpans(core);
+    if (spans.length > 0) {
+      files.push(...spans);
+      uncertainties.push(
+        `task ${rowId}: claims part "${part}" mixes prose with backticked paths; kept only the backticked paths`,
+      );
+      continue;
+    }
+    uncertainties.push(`task ${rowId}: claims part "${part}" has no backticked path; dropped`);
+  }
+
+  if (files.length === 0) {
+    uncertainties.push(
+      `task ${rowId}: claims cell "${trimmedCell}" yielded no file claim; claims recorded as unknown`,
+    );
+    return "unknown";
+  }
+  return { files, nonFile: [] };
 }
 
 interface StatusMapping {
@@ -289,22 +374,27 @@ export function importMarkdown(input: string, outputPath: string): ImportMarkdow
   tasksTable.rows.forEach((row, index) => {
     const ordinal = index + 1;
     const [idCell, titleCell, briefCell, statusCell, dependsCell, , claimsCell] = row;
-    const id = (idCell ?? "").trim();
-    const title = (titleCell ?? "").trim();
-    const briefPath = (briefCell ?? "").trim();
-    const status = (statusCell ?? "").trim();
+    const id = unwrapCell(idCell ?? "");
+    const title = unwrapCell(titleCell ?? "");
+    const briefPath = unwrapCell(briefCell ?? "");
 
-    const mapping = STATUS_MAP[status];
+    const { token, trailing } = parseStatusCell(statusCell ?? "");
+    const mapping = STATUS_MAP[token];
     if (!mapping) {
-      throw new ImportMarkdownError(`task ${id}: unrecognized Status value "${status}"`, [...uncertainties]);
+      throw new ImportMarkdownError(`task ${id}: unrecognized Status value "${token}"`, [...uncertainties]);
     }
     if (mapping.uncertainty) {
       uncertainties.push(mapping.uncertainty(id));
+    }
+    if (trailing.length > 0) {
+      uncertainties.push(`task ${id}: status annotation ignored: "${trailing}"`);
     }
 
     uncertainties.push(`task ${id}: priority defaulted to ${ordinal * 100} (no source column)`);
     uncertainties.push(`task ${id}: verification defaulted to [] (no source column)`);
     uncertainties.push(`task ${id}: requiredWorkflowVersions defaulted to {} (no source column)`);
+
+    const claims = mapClaims(claimsCell ?? "", id, uncertainties);
 
     tasks.push({
       id,
@@ -314,7 +404,7 @@ export function importMarkdown(input: string, outputPath: string): ImportMarkdow
       dependencies: mapDependencies(dependsCell ?? ""),
       priority: ordinal * 100,
       requiredWorkflowVersions: {},
-      claims: mapClaims(claimsCell ?? ""),
+      claims,
       verification: [],
       enabled: mapping.enabled,
     });
