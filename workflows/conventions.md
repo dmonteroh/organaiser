@@ -60,6 +60,8 @@ Seven role ids, one per runnable template:
 
 Role ids are scoped to these seven runnable templates. `decision-workflow.md` uses the bare id `architect` for an orchestrator-side role with no `Template:` line; this is outside the register's uniqueness scope while `decision-workflow` has no manifest, and any later manifest for it must qualify the id.
 
+The `integrator` role is deliberately outside this register. `runner/src/engine/scheduler.ts:770` synthesizes the string `"integrator"` for the board's fallback `integration` dispatch, and its template is `subagents/integrator-prompt.md`. No manifest stage declares the role, so it has no owning workflow `Roles` entry, no golden packet, and no manifest stage for the golden-packet parity suite to resolve. Registering it would fail `test/workflow-parity/golden.test.mjs`. Its `Runner Protocol` section is copied from `code-quality-reviewer-prompt.md` with a reworded role-identifier line, so it is also outside the `Runner Protocol` parity family below.
+
 ### Verdict enums
 
 Each role's verdict values, copied verbatim from its template's `Verdict Rule`:
@@ -71,6 +73,7 @@ Each role's verdict values, copied verbatim from its template's `Verdict Rule`:
 - `spec-reviewer`: `pass`, `fail`, `needs-info`.
 - `code-quality-reviewer`: `pass`, `fail-with-severity: <level>`, `needs-info`.
 - `implementer`: `verdicts: none`.
+- `integrator`: `verdicts: none`. Its outcome is the flat `status` enum. See the Role ids note.
 
 `implementer` is a producer role with no verdict enum. Its outcome is decided by the runner-owned verification barrier and the two review gates, and its `status` field is owned by the stage-result schema authored in P2.
 
