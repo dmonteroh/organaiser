@@ -365,6 +365,36 @@ test("advanceTransitions evaluates the whole board every call: two independent t
   });
 });
 
+test("advanceTransitions advances a task past acquire-claims once its files claim is seeded", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "acquire-claims", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
+
+    const runtime = createSchedulerRuntime();
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+    assert.equal(getTask(db, "task-a").stage_id, "admit-to-batch");
+  });
+});
+
+test("advanceTransitions leaves a task at acquire-claims when no files claim is seeded for it, including when a claim exists for another task or another dimension", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "acquire-claims", now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "acquire-claims", now: clock.now() });
+    seedFilesClaim(db, runId, "task-b", ["claimed.txt"]);
+    withTransaction(db, () => {
+      db.prepare(
+        `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run("claim-task-a-other-dimension", runId, "task-a", "other", JSON.stringify(["claimed.txt"]), 1000);
+    });
+
+    const runtime = createSchedulerRuntime();
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+    assert.equal(getTask(db, "task-a").stage_id, "acquire-claims");
+  });
+});
+
 test("advanceTransitions records an invariant violation instead of writing a task's row when a stage's transition targets neither a known stage id nor a legal terminal disposition", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
     insertTask(db, { id: "task-a", runId, stageId: "task-refinement", now: clock.now() });
