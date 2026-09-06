@@ -27,6 +27,7 @@ import { createWorkspace, DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from ".
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
 import type { AttemptDescriptor, ProcessAdapter } from "../src/adapters/adapter.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
+import { parseArgs, runTestSupervisor } from "../evals/fixtures/test-supervisor.ts";
 
 const fixturesStreamsDir = fileURLToPath(new URL("./fixtures/fake-streams/", import.meta.url));
 
@@ -664,6 +665,67 @@ test("dispatchEligible with a workspace provider: a mutating dispatch runs insid
     const statusAfter = runGit(dir, ["status", "--porcelain"]);
     assert.equal(headAfter, headBefore, "the operator checkout's HEAD is unchanged");
     assert.equal(statusAfter, statusBefore, "the operator checkout's working tree is unchanged");
+  });
+});
+
+test("dispatchEligible with a workspace provider whose mode is \"in-place\": createWorkspace is invoked with mode \"in-place\", and the not-implemented error surfaces as this tick's invariant violation", async () => {
+  await withRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
+    const provider: WorkspaceProvider = {
+      projectRoot: dir,
+      root: DEFAULT_WORKTREE_ROOT,
+      branchPrefix: DEFAULT_BRANCH_PREFIX,
+      mode: "in-place",
+    };
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const runtime = createSchedulerRuntime();
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
+
+    assert.equal(runtime.liveAttempt, null, "the failed workspace creation aborts dispatch for this task");
+    assert.equal(runtime.scratch.invariantViolations.length, 1);
+    assert.match(
+      runtime.scratch.invariantViolations[0] as string,
+      /in-place workspace mode is not implemented/,
+    );
+
+    const worktreeRows = db.prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(worktreeRows.n, 0, "no worktree is ever created for an in-place dispatch");
+  });
+});
+
+test("test-supervisor.ts driven with workspaceMode \"in-place\": the run is durably recorded blocked on the not-implemented error", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const now = 1_000_000;
+    const db = openStore(dir);
+    try {
+      insertRun(db, runId, now);
+      insertTask(db, { id: "task-a", runId, stageId: "integration", now });
+      seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
+    } finally {
+      db.close();
+    }
+
+    const args = parseArgs([dir, runId, "50", "400", "150", fixturesStreamsDir, "in-place"]);
+    assert.equal(args.workspaceMode, "in-place");
+
+    const exitCode = await runTestSupervisor(args);
+    assert.equal(exitCode, 0);
+
+    const verifyDb = openStore(dir);
+    try {
+      const run = verifyDb.prepare(`SELECT state, terminal_reason FROM runs WHERE id = ?`).get(runId) as {
+        state: string;
+        terminal_reason: string | null;
+      };
+      assert.equal(run.state, "blocked");
+      assert.match(run.terminal_reason ?? "", /in-place workspace mode is not implemented/);
+    } finally {
+      verifyDb.close();
+    }
   });
 });
 
