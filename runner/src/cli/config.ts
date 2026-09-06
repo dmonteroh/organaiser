@@ -92,12 +92,18 @@ export interface RunnerTiming {
   cancelGraceMs: number;
 }
 
+export interface RunnerConcurrency {
+  maxWorkerSlots: number;
+  vendorSlots: Readonly<Record<RunnerId, number>>;
+}
+
 export interface ResolvedConfig {
   runner: RunnerId;
   budgets: Readonly<Budgets>;
   timing: Readonly<RunnerTiming>;
   workspace: Readonly<{ root: string; branchPrefix: string; mode: WorkspaceMode }>;
   followUpsFilePath: string;
+  concurrency: Readonly<RunnerConcurrency>;
 }
 
 // Parses and validates the configuration surface. Collects every invalid
@@ -169,6 +175,13 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
       () => stringVal(read, "FOLLOWUPS_FILE", DEFAULT_FOLLOWUPS_FILE_PATH) ?? DEFAULT_FOLLOWUPS_FILE_PATH,
       DEFAULT_FOLLOWUPS_FILE_PATH,
     ),
+    concurrency: {
+      maxWorkerSlots: attempt(() => positiveInt(read, "MAX_WORKER_SLOTS", 1), 1),
+      vendorSlots: {
+        codex: attempt(() => positiveInt(read, "VENDOR_SLOTS_CODEX", 1), 1),
+        claude: attempt(() => positiveInt(read, "VENDOR_SLOTS_CLAUDE", 1), 1),
+      },
+    },
   };
 
   if (errors.length > 0) {
@@ -178,6 +191,8 @@ export function loadConfig(sources: ConfigSources = {}): Readonly<ResolvedConfig
   Object.freeze(config.budgets);
   Object.freeze(config.timing);
   Object.freeze(config.workspace);
+  Object.freeze(config.concurrency.vendorSlots);
+  Object.freeze(config.concurrency);
   return Object.freeze(config);
 }
 

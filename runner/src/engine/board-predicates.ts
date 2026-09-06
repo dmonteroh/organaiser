@@ -36,12 +36,12 @@ export function dependenciesSatisfied(facts: DependenciesSatisfiedFacts): Boolea
     : "false";
 }
 
-export type ClaimsAvailableFacts = Record<string, never>;
+export interface ClaimsAvailableFacts {
+  hasRequiredClaims: boolean;
+}
 
-export function claimsAvailable(_facts: ClaimsAvailableFacts): BooleanTransition {
-  // P7: real claim-set assignment and overlap checking are not implemented; a
-  // task never waits here in P5's no-claims scope.
-  return "true";
+export function claimsAvailable(facts: ClaimsAvailableFacts): BooleanTransition {
+  return facts.hasRequiredClaims ? "true" : "false";
 }
 
 export interface BatchSlotAvailableFacts {

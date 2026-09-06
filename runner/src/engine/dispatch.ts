@@ -2,8 +2,10 @@
 // section 23.3). Eligibility is expressed as ten named conditions rather than
 // section 12's nine bullets: "a worker slot and vendor slot are available" is
 // two independent conditions, split here so each can be toggled on its own.
-// Six are evaluated for real; four are hard-coded to their permissive value
-// behind a marker naming the phase that replaces them.
+// All ten are evaluated for real, each computed directly from the store
+// (`claims`, `locks`, `attempts`, `workers`) the same way `claimSetComplete`/
+// `worktreeMatchesRecordedBase` are — this module has no dependency on the
+// scheduler's in-memory runtime state.
 //
 // Atomic dispatch creates the `attempts` row and its worker inside one
 // transaction keyed by P5a's `(run_id, task_id, stage_id, round,
@@ -21,6 +23,7 @@ import type {
   ProcessHandle,
   TimeoutBudget,
 } from "../adapters/adapter.ts";
+import { positiveInt, type Read } from "../cli/config.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
 import { sha256 } from "../store/evidence.ts";
@@ -37,26 +40,143 @@ export interface DispatchConditions {
   claimSetComplete: boolean;
   worktreeMatchesRecordedBase: boolean;
 
-  // Out of scope: hard-coded permissive, named for a later phase.
-  claimsDoNotOverlapActive: boolean; // P8: claim overlap checking is not implemented.
-  vendorSlotAvailable: boolean; // P6: per-vendor concurrency slots are not implemented.
-  readinessProbePassed: boolean; // P6: readiness-probe-gated dispatch is not implemented.
-  noControllerOrIntegrationLockConflict: boolean; // P8: controller/integration lock arbitration is not implemented.
+  // Evaluated for real: computed from the claims, locks, attempts, and
+  // workers rows, or from caller-supplied vendor/concurrency/probe facts.
+  claimsDoNotOverlapActive: boolean;
+  vendorSlotAvailable: boolean;
+  readinessProbePassed: boolean;
+  noControllerOrIntegrationLockConflict: boolean;
 }
 
-export function permissiveOutOfScopeConditions(): Pick<
-  DispatchConditions,
-  | "claimsDoNotOverlapActive"
-  | "vendorSlotAvailable"
-  | "readinessProbePassed"
-  | "noControllerOrIntegrationLockConflict"
-> {
-  return {
-    claimsDoNotOverlapActive: true, // P8:
-    vendorSlotAvailable: true, // P6:
-    readinessProbePassed: true, // P6:
-    noControllerOrIntegrationLockConflict: true, // P8:
-  };
+function parseClaimPaths(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// A worker row with no `ended_at` that has not been marked `exited` by
+// `reapWorkers` counts as an active, non-reaped attempt for the task named.
+function hasActiveNonReapedAttempt(db: DatabaseSync, runId: string, taskId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM attempts a
+         JOIN workers w ON w.attempt_id = a.id
+        WHERE a.run_id = ? AND a.task_id = ?
+          AND w.ended_at IS NULL
+          AND (w.termination_state IS NULL OR w.termination_state != 'exited')`,
+    )
+    .get(runId, taskId) as { n: number };
+  return row.n > 0;
+}
+
+export interface ClaimsDoNotOverlapActiveInput {
+  runId: string;
+  taskId: string;
+}
+
+// False when another task holds an intersecting `dimension = 'files'` claim
+// value while that other task also has an active, non-reaped attempt; true
+// otherwise, including when the candidate holds no claim of its own to
+// intersect with anything.
+export function claimsDoNotOverlapActive(db: DatabaseSync, input: ClaimsDoNotOverlapActiveInput): boolean {
+  const ownRow = db
+    .prepare(`SELECT value FROM claims WHERE run_id = ? AND task_id = ? AND dimension = 'files'`)
+    .get(input.runId, input.taskId) as { value: string } | undefined;
+  if (!ownRow) return true;
+  const own = new Set(parseClaimPaths(ownRow.value));
+  if (own.size === 0) return true;
+
+  const others = db
+    .prepare(`SELECT task_id, value FROM claims WHERE run_id = ? AND task_id != ? AND dimension = 'files'`)
+    .all(input.runId, input.taskId) as Array<{ task_id: string; value: string }>;
+
+  for (const other of others) {
+    const intersects = parseClaimPaths(other.value).some((path) => own.has(path));
+    if (intersects && hasActiveNonReapedAttempt(db, input.runId, other.task_id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export interface VendorSlotAvailableInput {
+  vendor: "claude" | "codex" | "fake";
+  runId: string;
+  vendorSlots: Readonly<Record<"codex" | "claude", number>> | undefined;
+}
+
+// True only when the count of active, non-reaped attempts for the
+// candidate's resolved vendor is below that vendor's configured slot count.
+// The candidate's vendor being `"fake"` (never a member of `RunnerId`) or no
+// `vendorSlots` map reaching the call at all both return true unconditionally
+// — an unguarded `count < vendorSlots[vendor]` comparison against `undefined`
+// would otherwise evaluate to false and permanently block the fake-vendor
+// dispatch path most of the test suite relies on.
+export function vendorSlotAvailable(db: DatabaseSync, input: VendorSlotAvailableInput): boolean {
+  if (input.vendor !== "codex" && input.vendor !== "claude") return true;
+  if (input.vendorSlots === undefined) return true;
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM attempts a
+         JOIN workers w ON w.attempt_id = a.id
+        WHERE a.run_id = ? AND a.vendor = ?
+          AND w.ended_at IS NULL
+          AND (w.termination_state IS NULL OR w.termination_state != 'exited')`,
+    )
+    .get(input.runId, input.vendor) as { n: number };
+  return row.n < input.vendorSlots[input.vendor];
+}
+
+export interface ReadinessProbeFacts {
+  authenticationOutcome: string;
+  isKnownBadVersion: boolean;
+}
+
+export interface ReadinessProbePassedInput {
+  vendor: "claude" | "codex" | "fake";
+  probe: ReadinessProbeFacts | undefined;
+}
+
+// Reads the capability-report facts a caller's most recent readiness probe
+// already established (never runs a new probe itself): not on the known-bad
+// version list, and authenticated. The candidate's vendor being `"fake"` or
+// no probe facts reaching the call at all (every call site with no
+// `DispatchProfile` in scope) both return true unconditionally, mirroring
+// `vendorSlotAvailable`'s fallback for the same reason: today's stub is
+// unconditionally true on that path, so this changes nothing for it.
+export function readinessProbePassed(input: ReadinessProbePassedInput): boolean {
+  if (input.vendor !== "codex" && input.vendor !== "claude") return true;
+  if (input.probe === undefined) return true;
+  return !input.probe.isKnownBadVersion && input.probe.authenticationOutcome === "authenticated";
+}
+
+const lockStaleRead: Read = (name) => process.env[`ORGA_${name}`];
+
+function controllerOrIntegrationLockStaleMs(): number {
+  return positiveInt(lockStaleRead, "INTEGRATION_LOCK_STALE_MS", 300000);
+}
+
+export interface LockConflictInput {
+  runId: string;
+  now: number;
+}
+
+// The `locks` table has no `task_id` column and its `owner_pid` is always
+// the scheduler process's own pid, so "held by a task other than the
+// candidate" cannot be a task-keyed join: it reduces to a run-scoped
+// existence check. The single-lane dispatch invariant means a candidate
+// being evaluated has not yet dispatched, so any live, non-stale
+// `kind = 'integration'` row for this run necessarily belongs to a
+// different, already-dispatched task.
+export function noControllerOrIntegrationLockConflict(db: DatabaseSync, input: LockConflictInput): boolean {
+  const rows = db
+    .prepare(`SELECT heartbeat_at FROM locks WHERE run_id = ? AND kind = 'integration' AND released_at IS NULL`)
+    .all(input.runId) as Array<{ heartbeat_at: number }>;
+  const staleMs = controllerOrIntegrationLockStaleMs();
+  return !rows.some((row) => input.now - row.heartbeat_at <= staleMs);
 }
 
 export interface ClaimSetCompleteInput {

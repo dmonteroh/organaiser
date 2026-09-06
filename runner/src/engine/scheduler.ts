@@ -25,14 +25,17 @@ import { FakeAdapter } from "../adapters/fake.ts";
 import { selectAdapter } from "../adapters/select.ts";
 import { claudeProbeSpec } from "../adapters/claude-adapter.ts";
 import { CODEX_VENDOR_PROBE_SPEC } from "../adapters/codex-adapter.ts";
-import { probeVendor, type VendorProbeSpec } from "../adapters/probe.ts";
+import { isKnownBadVersion, probeVendor, type VendorProbeSpec } from "../adapters/probe.ts";
 import {
   claimSetComplete,
+  claimsDoNotOverlapActive,
   computeInputVersion,
   dispatchAttempt,
   isDispatchEligible,
   nextAttemptRound,
-  permissiveOutOfScopeConditions,
+  noControllerOrIntegrationLockConflict,
+  readinessProbePassed,
+  vendorSlotAvailable,
   worktreeMatchesRecordedBase,
   type DispatchConditions,
 } from "./dispatch.ts";
@@ -52,6 +55,7 @@ import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick.ts";
 import type { TaskRow, TaskState } from "../store/types.ts";
 import { resolveVendorProfile, serializeResolvedProfile, type ResolvedVendorProfile } from "../cli/profiles.ts";
+import { loadConfig, type RunnerId } from "../cli/config.ts";
 import { runDevelopmentStages, type DevelopmentOutcome } from "./workflow-stages.ts";
 import { runIntegrationStages, type IntegrationStagesOutcome } from "./integration-stages.ts";
 import { readRefSha, resolveDestinationRef } from "../git/integrate.ts";
@@ -199,6 +203,12 @@ export interface DispatchProfile {
   profile: ResolvedVendorProfile;
   cliVersion: string | null;
   workflowRevision: string | null;
+  authenticationOutcome: string;
+  isKnownBadVersion: boolean;
+  concurrency: {
+    maxWorkerSlots: number;
+    vendorSlots: Readonly<Record<RunnerId, number>>;
+  };
 }
 
 interface TickScratch {
@@ -328,6 +338,13 @@ export function reapWorkers(ctx: TickContext, runtime: SchedulerRuntime): void {
 // result, or a parse throw all yield an empty claim set rather than
 // propagating: a malformed claim rejects the attempt at `validateClaims`
 // instead of killing the detached supervisor.
+function hasFilesClaim(db: DatabaseSync, task: TaskRow): boolean {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM claims WHERE run_id = ? AND task_id = ? AND dimension = 'files'`)
+    .get(task.run_id, task.id) as { n: number };
+  return row.n > 0;
+}
+
 function readClaimedPaths(db: DatabaseSync, runId: string, taskId: string): string[] {
   const row = db
     .prepare(`SELECT value FROM claims WHERE run_id = ? AND task_id = ? AND dimension = 'files'`)
@@ -449,7 +466,7 @@ function gatherFacts(
     case "dependencies-satisfied":
       return { dependencyDispositions: dependencyDispositionsFor(db, task) };
     case "claims-available":
-      return {};
+      return { hasRequiredClaims: hasFilesClaim(db, task) };
     case "batch-slot-available": {
       const row = db
         .prepare(
@@ -722,7 +739,28 @@ export async function dispatchEligible(
         taskId: task.id,
         heldBaseCommit: null,
       }),
-      ...permissiveOutOfScopeConditions(),
+      claimsDoNotOverlapActive: claimsDoNotOverlapActive(ctx.db, {
+        runId: ctx.runId,
+        taskId: task.id,
+      }),
+      vendorSlotAvailable: vendorSlotAvailable(ctx.db, {
+        runId: ctx.runId,
+        vendor: dispatchProfile?.vendor ?? "fake",
+        vendorSlots: dispatchProfile?.concurrency.vendorSlots,
+      }),
+      readinessProbePassed: readinessProbePassed({
+        vendor: dispatchProfile?.vendor ?? "fake",
+        probe: dispatchProfile
+          ? {
+              authenticationOutcome: dispatchProfile.authenticationOutcome,
+              isKnownBadVersion: dispatchProfile.isKnownBadVersion,
+            }
+          : undefined,
+      }),
+      noControllerOrIntegrationLockConflict: noControllerOrIntegrationLockConflict(ctx.db, {
+        runId: ctx.runId,
+        now: ctx.now(),
+      }),
     };
 
     if (!isDispatchEligible(conditions)) continue;
@@ -1200,7 +1238,17 @@ export async function createProductionSchedulerTick(options: CreateProductionSch
     | undefined;
   const workflowRevision = parseWorkflowRevision(runRow?.config_snapshot_ref ?? null);
 
-  const dispatchProfile: DispatchProfile = { vendor, profile, cliVersion, workflowRevision };
+  const resolvedConfig = loadConfig({ env: options.env });
+
+  const dispatchProfile: DispatchProfile = {
+    vendor,
+    profile,
+    cliVersion,
+    workflowRevision,
+    authenticationOutcome: capabilityReport.authenticationOutcome,
+    isKnownBadVersion: isKnownBadVersion(vendor, capabilityReport.cliVersion),
+    concurrency: resolvedConfig.concurrency,
+  };
   const adapter = selectAdapter(vendor, profile, {
     probe: (configuration) => probeVendor(probeSpec, configuration),
     terminate: terminateViaGroups,

@@ -169,6 +169,15 @@ export function knownBadReason(vendor: VendorId, version: string): string | null
   return findKnownBadEntry(vendor, version)?.reason ?? null;
 }
 
+/**
+ * The two-check readiness verdict a caller needs before dispatching to a vendor: not on
+ * the known-bad version list, and authenticated. Does not check `executablePath` — a
+ * missing binary is `doctor.ts`'s own `binary-missing` branch, evaluated before this.
+ */
+export function isProbeReady(vendor: VendorId, report: CapabilityReport): boolean {
+  return !isKnownBadVersion(vendor, report.cliVersion) && report.authenticationOutcome === "authenticated";
+}
+
 async function resolveExecutablePath(
   configuration: ProbeConfiguration,
   io: ProbeIo,

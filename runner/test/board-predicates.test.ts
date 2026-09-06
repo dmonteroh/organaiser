@@ -132,13 +132,17 @@ test("PREDICATE_RETURN_UNIONS has no entries beyond the manifest's declared pred
   }
 });
 
-test("claims-available and integration-slot-available carry a P7 marker on their return line", () => {
+test("claimsAvailable is a real hasRequiredClaims -> boolean-transition mapping, not a permissive stub", () => {
   const claimsBlock = boardPredicatesSource.slice(
-    boardPredicatesSource.indexOf("export function claimsAvailable"),
+    boardPredicatesSource.indexOf("export interface ClaimsAvailableFacts"),
     boardPredicatesSource.indexOf("export function batchSlotAvailable"),
   );
-  assert.match(claimsBlock, /\/\/ P7:/);
+  assert.match(claimsBlock, /hasRequiredClaims: boolean;/);
+  assert.match(claimsBlock, /facts\.hasRequiredClaims \? "true" : "false"/);
+  assert.ok(!claimsBlock.includes("// P7:"), "claimsAvailable must no longer carry the out-of-scope marker");
+});
 
+test("integration-slot-available carries a P7 marker on its return line", () => {
   const slotBlock = boardPredicatesSource.slice(
     boardPredicatesSource.indexOf("export function integrationSlotAvailable"),
     boardPredicatesSource.indexOf("export const INTEGRATION_OUTCOME_VALUES"),
@@ -175,8 +179,9 @@ test("dependenciesSatisfied: true iff every dependency disposition is integrated
   assert.equal(dependenciesSatisfied({ dependencyDispositions: [""] }), "false");
 });
 
-test("claimsAvailable is always true", () => {
-  assert.equal(claimsAvailable({}), "true");
+test("claimsAvailable: true iff hasRequiredClaims is true", () => {
+  assert.equal(claimsAvailable({ hasRequiredClaims: true }), "true");
+  assert.equal(claimsAvailable({ hasRequiredClaims: false }), "false");
 });
 
 test("batchSlotAvailable: null capacity is always available; a numeric cap gates on the count", () => {
