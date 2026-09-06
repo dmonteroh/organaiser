@@ -36,6 +36,10 @@ fs.writeFileSync(
   `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
+if (args[0] === 'auth') {
+  process.stdout.write(JSON.stringify({ loggedIn: true }));
+  process.exit(0);
+}
 const fixturePath = process.env.SELECT_TEST_FIXTURE;
 if (fixturePath) {
   process.stdout.write(fs.readFileSync(fixturePath, 'utf8'));
@@ -220,6 +224,9 @@ test("a dispatched attempt's resolved vendor profile, CLI version, and workflow 
         profile,
         cliVersion: "codex-cli 0.46.0",
         workflowRevision: "deadbeef1234",
+        authenticationOutcome: "authenticated",
+        isKnownBadVersion: false,
+        concurrency: { maxWorkerSlots: 1, vendorSlots: { codex: 1, claude: 1 } },
       };
       const ctx: TickContext = {
         db,

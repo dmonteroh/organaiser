@@ -200,3 +200,34 @@ test("loadConfig aggregates an invalid ORGA_WORKSPACE_MODE into the aggregated e
     /invalid WORKSPACE_MODE: bogus \(must be one of worktree\|in-place\)/,
   );
 });
+
+// ── loadConfig.concurrency: defaults of 1, env overrides, and freezing ──────
+test("loadConfig.concurrency defaults maxWorkerSlots and both vendorSlots to 1 when unset", () => {
+  const config = loadConfig();
+  assert.equal(config.concurrency.maxWorkerSlots, 1);
+  assert.equal(config.concurrency.vendorSlots.codex, 1);
+  assert.equal(config.concurrency.vendorSlots.claude, 1);
+});
+
+test("ORGA_MAX_WORKER_SLOTS in the env layer overrides the default max worker slots", () => {
+  const env: Layer = { ORGA_MAX_WORKER_SLOTS: "4" };
+  assert.equal(loadConfig({ env }).concurrency.maxWorkerSlots, 4);
+});
+
+test("ORGA_VENDOR_SLOTS_CODEX and ORGA_VENDOR_SLOTS_CLAUDE in the env layer override their respective defaults independently", () => {
+  const env: Layer = { ORGA_VENDOR_SLOTS_CODEX: "3", ORGA_VENDOR_SLOTS_CLAUDE: "2" };
+  const config = loadConfig({ env });
+  assert.equal(config.concurrency.vendorSlots.codex, 3);
+  assert.equal(config.concurrency.vendorSlots.claude, 2);
+});
+
+test("loadConfig aggregates an invalid ORGA_MAX_WORKER_SLOTS into the aggregated error", () => {
+  const env: Layer = { ORGA_MAX_WORKER_SLOTS: "0" };
+  assert.throws(() => loadConfig({ env }), /invalid MAX_WORKER_SLOTS: 0 \(must be an integer > 0\)/);
+});
+
+test("loadConfig freezes config.concurrency and its vendorSlots map", () => {
+  const config = loadConfig();
+  assert.equal(Object.isFrozen(config.concurrency), true);
+  assert.equal(Object.isFrozen(config.concurrency.vendorSlots), true);
+});

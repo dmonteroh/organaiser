@@ -14,6 +14,7 @@
 import {
   probeVendor,
   isKnownBadVersion,
+  isProbeReady,
   knownBadReason,
   DEFAULT_PROBE_REGISTRY,
   type VendorId,
@@ -39,6 +40,9 @@ interface DoctorResult {
 function classify(vendor: VendorId, report: CapabilityReport): { usable: boolean; reason: string } {
   if (report.executablePath === "unknown") {
     return { usable: false, reason: "binary-missing" };
+  }
+  if (isProbeReady(vendor, report)) {
+    return { usable: true, reason: "usable" };
   }
   if (isKnownBadVersion(vendor, report.cliVersion)) {
     return { usable: false, reason: `known-bad-version:${report.cliVersion}:${knownBadReason(vendor, report.cliVersion)}` };
