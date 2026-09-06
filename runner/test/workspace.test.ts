@@ -13,7 +13,6 @@ import {
   listUntrackedWorktrees,
   DEFAULT_WORKTREE_ROOT,
   DEFAULT_BRANCH_PREFIX,
-  WorkspaceModeNotImplementedError,
   type CreateWorkspaceInput,
   type WorkspaceContext,
 } from "../src/git/workspace.ts";
@@ -89,15 +88,26 @@ function baseInput(overrides: Partial<CreateWorkspaceInput> = {}): Omit<CreateWo
   } as Omit<CreateWorkspaceInput, "db" | "projectRoot">;
 }
 
-test("createWorkspace: in-place mode throws WorkspaceModeNotImplementedError rather than falling through to worktree behavior", async () => {
+test("createWorkspace: in-place mode returns a handle over the project root itself, with no worktree or branch created", async () => {
   await withTempWorkspace(async (dir) => {
-    setupProject(dir);
+    const headSha = setupProject(dir);
+    const branch = runGit(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
     const db = openStore(dir);
     try {
       insertRun(db, "run-1", 1000);
-      await assert.rejects(
-        createWorkspace({ ...baseInput({ mode: "in-place" }), db, projectRoot: dir }),
-        WorkspaceModeNotImplementedError,
+      const handle = await createWorkspace({ ...baseInput({ mode: "in-place" }), db, projectRoot: dir });
+
+      assert.equal(handle.mode, "in-place");
+      assert.equal(handle.path, dir);
+      assert.equal(handle.branch, branch);
+      assert.equal(handle.baseCommit, headSha);
+      assert.deepEqual(handle.recordedDirt, ["orgaw"], "the uncommitted orgaw wrapper is recorded as pre-existing dirt");
+
+      const worktreeList = runGit(dir, ["worktree", "list", "--porcelain"]);
+      assert.equal(
+        worktreeList.split("\n").filter((line) => line.startsWith("worktree ")).length,
+        1,
+        "no worktree is created for an in-place workspace",
       );
     } finally {
       db.close();
