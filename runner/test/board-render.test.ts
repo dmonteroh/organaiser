@@ -349,6 +349,34 @@ test("board render invoked via main() writes BOARD.md to the default path and ex
   });
 });
 
+test("board render invoked via main() threads a custom --output path through flagString to renderBoard", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    const runId = "run-cli-2";
+    try {
+      insertRun(db, runId, Date.now());
+      insertTask(db, { id: "t1", runId, state: "defined", now: Date.now() });
+    } finally {
+      db.close();
+    }
+
+    const customDir = path.join(dir, "custom-cli-out");
+    const customPath = path.join(customDir, "board-snapshot.md");
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "board", "render", runId, "--output", customPath], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+
+    assert.ok(fs.existsSync(customPath));
+    const content = fs.readFileSync(customPath, "utf8");
+    assert.match(content, /## Queued/);
+
+    const defaultPath = path.join(dir, ".orga", "runs", runId, "BOARD.md");
+    assert.ok(!fs.existsSync(defaultPath));
+  });
+});
+
 test("board render invoked via main() with a missing run id exits NOT_FOUND", async () => {
   await withTempWorkspace(async (dir) => {
     initProject(dir);
