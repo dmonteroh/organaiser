@@ -47,6 +47,8 @@ import type { RestingRunState, TickBody, TickContext, TickOutcome } from "./tick
 import type { TaskRow, TaskState } from "../store/types.ts";
 import { resolveVendorProfile, serializeResolvedProfile, type ResolvedVendorProfile } from "../cli/profiles.ts";
 import { runDevelopmentStages, type DevelopmentOutcome } from "./workflow-stages.ts";
+import { runIntegrationStages, type IntegrationStagesOutcome } from "./integration-stages.ts";
+import { resolveDestinationRef } from "../git/integrate.ts";
 import { buildDispatchPacketInput } from "../compile/dispatch-packet-input.ts";
 
 export interface StageDefinition {
@@ -217,6 +219,13 @@ export interface SchedulerRuntime {
   // call, but `advanceTransitions` (where `gatherFacts` reads this) runs
   // before `dispatchEligible` in the next tick, never the same one.
   developmentOutcomeByTaskId: Map<string, DevelopmentOutcome>;
+  // Same cross-tick, consume-on-read contract as `developmentOutcomeByTaskId`,
+  // for `integration`'s own self-contained pipeline. A task whose dispatch
+  // reported `IntegrationStagesOutcome`'s non-manifest `cleanup-pending`
+  // signal is never given an entry here: `gatherFacts`'s `integration-outcome`
+  // case sees no outcome for it, exactly as it does before any dispatch, so
+  // the task is reconsidered next tick rather than routed anywhere.
+  integrationOutcomeByTaskId: Map<string, IntegrationStagesOutcome>;
   scratch: TickScratch;
 }
 
@@ -225,6 +234,7 @@ export function createSchedulerRuntime(): SchedulerRuntime {
     liveAttempt: null,
     priorOutcomeByTaskId: new Map(),
     developmentOutcomeByTaskId: new Map(),
+    integrationOutcomeByTaskId: new Map(),
     scratch: freshScratch(),
   };
 }
@@ -461,6 +471,27 @@ function gatherFacts(
       return { attemptOk: outcome.outcome === "integrating", hasBlockingOperatorQuestion: false };
     }
     case "integration-outcome": {
+      // A task dispatched through `runIntegrationStages` (the real,
+      // workspace-backed pipeline) reports here; a task dispatched through
+      // the generic `dispatchAttempt` fallback below (no workspace provider,
+      // or no worktree row yet — see that call site) never populates this
+      // map, so it falls through to the original single-attempt mapping
+      // unchanged.
+      const integrationOutcome = runtime.integrationOutcomeByTaskId.get(task.id);
+      if (integrationOutcome) {
+        runtime.integrationOutcomeByTaskId.delete(task.id);
+        if (integrationOutcome.outcome === "waiting-operator") {
+          return { attemptOk: false, hasIntegrationRejection: false, hasBlockingOperatorQuestion: true };
+        }
+        if (integrationOutcome.outcome === "ready-to-implement") {
+          return { attemptOk: false, hasIntegrationRejection: true, hasBlockingOperatorQuestion: false };
+        }
+        return {
+          attemptOk: integrationOutcome.outcome === "integrated",
+          hasIntegrationRejection: false,
+          hasBlockingOperatorQuestion: false,
+        };
+      }
       const outcome = runtime.scratch.outcomeByTaskId.get(task.id);
       if (!outcome) return null;
       return { attemptOk: outcome.ok, hasIntegrationRejection: false, hasBlockingOperatorQuestion: false };
@@ -694,9 +725,42 @@ export async function dispatchEligible(
     const round = nextAttemptRound(ctx.db, ctx.runId, task.id, stageId);
     const inputVersion = computeInputVersion({ taskId: task.id, stageId, updatedAt: String(task.updated_at) });
 
+    // `integration` never creates a new worktree of its own: when a real
+    // `implementation` dispatch already produced one for this task, this
+    // stage's handle is reconstructed from that still-uncleaned `worktrees`
+    // row (this stage's own candidate worktree, built inside
+    // `runIntegrationStages`, is where any checkout happens instead). Absent
+    // that row — a task seeded directly at `integration` without ever
+    // dispatching `implementation`, as some fixtures and unit tests do — this
+    // falls through to the same fresh-`createWorkspace` path any other
+    // mutating stage takes, unchanged.
+    let existingIntegrationWorkspace: WorkspaceHandle | null = null;
+    if (stageId === "integration" && workspace) {
+      const row = ctx.db
+        .prepare(
+          `SELECT path, branch, base_commit FROM worktrees
+             WHERE run_id = ? AND task_id = ? AND cleanup_state != 'cleaned'
+             ORDER BY created_at ASC LIMIT 1`,
+        )
+        .get(ctx.runId, task.id) as { path: string; branch: string; base_commit: string } | undefined;
+      if (row) {
+        existingIntegrationWorkspace = {
+          mode: "worktree",
+          root: workspace.root,
+          path: row.path,
+          branch: row.branch,
+          baseCommit: row.base_commit,
+          recordedDirt: [],
+        };
+      }
+    }
+
     let workingDirectory = process.cwd();
     let workspaceHandle: WorkspaceHandle | null = null;
-    if (mutating && workspace) {
+    if (existingIntegrationWorkspace) {
+      workspaceHandle = existingIntegrationWorkspace;
+      workingDirectory = workspaceHandle.path;
+    } else if (mutating && workspace) {
       try {
         workspaceHandle = await createWorkspace({
           mode: "worktree",
@@ -768,6 +832,45 @@ export async function dispatchEligible(
         ...(workspaceHandle ? { workspace: workspaceHandle } : {}),
       });
       runtime.developmentOutcomeByTaskId.set(task.id, developmentOutcome);
+      runtime.scratch.dispatchedThisTick = true;
+      return;
+    }
+
+    // `integration` runs the whole `integration.v1` pipeline to completion
+    // inside this one call, exactly as `implementation` does above:
+    // `runIntegrationStages` owns its own attempts' dispatch/reap/normalize
+    // lifecycle for `cross-task-review`, so `runtime.liveAttempt` is never
+    // set for it either. A `cleanup-pending` result records no outcome at
+    // all, leaving the task exactly where it is for the next tick's retry.
+    if (stageId === "integration" && workspace && existingIntegrationWorkspace) {
+      const taskEvidenceDir = path.join(workspace.projectRoot, ".orga", "runs", ctx.runId, "tasks", task.id);
+      fs.mkdirSync(taskEvidenceDir, { recursive: true });
+
+      const integrationOutcome = await runIntegrationStages({
+        db: ctx.db,
+        adapter,
+        runId: ctx.runId,
+        taskId: task.id,
+        now: ctx.now,
+        projectRoot: workspace.projectRoot,
+        destinationRef: resolveDestinationRef(workspace.projectRoot),
+        taskWorkspace: existingIntegrationWorkspace,
+        candidateRoot: path.resolve(workspace.projectRoot, workspace.root),
+        taskDir: taskEvidenceDir,
+        requiredArtifacts: [],
+        checks: {},
+        env: process.env,
+        vendor: dispatchProfile?.vendor ?? "fake",
+        model: dispatchProfile?.profile.model ?? "fake",
+        configJson,
+        packet: buildDispatchPacketInput(
+          { id: task.id, title: task.title, briefPath: task.brief_path },
+          { db: ctx.db, runId: ctx.runId, projectRoot: workspace.projectRoot },
+        ),
+      });
+      if (integrationOutcome.outcome !== "cleanup-pending") {
+        runtime.integrationOutcomeByTaskId.set(task.id, integrationOutcome);
+      }
       runtime.scratch.dispatchedThisTick = true;
       return;
     }
