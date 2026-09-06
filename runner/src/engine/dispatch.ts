@@ -145,8 +145,7 @@ export interface ReadinessProbePassedInput {
 // version list, and authenticated. The candidate's vendor being `"fake"` or
 // no probe facts reaching the call at all (every call site with no
 // `DispatchProfile` in scope) both return true unconditionally, mirroring
-// `vendorSlotAvailable`'s fallback for the same reason: today's stub is
-// unconditionally true on that path, so this changes nothing for it.
+// `vendorSlotAvailable`'s fallback for the same undefined-comparison hazard.
 export function readinessProbePassed(input: ReadinessProbePassedInput): boolean {
   if (input.vendor !== "codex" && input.vendor !== "claude") return true;
   if (input.probe === undefined) return true;
