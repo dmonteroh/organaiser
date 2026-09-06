@@ -1,14 +1,17 @@
 // Fixture: board-parallelism.
 //
-// Five independent claims about the board scheduler's dispatch gating and,
-// for the two claim-shaped ones, its per-tick worker-slot concurrency:
+// Six independent claims about the board scheduler's dispatch gating and,
+// for the three claim-shaped ones, its per-tick worker-slot concurrency:
 // `dependencyOrder`, `operatorBlockDoesNotGlobalStop`, and
 // `terminalTaskNeverDispatches` drive a real `spawnFixtureSupervisor`
-// process against a seeded pair of tasks; `claimOverlapSerializes` and
-// `disjointClaimsParallelize` call `dispatchEligible` directly, in-process,
-// with a hand-built multi-slot `DispatchProfile`, since
-// `spawnFixtureSupervisor`'s own `test-supervisor.ts` never threads a
-// `DispatchProfile` through and so can never exercise `maxWorkerSlots > 1`.
+// process against a seeded pair of tasks; `claimOverlapSerializes`,
+// `disjointClaimsParallelize`, and `slotCeilingCapsConcurrentDispatch` call
+// `dispatchEligible` directly, in-process, with a hand-built multi-slot
+// `DispatchProfile`, since `spawnFixtureSupervisor`'s own
+// `test-supervisor.ts` never threads a `DispatchProfile` through and so can
+// never exercise `maxWorkerSlots > 1`. `slotCeilingCapsConcurrentDispatch`
+// seeds three disjoint-claim candidates against a two-slot profile to prove
+// the slot ceiling caps dispatch even when more candidates are eligible.
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -301,9 +304,11 @@ export async function claimOverlapSerializes(): Promise<void> {
         signal: new AbortController().signal,
       };
       try {
-        await dispatchEligible(ctx, runtime, adapter, undefined, twoSlotDispatchProfile());
-
-        for (const pgid of recordedPgidsForRun(dir, runId)) registry.track(pgid);
+        try {
+          await dispatchEligible(ctx, runtime, adapter, undefined, twoSlotDispatchProfile());
+        } finally {
+          for (const pgid of recordedPgidsForRun(dir, runId)) registry.track(pgid);
+        }
 
         assert.equal(
           runtime.liveAttemptByTaskId.size,
@@ -359,9 +364,11 @@ export async function disjointClaimsParallelize(): Promise<void> {
         signal: new AbortController().signal,
       };
       try {
-        await dispatchEligible(ctx, runtime, adapter, undefined, twoSlotDispatchProfile());
-
-        for (const pgid of recordedPgidsForRun(dir, runId)) registry.track(pgid);
+        try {
+          await dispatchEligible(ctx, runtime, adapter, undefined, twoSlotDispatchProfile());
+        } finally {
+          for (const pgid of recordedPgidsForRun(dir, runId)) registry.track(pgid);
+        }
 
         assert.equal(
           runtime.liveAttemptByTaskId.size,
@@ -370,6 +377,79 @@ export async function disjointClaimsParallelize(): Promise<void> {
         );
         assert.ok(runtime.liveAttemptByTaskId.has("task-a"));
         assert.ok(runtime.liveAttemptByTaskId.has("task-b"));
+      } finally {
+        ctx.db.close();
+      }
+    } finally {
+      registry.killAll();
+      await registry.allDead();
+    }
+  });
+}
+
+export async function slotCeilingCapsConcurrentDispatch(): Promise<void> {
+  await withFixtureWorkspace(async (dir) => {
+    const registry = new ProcessRegistry();
+    try {
+      const { runId } = startFixtureRun(dir, [{ id: "task-a" }, { id: "task-b" }, { id: "task-c" }]);
+      const now = Date.now();
+      seedTasks(
+        dir,
+        runId,
+        [
+          { id: "task-a", claimedPaths: ["a.txt"] },
+          { id: "task-b", claimedPaths: ["b.txt"] },
+          { id: "task-c", claimedPaths: ["c.txt"] },
+        ],
+        now,
+      );
+      const db = openStore(dir);
+      try {
+        withTransaction(db, () => {
+          db.prepare(`UPDATE tasks SET stage_id = 'integration' WHERE run_id = ? AND id IN ('task-a', 'task-b', 'task-c')`).run(runId);
+        });
+      } finally {
+        db.close();
+      }
+
+      const streamsDir = path.join(dir, "streams");
+      writeStream(streamsDir, "integration", "task-a", wellFormedStream({ taskId: "task-a", stageId: "integration" }));
+      writeStream(streamsDir, "integration", "task-b", wellFormedStream({ taskId: "task-b", stageId: "integration" }));
+      writeStream(streamsDir, "integration", "task-c", wellFormedStream({ taskId: "task-c", stageId: "integration" }));
+
+      const adapter = new FakeAdapter({ terminate: stubTerminate, streamsDir, scenarioFor: (attempt) => attempt.taskId });
+      const runtime = createSchedulerRuntime();
+      const ctx: TickContext = {
+        db: openStore(dir),
+        runId,
+        tickIndex: 0,
+        now: () => now,
+        leaseDeadlineMs: now + 60000,
+        signal: new AbortController().signal,
+      };
+      try {
+        try {
+          await dispatchEligible(ctx, runtime, adapter, undefined, twoSlotDispatchProfile());
+        } finally {
+          for (const pgid of recordedPgidsForRun(dir, runId)) registry.track(pgid);
+        }
+
+        assert.equal(
+          runtime.liveAttemptByTaskId.size,
+          2,
+          "three eligible disjoint-claim candidates must dispatch no more than maxWorkerSlots at once",
+        );
+        const dispatchedIds = [...runtime.liveAttemptByTaskId.keys()];
+        assert.ok(
+          dispatchedIds.every((id) => id === "task-a" || id === "task-b" || id === "task-c"),
+          "only the three seeded candidates may appear as dispatched",
+        );
+        const attemptRowCount = countRows(
+          dir,
+          `SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`,
+          runId,
+        );
+        assert.equal(attemptRowCount, 2, "exactly two attempt rows must exist once the slot ceiling caps dispatch");
       } finally {
         ctx.db.close();
       }

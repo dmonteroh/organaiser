@@ -315,11 +315,14 @@ function briefArtifactDeclared(task: TaskRow): boolean {
   return typeof task.brief_path === "string" && task.brief_path.length > 0;
 }
 
-// Step 1 of goals spec section 11: reap the run's single P5-serial live
-// worker once its process has exited. Liveness is polled directly by pid and
-// process group rather than through `adapter.collect`, which blocks until
-// the process has already finished; polling keeps this step cheap on every
-// tick where the worker is still running.
+// Step 1 of goals spec section 11: reap each of the run's live workers once
+// its process has exited. `runtime.liveAttemptByTaskId` can hold more than
+// one entry when `maxWorkerSlots > 1`, so a single call can reap more than
+// one worker; today's only production wiring caps `maxWorkerSlots` at 1,
+// but this loop itself makes no such assumption. Liveness is polled
+// directly by pid and process group rather than through `adapter.collect`,
+// which blocks until the process has already finished; polling keeps this
+// step cheap on every tick where a worker is still running.
 export function reapWorkers(ctx: TickContext, runtime: SchedulerRuntime): void {
   const nowMs = ctx.now();
   for (const [taskId, live] of runtime.liveAttemptByTaskId) {
@@ -692,10 +695,14 @@ function dispatchDependenciesSatisfied(db: DatabaseSync, task: TaskRow): boolean
   );
 }
 
-// Step 6: dispatch the highest-priority eligible task. P5 is single-lane
-// serial: `workerSlotAvailable` is false whenever a live attempt already
-// exists, so at most one dispatch happens per tick and at most one attempt is
-// ever live for the run.
+// Step 6: dispatch the highest-priority eligible task(s), up to
+// `maxWorkerSlots`. `workerSlotAvailable` is false once the number of live
+// attempts reaches `maxWorkerSlots`, so at most `maxWorkerSlots` dispatches
+// happen per tick and at most `maxWorkerSlots` attempts are ever live for
+// the run at once; today's only production wiring sets `maxWorkerSlots` to
+// 1, which reduces this to the single-lane-serial case, but the function
+// itself bounds concurrency by whatever `maxWorkerSlots` a `DispatchProfile`
+// supplies.
 //
 // With no workspace provider, dispatch runs exactly as it always has: no
 // worktree, no claim requirement, `process.cwd()` as the working directory.
