@@ -1,6 +1,6 @@
 // Fixture: in-place.
 //
-// Three scenarios for the `in-place` workspace mode (D6): a dirty checkout
+// Three scenarios for the `in-place` workspace mode: a dirty checkout
 // refuses to start at all, a two-task board never runs two mutating attempts
 // at once, and pre-run dirt on an unrelated path never fails a task whose
 // own writes stay inside its claim set. None of the three needs a task to

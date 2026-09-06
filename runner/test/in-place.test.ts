@@ -339,6 +339,64 @@ test("createInPlaceWorkspace + observedPaths + validateClaims: a recorded-dirty 
   });
 });
 
+test("createInPlaceWorkspace: a file left dirty by one serial in-place task's attempt is recorded as the next task's dirt and does not fail its own claim validation", async () => {
+  await withTempWorkspace(async (dir) => {
+    setupGitProject(dir);
+    const now = 1000;
+    const db = openStore(dir);
+    try {
+      insertRun(db, "run-1", now);
+
+      const handleA = await createInPlaceWorkspace({
+        db,
+        projectRoot: dir,
+        runId: "run-1",
+        taskId: "task-a",
+        taskKey: "task-a",
+        ref: "HEAD",
+        root: ".orga/worktrees",
+        branchPrefix: "orga/task/",
+        mode: "in-place",
+      });
+      assert.ok(
+        !handleA.recordedDirt.includes("task-a-leftover.txt"),
+        "the leftover file does not exist yet when task-a's workspace is created",
+      );
+
+      // task-a's own attempt writes a file outside task-b's claim set. In-place
+      // mode never commits at this milestone, so the file is still on disk when
+      // task-b's workspace is created next.
+      fs.writeFileSync(path.join(dir, "task-a-leftover.txt"), "left behind by task-a's attempt\n", "utf8");
+
+      const handleB = await createInPlaceWorkspace({
+        db,
+        projectRoot: dir,
+        runId: "run-1",
+        taskId: "task-b",
+        taskKey: "task-b",
+        ref: "HEAD",
+        root: ".orga/worktrees",
+        branchPrefix: "orga/task/",
+        mode: "in-place",
+      });
+      assert.ok(
+        handleB.recordedDirt.includes("task-a-leftover.txt"),
+        "task-a's leftover file must be recorded as task-b's own recordedDirt",
+      );
+
+      fs.writeFileSync(path.join(dir, "claimed-by-b.txt"), "claimed by task-b\n", "utf8");
+
+      const observed = await observedPaths(handleB);
+      const result = validateClaims({ observed, claimed: ["claimed-by-b.txt"], recordedDirt: handleB.recordedDirt });
+
+      assert.equal(result.ok, true, "task-a's carried-over dirt must not fail task-b's claim validation");
+      assert.deepEqual(result.outOfClaim, []);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 // ── no worktree or branch is created for an in-place workspace ─────────────
 
 test("createInPlaceWorkspace: git worktree list shows exactly one entry, and no orga/task/ branch is created", async () => {

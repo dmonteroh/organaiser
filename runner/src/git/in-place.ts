@@ -55,7 +55,7 @@ export interface InPlaceStartCheck {
   recordedDirt: string[];
 }
 
-// Rules for `in-place` (D6): the run refuses to start against a dirty
+// Rules for `in-place`: the run refuses to start against a dirty
 // checkout unless `--allow-dirty` is passed, in which case the dirty paths
 // observed at that moment are recorded rather than blocking the run.
 export function checkInPlaceStart({ projectRoot, allowDirty }: CheckInPlaceStartInput): InPlaceStartCheck {
