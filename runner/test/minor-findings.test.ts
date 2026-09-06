@@ -34,7 +34,10 @@ test("a store initialized from empty reaches version 2", async () => {
     initProject(dir);
     const db = openStore(dir);
     try {
-      assert.deepEqual(schemaMigrationVersions(db), [1, 2]);
+      assert.deepEqual(
+        schemaMigrationVersions(db),
+        MIGRATIONS.map((m) => m.version),
+      );
       const index = db
         .prepare(
           `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'minor_finding_appends_idempotency_key'`,
@@ -67,7 +70,10 @@ test("a store already at version 1 migrates to 2 without data loss", async () =>
 
       applyMigrations(db);
 
-      assert.deepEqual(schemaMigrationVersions(db), [1, 2]);
+      assert.deepEqual(
+        schemaMigrationVersions(db),
+        MIGRATIONS.map((m) => m.version),
+      );
       const runs = db.prepare("SELECT id FROM runs").all() as Array<{ id: string }>;
       assert.deepEqual(
         runs.map((row) => row.id),
