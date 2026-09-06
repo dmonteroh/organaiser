@@ -10,7 +10,7 @@ import { withTempWorkspace } from "./helpers/workspace.ts";
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
-import type { AttemptDescriptor } from "../src/adapters/adapter.ts";
+import type { AttemptDescriptor, ProcessAdapter } from "../src/adapters/adapter.ts";
 import {
   acquireDestinationLock,
   INTEGRATION_CAPS,
@@ -23,6 +23,7 @@ import {
   type IntegrationStagesInput,
 } from "../src/engine/integration-stages.ts";
 import { commitExists, isAncestor } from "../src/git/git.ts";
+import { advanceIntegration, refIsCurrentCheckout } from "../src/git/integrate.ts";
 import { accept, type Facts } from "../src/engine/predicates.ts";
 import type { WorkspaceHandle } from "../src/git/workspace.ts";
 
@@ -859,5 +860,349 @@ test("acquireDestinationLock still rejects a fresh unreleased integration lock f
     assert.equal(rows.length, 1, "no new row is inserted when the existing one is still fresh");
     assert.equal(rows[0]?.released_at, null);
     assert.equal(ctx.lockId, null, "the loser records no lock of its own");
+  });
+});
+
+// ── `in-place` mode's integration path ──────────────────────────────────
+
+test("advanceIntegration('commit-on-branch') lands exactly one commit via a plain git commit, never update-ref", async () => {
+  await withTempWorkspace(async (dir) => {
+    runGit(dir, ["init", "-q"]);
+    runGit(dir, ["config", "commit.gpgsign", "false"]);
+    const before = commitFile(dir, "seed.txt", "seed\n", "seed");
+    runGit(dir, ["branch", "-M", "main"]);
+
+    fs.writeFileSync(path.join(dir, "claimed.txt"), "claimed contents\n", "utf8");
+
+    const sha = advanceIntegration({
+      strategy: "commit-on-branch",
+      projectRoot: dir,
+      claimedPaths: ["claimed.txt"],
+      message: "land claimed.txt",
+    });
+
+    assert.equal(runGit(dir, ["rev-parse", "HEAD"]), sha);
+    assert.equal(runGit(dir, ["rev-parse", "HEAD^"]), before, "exactly one new commit, parented at the prior tip");
+    assert.equal(runGit(dir, ["rev-list", "--count", `${before}..${sha}`]), "1");
+    assert.equal(runGit(dir, ["show", "HEAD:claimed.txt"]), "claimed contents");
+
+    const reflogSubjects = runGit(dir, ["reflog", "show", "--format=%gs", "refs/heads/main"]).split("\n");
+    assert.ok(
+      reflogSubjects[0]?.startsWith("commit"),
+      `the newest reflog entry must be a commit, not an update-ref move; got ${JSON.stringify(reflogSubjects[0])}`,
+    );
+    assert.ok(
+      !reflogSubjects.some((subject) => subject.startsWith("update-ref") || subject.includes("update by push")),
+      `no update-ref reflog entry may exist; got ${JSON.stringify(reflogSubjects)}`,
+    );
+  });
+});
+
+const IN_PLACE_RUN_ID = "run-in-place";
+const IN_PLACE_TASK_ID = "task-in-place";
+const IN_PLACE_BRANCH = "main";
+
+interface InPlaceTestEnv {
+  dir: string;
+  db: ReturnType<typeof openStore>;
+  clock: { now: () => number };
+  taskDir: string;
+  streamsDir: string;
+  destinationSha0: string;
+  taskWorkspace: WorkspaceHandle;
+}
+
+// The `in-place` counterpart to `withEnv` above: `taskWorkspace.path` is the
+// same directory as `projectRoot` (in-place mode's destination is the
+// operator's live checkout by construction, every time), and the claim
+// set's paths are pre-populated as uncommitted working-tree edits — never
+// committed to any branch — mirroring the shape `createInPlaceWorkspace`
+// (`git/in-place.ts`) itself hands the engine.
+async function withInPlaceEnv(claimedPaths: readonly string[], fn: (env: InPlaceTestEnv) => Promise<void>): Promise<void> {
+  await withTempWorkspace(async (dir) => {
+    runGit(dir, ["init", "-q"]);
+    runGit(dir, ["config", "commit.gpgsign", "false"]);
+    commitFile(dir, "seed.txt", "seed\n", "seed");
+    runGit(dir, ["branch", "-M", IN_PLACE_BRANCH]);
+    const destinationSha0 = runGit(dir, ["rev-parse", "HEAD"]);
+
+    initProject(dir);
+
+    const db = openStore(dir);
+    try {
+      withTransaction(db, () => {
+        db.prepare("INSERT INTO runs (id, board_path, desired_state, state, created_at) VALUES (?, ?, ?, ?, ?)").run(
+          IN_PLACE_RUN_ID,
+          "board.yaml",
+          "running",
+          "starting",
+          1_000_000,
+        );
+        db.prepare(
+          `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        ).run(`claim-${IN_PLACE_TASK_ID}`, IN_PLACE_RUN_ID, IN_PLACE_TASK_ID, "files", JSON.stringify(claimedPaths), 1000);
+      });
+
+      for (const claimedPath of claimedPaths) {
+        fs.writeFileSync(path.join(dir, claimedPath), `${claimedPath} contents\n`, "utf8");
+      }
+
+      const taskWorkspace: WorkspaceHandle = {
+        mode: "in-place",
+        root: "",
+        path: dir,
+        branch: IN_PLACE_BRANCH,
+        baseCommit: destinationSha0,
+        recordedDirt: [],
+      };
+
+      const taskDir = path.join(dir, "task-dir");
+      fs.mkdirSync(taskDir, { recursive: true });
+      const streamsDir = path.join(dir, "streams");
+      fs.mkdirSync(streamsDir, { recursive: true });
+
+      await fn({ dir, db, clock: fakeClock(1_000_000), taskDir, streamsDir, destinationSha0, taskWorkspace });
+    } finally {
+      db.close();
+    }
+  });
+}
+
+function inPlaceInput(
+  env: InPlaceTestEnv,
+  adapter: FakeAdapter | ProcessAdapter,
+  overrides: Partial<IntegrationStagesInput> = {},
+): IntegrationStagesInput {
+  return {
+    db: env.db,
+    adapter,
+    runId: IN_PLACE_RUN_ID,
+    taskId: IN_PLACE_TASK_ID,
+    now: env.clock.now,
+    projectRoot: env.dir,
+    destinationRef: `refs/heads/${IN_PLACE_BRANCH}`,
+    taskWorkspace: env.taskWorkspace,
+    candidateRoot: path.join(env.dir, ".orga", "worktrees"),
+    taskDir: env.taskDir,
+    requiredArtifacts: [],
+    checks: {},
+    env: process.env,
+    ...overrides,
+  };
+}
+
+function candidateWorktreePath(env: InPlaceTestEnv): string {
+  const row = env.db
+    .prepare(`SELECT path FROM worktrees WHERE run_id = ? AND task_id = ?`)
+    .get(IN_PLACE_RUN_ID, IN_PLACE_TASK_ID) as { path: string } | undefined;
+  if (!row) throw new Error("no candidate worktree row recorded yet");
+  return row.path;
+}
+
+test("acquireDestinationLock: in-place mode skips the live-checkout collision check and acquires the lock even though the destination is the operator's current branch", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    const { adapter } = makeAdapter(env.streamsDir);
+    assert.ok(
+      refIsCurrentCheckout(env.dir, `refs/heads/${IN_PLACE_BRANCH}`),
+      "sanity: the destination equals the operator's live checkout, by construction, in in-place mode",
+    );
+
+    const ctx = freshCtx(inPlaceInput(env, adapter));
+    const verdict = acquireDestinationLock(ctx);
+
+    assert.equal(verdict, "true", "the collision check never fires for in-place mode");
+    const rows = env.db
+      .prepare(`SELECT id FROM locks WHERE run_id = ? AND resource = ?`)
+      .all(IN_PLACE_RUN_ID, `refs/heads/${IN_PLACE_BRANCH}`);
+    assert.equal(rows.length, 1, "the lock is actually acquired, proving lock-destination reaches create-candidate next");
+  });
+});
+
+test("in-place mode: the review candidate carries the claim set's current content, not the destination's pre-task state", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeReviewerStream(env.streamsDir, "pass", IN_PLACE_TASK_ID, "pass");
+    queue("pass");
+
+    assert.throws(
+      () => runGit(env.dir, ["cat-file", "-e", `${env.destinationSha0}:feature.txt`]),
+      "sanity: the destination's pre-task state never had feature.txt",
+    );
+
+    let candidateContent: string | null = null;
+    const outcome = await runIntegrationStages(
+      inPlaceInput(env, adapter, {
+        beforeAdvanceDestination: () => {
+          candidateContent = fs.readFileSync(path.join(candidateWorktreePath(env), "feature.txt"), "utf8");
+        },
+      }),
+    );
+
+    assert.equal(outcome.outcome, "integrated", `expected integrated; got ${JSON.stringify(outcome)}`);
+    assert.equal(candidateContent, "feature.txt contents\n");
+  });
+});
+
+test("in-place mode: replay-task never cherry-picks; the candidate's history is exactly [destinationSha, reviewSha]", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeReviewerStream(env.streamsDir, "pass", IN_PLACE_TASK_ID, "pass");
+    queue("pass");
+
+    let candidateHistory: string[] = [];
+    const outcome = await runIntegrationStages(
+      inPlaceInput(env, adapter, {
+        beforeAdvanceDestination: () => {
+          candidateHistory = runGit(candidateWorktreePath(env), ["log", "--format=%H"])
+            .split("\n")
+            .filter((line) => line.length > 0);
+        },
+      }),
+    );
+
+    assert.equal(outcome.outcome, "integrated", `expected integrated; got ${JSON.stringify(outcome)}`);
+    assert.equal(candidateHistory.length, 2, "exactly two commits: the destination, and the manufactured review commit on top of it");
+    assert.equal(candidateHistory[1], env.destinationSha0, "the older commit is the destination's own sha, unmodified");
+    assert.notEqual(
+      candidateHistory[0],
+      env.destinationSha0,
+      "the newer commit is the manufactured review commit; no cherry-pick-authored commit sits between them",
+    );
+  });
+});
+
+test("in-place mode: advance-destination skips the live-checkout collision check and lands exactly one plain commit; git worktree list is unchanged after a full run", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeReviewerStream(env.streamsDir, "pass", IN_PLACE_TASK_ID, "pass");
+    queue("pass");
+
+    const worktreePathsBefore = runGit(env.dir, ["worktree", "list", "--porcelain"])
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "));
+
+    const outcome = await runIntegrationStages(inPlaceInput(env, adapter));
+
+    assert.equal(outcome.outcome, "integrated", `expected integrated; got ${JSON.stringify(outcome)}`);
+    assert.ok(outcome.resultCommit);
+    assert.equal(runGit(env.dir, ["rev-parse", `refs/heads/${IN_PLACE_BRANCH}`]), outcome.resultCommit);
+    assert.equal(
+      runGit(env.dir, ["rev-list", "--count", `${env.destinationSha0}..${outcome.resultCommit}`]),
+      "1",
+      "exactly one commit lands on the destination branch",
+    );
+
+    const row = env.db
+      .prepare(`SELECT checks FROM integrations WHERE run_id = ? AND task_id = ?`)
+      .get(IN_PLACE_RUN_ID, IN_PLACE_TASK_ID) as { checks: string };
+    const checks = JSON.parse(row.checks) as { destinationEqualsOperatorCheckout?: boolean };
+    assert.equal(
+      checks.destinationEqualsOperatorCheckout,
+      undefined,
+      "the live-checkout collision check never runs for in-place mode, so it never records this evidence",
+    );
+
+    const worktreePathsAfter = runGit(env.dir, ["worktree", "list", "--porcelain"])
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "));
+    assert.deepEqual(
+      worktreePathsAfter,
+      worktreePathsBefore,
+      "the set of worktree paths (the operator's own checkout, and only it) is unchanged after a full in-place integration",
+    );
+  });
+});
+
+test("in-place mode: cleanup never removes the operator's own checkout as a worktree; a full run leaves git worktree list showing only that checkout", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeReviewerStream(env.streamsDir, "pass", IN_PLACE_TASK_ID, "pass");
+    queue("pass");
+
+    const outcome = await runIntegrationStages(inPlaceInput(env, adapter));
+    assert.equal(outcome.outcome, "integrated", `expected integrated; got ${JSON.stringify(outcome)}`);
+
+    const entries = runGit(env.dir, ["worktree", "list", "--porcelain"])
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "));
+    assert.equal(entries.length, 1, "only the operator's own checkout remains as a worktree");
+    assert.ok(entries[0]?.includes(env.dir), "the sole remaining worktree is the operator's own checkout");
+
+    const taskWorktreeRow = env.db
+      .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND path = ?`)
+      .get(IN_PLACE_RUN_ID, env.dir) as { n: number };
+    assert.equal(
+      taskWorktreeRow.n,
+      0,
+      "no worktrees row is ever inserted for the operator's own checkout, so cleanup never targets it for removal",
+    );
+
+    const pendingRows = env.db
+      .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND task_id = ? AND cleanup_state != 'cleaned'`)
+      .get(IN_PLACE_RUN_ID, IN_PLACE_TASK_ID) as { n: number };
+    assert.equal(pendingRows.n, 0, "the review candidate worktree is fully cleaned up");
+  });
+});
+
+test("in-place mode: cross-task-review runs with the review candidate as its working directory, and observes the claim set's actual content", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    const workingDirectories: string[] = [];
+    // Reads the claimed path's content from inside the candidate the moment
+    // the reviewer attempt starts, before `cleanup` later removes that
+    // worktree: `collect`/`classify` would see it gone by the time the whole
+    // pipeline (awaited fully below) has already run to completion.
+    const observedContents: string[] = [];
+    const inner = new FakeAdapter({ terminate: noopTerminate, streamsDir: env.streamsDir, scenarioFor: () => "pass" });
+    const capturingAdapter: ProcessAdapter = {
+      probe: (configuration) => inner.probe(configuration),
+      start: async (attempt, packet, surface) => {
+        workingDirectories.push(surface.workingDirectory);
+        observedContents.push(fs.readFileSync(path.join(surface.workingDirectory, "feature.txt"), "utf8"));
+        return inner.start(attempt, packet, surface);
+      },
+      observe: (handle) => inner.observe(handle),
+      cancel: (handle, gracePeriodMs) => inner.cancel(handle, gracePeriodMs),
+      collect: (handle) => inner.collect(handle),
+      classify: (artifacts) => inner.classify(artifacts),
+    };
+    writeReviewerStream(env.streamsDir, "pass", IN_PLACE_TASK_ID, "pass");
+
+    const outcome = await runIntegrationStages(inPlaceInput(env, capturingAdapter));
+
+    assert.equal(outcome.outcome, "integrated", `expected integrated; got ${JSON.stringify(outcome)}`);
+    assert.equal(workingDirectories.length, 1, "cross-task-review dispatches exactly one attempt");
+    assert.notEqual(workingDirectories[0], env.dir, "the reviewer never runs directly in the operator's checkout");
+    assert.equal(
+      observedContents[0],
+      "feature.txt contents\n",
+      "the reviewer's working directory carries the claim set's actual, current content",
+    );
+  });
+});
+
+test("in-place mode: a failed cross-task-review never resets, checks out, stashes, or reverts the operator's checkout", async () => {
+  await withInPlaceEnv(["feature.txt"], async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeReviewerStream(env.streamsDir, "fail", IN_PLACE_TASK_ID, "fail-with-severity: critical");
+    queue("fail");
+
+    const headBefore = runGit(env.dir, ["rev-parse", `refs/heads/${IN_PLACE_BRANCH}`]);
+    const branchBefore = runGit(env.dir, ["symbolic-ref", "--short", "HEAD"]);
+    const contentBefore = fs.readFileSync(path.join(env.dir, "feature.txt"), "utf8");
+
+    const outcome = await runIntegrationStages(inPlaceInput(env, adapter));
+
+    assert.equal(outcome.outcome, "ready-to-implement", `expected ready-to-implement; got ${JSON.stringify(outcome)}`);
+    assert.equal(
+      runGit(env.dir, ["rev-parse", `refs/heads/${IN_PLACE_BRANCH}`]),
+      headBefore,
+      "the operator's branch gains zero commits on a failed review",
+    );
+    assert.equal(runGit(env.dir, ["symbolic-ref", "--short", "HEAD"]), branchBefore, "the operator's checkout is never checked out elsewhere");
+    assert.equal(
+      fs.readFileSync(path.join(env.dir, "feature.txt"), "utf8"),
+      contentBefore,
+      "the claimed path's content is byte-identical to what the task itself wrote, never reset or reverted",
+    );
   });
 });

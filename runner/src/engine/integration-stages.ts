@@ -34,11 +34,14 @@ import { positiveInt, type Read } from "../cli/config.ts";
 import { removeWorkspace, type WorkspaceHandle, type WorkspaceRemovalResult } from "../git/workspace.ts";
 import {
   advanceIntegration,
+  commitTree,
   createCandidateWorkspace,
   headSha,
   readRefSha,
   refIsCurrentCheckout,
   replayTaskBranch,
+  stageClaimedPaths,
+  writeTree,
 } from "../git/integrate.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
@@ -284,6 +287,23 @@ function isUniqueConstraintError(err: unknown): boolean {
   );
 }
 
+// Reads the task's single `dimension = 'files'` claims row, mirroring
+// `scheduler.ts`'s and `workflow-stages.ts`'s own private readers: a missing
+// row or an unparseable value both yield an empty claim set rather than
+// propagating.
+function readClaimedPaths(db: DatabaseSync, runId: string, taskId: string): string[] {
+  const row = db
+    .prepare(`SELECT value FROM claims WHERE run_id = ? AND task_id = ? AND dimension = 'files'`)
+    .get(runId, taskId) as { value: string } | undefined;
+  if (!row) return [];
+  try {
+    const parsed = JSON.parse(row.value) as unknown;
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 interface LastAgentAttempt {
   attemptId: string;
   pgid: number;
@@ -411,7 +431,12 @@ function upsertIntegrationRow(
 export function acquireDestinationLock(ctx: IntegrationDriverContext): "true" | "false" {
   const { input } = ctx;
 
-  if (refIsCurrentCheckout(input.projectRoot, input.destinationRef)) {
+  // `in-place` mode's destination is the operator's live checkout by
+  // construction, every time: the collision this check exists to prevent
+  // (racing the operator's own branch switch) cannot be told apart from
+  // in-place mode's normal, expected state, so this mode skips the check
+  // entirely rather than parking every in-place integration permanently.
+  if (input.taskWorkspace.mode !== "in-place" && refIsCurrentCheckout(input.projectRoot, input.destinationRef)) {
     upsertIntegrationRow(ctx, {
       checks: {
         rebuildCount: ctx.rebuildCount,
@@ -485,6 +510,26 @@ async function buildCandidateWorkspace(ctx: IntegrationDriverContext): Promise<"
     return "false";
   }
 
+  // `worktree` mode's candidate is built directly at the destination's
+  // current sha. `in-place` mode has no separate task branch to replay onto
+  // it (the task's edits are uncommitted working-tree changes in this same
+  // `projectRoot`), so this manufactures a disposable review commit — the
+  // claim set staged and written into a tree and commit object, touching no
+  // ref, no HEAD, and no working tree in the operator's checkout — and
+  // builds the candidate at that sha instead.
+  let candidateSha = destinationSha;
+  if (input.taskWorkspace.mode === "in-place") {
+    const claimedPaths = readClaimedPaths(input.db, input.runId, input.taskId);
+    stageClaimedPaths({ projectRoot: input.projectRoot, claimedPaths });
+    const tree = writeTree(input.projectRoot);
+    candidateSha = commitTree({
+      projectRoot: input.projectRoot,
+      tree,
+      parentSha: destinationSha,
+      message: `orga: review candidate for task ${input.taskId}`,
+    });
+  }
+
   const candidatePath = path.join(input.candidateRoot, input.runId, `${input.taskId}-candidate-${ctx.rebuildCount}`);
   const handle = createCandidateWorkspace({
     db: input.db,
@@ -492,7 +537,7 @@ async function buildCandidateWorkspace(ctx: IntegrationDriverContext): Promise<"
     taskId: input.taskId,
     projectRoot: input.projectRoot,
     candidatePath,
-    destinationSha,
+    destinationSha: candidateSha,
   });
   ctx.candidate = handle;
   upsertIntegrationRow(ctx, { candidateRef: candidatePath });
@@ -503,6 +548,14 @@ async function replayCandidate(ctx: IntegrationDriverContext): Promise<"true" | 
   const { input, candidate, destinationSha } = ctx;
   if (!candidate || !destinationSha) {
     throw new Error("replay-task reached with no candidate on record");
+  }
+
+  // `in-place` mode's candidate already carries the final content: it was
+  // built directly from the claim set's current state (`buildCandidateWorkspace`
+  // above), not from the destination's pre-task state, so there is nothing
+  // to cherry-pick onto it.
+  if (input.taskWorkspace.mode === "in-place") {
+    return "true";
   }
 
   const result = replayTaskBranch({
@@ -567,7 +620,15 @@ async function advanceDestinationStage(ctx: IntegrationDriverContext): Promise<"
     await input.beforeAdvanceDestination();
   }
 
-  if (refIsCurrentCheckout(input.projectRoot, input.destinationRef)) {
+  const inPlace = input.taskWorkspace.mode === "in-place";
+
+  // The collision this check exists to prevent — a moved ref leaving the
+  // operator's tree out of sync with `git status` — cannot arise on
+  // `in-place` mode's landing path: `commit-on-branch` never calls
+  // `update-ref`, so this mode skips the check entirely rather than always
+  // tripping it (in-place mode's destination is the operator's live
+  // checkout by construction, every time).
+  if (!inPlace && refIsCurrentCheckout(input.projectRoot, input.destinationRef)) {
     await removeWorkspace(candidate, { db: input.db, projectRoot: input.projectRoot, runId: input.runId });
     ctx.candidate = null;
     upsertIntegrationRow(ctx, {
@@ -578,6 +639,18 @@ async function advanceDestinationStage(ctx: IntegrationDriverContext): Promise<"
       },
     });
     return "false";
+  }
+
+  if (inPlace) {
+    const claimedPaths = readClaimedPaths(input.db, input.runId, input.taskId);
+    const resultCommit = advanceIntegration({
+      strategy: "commit-on-branch",
+      projectRoot: input.projectRoot,
+      claimedPaths,
+      message: `orga: integrate task ${input.taskId}`,
+    });
+    ctx.resultCommit = resultCommit;
+    return "true";
   }
 
   const newSha = headSha(candidate.path);
@@ -617,7 +690,16 @@ async function removeIntegrationWorktrees(ctx: IntegrationDriverContext): Promis
   const { input, candidate } = ctx;
   const removalCtx = { db: input.db, projectRoot: input.projectRoot, runId: input.runId };
 
-  const taskResult = await removeWorkspace(input.taskWorkspace, removalCtx);
+  // `in-place` mode's `taskWorkspace.path` is `projectRoot` itself — the
+  // operator's real working tree, not a runner-owned worktree — so it is
+  // never registered in `worktrees` and must never be passed to
+  // `removeWorkspace`: `git worktree remove --force <projectRoot>` fails
+  // closed (it is the main working tree) and would mark cleanup `orphaned`
+  // over a fabricated failure.
+  const taskResult: WorkspaceRemovalResult =
+    input.taskWorkspace.mode === "in-place"
+      ? { ok: true, cleanupState: "cleaned" }
+      : await removeWorkspace(input.taskWorkspace, removalCtx);
   const candidateResult: WorkspaceRemovalResult = candidate
     ? await removeWorkspace(candidate, removalCtx)
     : { ok: true, cleanupState: "cleaned" };
@@ -812,7 +894,10 @@ async function resumePendingCleanup(input: IntegrationStagesInput): Promise<Inte
   }
 
   const removalCtx = { db: input.db, projectRoot: input.projectRoot, runId: input.runId };
-  const taskResult = await removeWorkspace(input.taskWorkspace, removalCtx);
+  const taskResult: WorkspaceRemovalResult =
+    input.taskWorkspace.mode === "in-place"
+      ? { ok: true, cleanupState: "cleaned" }
+      : await removeWorkspace(input.taskWorkspace, removalCtx);
 
   const candidateRow = input.db
     .prepare(

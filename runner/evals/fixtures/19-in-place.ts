@@ -74,9 +74,10 @@ function assertOneWorktreeEntry(dir: string, label: string): void {
 }
 
 function assertTerminalDisposition(taskId: string, disposition: unknown): void {
-  assert.ok(
-    disposition === "parked" || disposition === "integrated",
-    `task ${taskId} must reach a terminal disposition of "parked" or "integrated", got ${JSON.stringify(disposition)}`,
+  assert.equal(
+    disposition,
+    "integrated",
+    `task ${taskId} must reach a terminal disposition of "integrated", got ${JSON.stringify(disposition)}`,
   );
 }
 
@@ -110,9 +111,19 @@ function writePassThroughStreams(streamsDir: string, taskId: string): void {
     reportLine({ taskId, stageId: "review-quality", roleId: "code-quality-reviewer", status: "completed", verdict: "pass" }),
     exitLine(0),
   ]);
-  writeStream(streamsDir, "integration", taskId, [
-    outputLine("integrating"),
-    reportLine({ taskId, stageId: "integration", roleId: "integrator", status: "completed" }),
+  // `in-place` mode's `integration` stage lands its result through git
+  // plumbing (`runIntegrationStages`), not a raw dispatched attempt: the
+  // only sub-agent attempt it dispatches is `cross-task-review`, run against
+  // the manufactured review candidate.
+  writeStream(streamsDir, "cross-task-review", taskId, [
+    outputLine("reviewing"),
+    reportLine({
+      taskId,
+      stageId: "cross-task-review",
+      roleId: "code-quality-reviewer",
+      status: "completed",
+      verdict: "pass",
+    }),
     exitLine(0),
   ]);
 }
@@ -242,7 +253,9 @@ export async function inPlaceSerializes(): Promise<void> {
       assertTerminalDisposition("task-b", readTaskRow(dir, "task-b")?.disposition);
 
       const headAfter = runGit(dir, ["rev-parse", "HEAD"]);
-      assert.equal(headAfter, headBefore, "the checkout's HEAD moves only by commits the run itself made — none, here");
+      assert.notEqual(headAfter, headBefore, "each integrated task lands its own commit on the checkout's branch");
+      const landedCount = runGit(dir, ["rev-list", "--count", `${headBefore}..${headAfter}`]);
+      assert.equal(landedCount, "2", "exactly one commit lands per integrated task");
       assertOneWorktreeEntry(dir, "inPlaceSerializes");
     } finally {
       registry.killAll();
@@ -296,9 +309,9 @@ export async function inPlaceClaimsExcludeRecordedDirt(): Promise<void> {
         reportLine({ taskId: "task-a", stageId: "review-quality", roleId: "code-quality-reviewer", status: "completed", verdict: "pass" }),
         exitLine(0),
       ]);
-      writeStream(streamsDir, "integration", "task-a", [
-        outputLine("integrating"),
-        reportLine({ taskId: "task-a", stageId: "integration", roleId: "integrator", status: "completed" }),
+      writeStream(streamsDir, "cross-task-review", "task-a", [
+        outputLine("reviewing"),
+        reportLine({ taskId: "task-a", stageId: "cross-task-review", roleId: "code-quality-reviewer", status: "completed", verdict: "pass" }),
         exitLine(0),
       ]);
 
@@ -333,11 +346,141 @@ export async function inPlaceClaimsExcludeRecordedDirt(): Promise<void> {
       assertTerminalDisposition("task-a", readTaskRow(dir, "task-a")?.disposition);
 
       const headAfter = runGit(dir, ["rev-parse", "HEAD"]);
-      assert.equal(headAfter, headBefore, "the checkout's HEAD moves only by commits the run itself made — none, here");
+      assert.notEqual(headAfter, headBefore, "the integrated task lands its own commit on the checkout's branch");
+      assert.equal(
+        runGit(dir, ["rev-list", "--count", `${headBefore}..${headAfter}`]),
+        "1",
+        "exactly one commit lands for the task",
+      );
+      assert.equal(
+        runGit(dir, ["show", "HEAD:claimed.txt"]),
+        "claimed contents",
+        "the landed commit carries the claimed path's content",
+      );
+      assert.throws(
+        () => execFileSync("git", ["cat-file", "-e", "HEAD:operator-dirt.txt"], { cwd: dir, stdio: "ignore" }),
+        "the pre-existing, unclaimed dirty file is never staged or landed",
+      );
       assertOneWorktreeEntry(dir, "inPlaceClaimsExcludeRecordedDirt");
 
       const runRow = readRunRow(dir, runId);
       assert.ok(runRow, "the run row must exist");
+    } finally {
+      registry.killAll();
+      await registry.allDead();
+      fs.rmSync(streamsDir, { recursive: true, force: true });
+    }
+  });
+}
+
+// ── inPlaceIntegratesWithReview ─────────────────────────────────────────────
+
+export async function inPlaceIntegratesWithReview(): Promise<void> {
+  await withFixtureWorkspace(async (dir) => {
+    const registry = new ProcessRegistry();
+    const tasks = [
+      { id: "task-a", priority: 0 },
+      { id: "task-b", priority: 1 },
+    ];
+    const { runId } = startGitFixtureRun(dir, tasks);
+    const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-fixture-streams-"));
+
+    try {
+      const db = openStore(dir);
+      try {
+        withTransaction(db, () => {
+          for (const task of tasks) {
+            db.prepare(
+              `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(task.id, runId, task.id, task.id, "brief.md", "dev-workflow", "implementation", "[]", task.priority, "defined", null, Date.now(), Date.now());
+            db.prepare(
+              `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            ).run(`claim-${task.id}`, runId, task.id, "files", JSON.stringify([`${task.id}.txt`]), Date.now());
+          }
+        });
+      } finally {
+        db.close();
+      }
+
+      // Each task claims and writes a file named after itself, with content
+      // named after itself: a reviewer that observed the destination's
+      // pre-task state (which has neither file) or the wrong task's diff
+      // would leave a landed commit with the wrong content, missing content,
+      // or the other task's content — any of which the assertions below
+      // would catch.
+      for (const task of tasks) {
+        writeStream(streamsDir, "implement", task.id, [
+          outputLine("working"),
+          writeFileLine(`${task.id}.txt`, `${task.id} content\n`),
+          reportLine({ taskId: task.id, stageId: "implement", roleId: "implementer", status: "completed" }),
+          exitLine(0),
+        ]);
+        writeStream(streamsDir, "review-spec", task.id, [
+          outputLine("reviewing"),
+          reportLine({ taskId: task.id, stageId: "review-spec", roleId: "spec-reviewer", status: "completed", verdict: "pass" }),
+          exitLine(0),
+        ]);
+        writeStream(streamsDir, "review-quality", task.id, [
+          outputLine("reviewing"),
+          reportLine({ taskId: task.id, stageId: "review-quality", roleId: "code-quality-reviewer", status: "completed", verdict: "pass" }),
+          exitLine(0),
+        ]);
+        writeStream(streamsDir, "cross-task-review", task.id, [
+          outputLine("reviewing"),
+          reportLine({ taskId: task.id, stageId: "cross-task-review", roleId: "code-quality-reviewer", status: "completed", verdict: "pass" }),
+          exitLine(0),
+        ]);
+      }
+
+      const headBefore = runGit(dir, ["rev-parse", "HEAD"]);
+
+      const supervisor = spawnFixtureSupervisor(dir, runId, {
+        tickIntervalMs: TICK_INTERVAL_MS,
+        operatorPollWindowMs: TICK_INTERVAL_MS * 4,
+        cancelGraceMs: TICK_INTERVAL_MS,
+        streamsDir,
+        workspaceMode: "in-place",
+      });
+      registry.track(supervisor.pid);
+
+      const done = await waitFor(() => {
+        const a = readTaskRow(dir, "task-a");
+        const b = readTaskRow(dir, "task-b");
+        return a?.disposition != null && b?.disposition != null;
+      }, TERMINAL_WAIT_MS);
+      assert.ok(
+        done,
+        `both tasks must reach a terminal disposition; task-a=${JSON.stringify(readTaskRow(dir, "task-a"))} task-b=${JSON.stringify(readTaskRow(dir, "task-b"))}`,
+      );
+
+      assert.equal(readTaskRow(dir, "task-a")?.disposition, "integrated");
+      assert.equal(readTaskRow(dir, "task-b")?.disposition, "integrated");
+
+      const headAfter = runGit(dir, ["rev-parse", "HEAD"]);
+      assert.notEqual(headAfter, headBefore, "each integrated task lands its own commit on the checkout's branch");
+      assert.equal(
+        runGit(dir, ["rev-list", "--count", `${headBefore}..${headAfter}`]),
+        "2",
+        "exactly one commit lands per task",
+      );
+
+      assert.equal(
+        runGit(dir, ["show", "HEAD:task-b.txt"]),
+        "task-b content",
+        "the final landed commit carries task-b's own claimed content",
+      );
+      assert.equal(
+        runGit(dir, ["show", "HEAD~1:task-a.txt"]),
+        "task-a content",
+        "task-a's own landed commit carries task-a's own claimed content, reflecting the actual diff reviewed rather than the destination's pre-task state",
+      );
+      assert.throws(
+        () => execFileSync("git", ["cat-file", "-e", "HEAD~1:task-b.txt"], { cwd: dir, stdio: "ignore" }),
+        "task-a's own landed commit never carries task-b's content",
+      );
+
+      assertOneWorktreeEntry(dir, "inPlaceIntegratesWithReview");
     } finally {
       registry.killAll();
       await registry.allDead();

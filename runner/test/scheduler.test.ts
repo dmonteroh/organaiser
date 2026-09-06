@@ -669,47 +669,98 @@ test("dispatchEligible with a workspace provider: a mutating dispatch runs insid
   });
 });
 
-test("dispatchEligible with a workspace provider whose mode is \"in-place\": the task dispatches directly into the operator's checkout, with no worktree created", async () => {
+test("dispatchEligible with a workspace provider whose mode is \"in-place\": the integration stage runs the full in-place git-plumbing pipeline and lands a plain commit on the operator's checkout, with no worktree left behind", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock, baseCommit }) => {
     insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
     seedFilesClaim(db, runId, "task-a", ["implementation-output.txt"]);
+    // Simulates the file the task's own `implementation` dispatch already
+    // wrote to the operator's checkout, uncommitted: `in-place` mode's
+    // `integration` stage lands this claim set through git plumbing
+    // (`runIntegrationStages`), not through a raw dispatched attempt, so
+    // there is no separate "attempt" here to write it.
+    fs.writeFileSync(path.join(dir, "implementation-output.txt"), "implementer output\n", "utf8");
+
     const provider: WorkspaceProvider = {
       projectRoot: dir,
       root: DEFAULT_WORKTREE_ROOT,
       branchPrefix: DEFAULT_BRANCH_PREFIX,
       mode: "in-place",
     };
-    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
 
-    const statusBefore = runGit(dir, ["status", "--porcelain"]);
-
-    const runtime = createSchedulerRuntime();
-    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
-
-    assert.ok(runtime.liveAttempt, "the task dispatches once its claims row exists");
-    const workspace = runtime.liveAttempt!.workspace;
-    assert.ok(workspace, "a workspace handle is held for a provider-backed mutating dispatch");
-    assert.equal(workspace!.mode, "in-place");
-    assert.equal(workspace!.path, dir, "the handle's path is the project root itself, not a runner-owned worktree");
-    assert.equal(workspace!.baseCommit, baseCommit);
-    assert.deepEqual(
-      workspace!.recordedDirt,
-      ["orgaw"],
-      "the pre-existing untracked orgaw wrapper (setupGitProject never commits it) is recorded as dirt",
+    // In-place mode's `integration` stage dispatches its sub-agent attempt
+    // at `cross-task-review` (inside `runIntegrationStages`), working
+    // against the manufactured review candidate rather than `dir` itself, so
+    // this test supplies its own streams directory rather than the shared
+    // `fixturesStreamsDir` (which carries no `cross-task-review` stream).
+    const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-scheduler-inplace-review-"));
+    fs.writeFileSync(
+      path.join(streamsDir, "cross-task-review--well-formed.jsonl"),
+      [
+        JSON.stringify({ op: "output", text: "reviewing" }),
+        JSON.stringify({
+          op: "report",
+          report: {
+            protocolVersion: "1",
+            workflowId: "integration",
+            workflowVersion: "1.0.0",
+            runId,
+            taskId: "task-a",
+            attemptId: "attempt-fixture",
+            stageId: "cross-task-review",
+            roleId: "code-quality-reviewer",
+            status: "completed",
+            verdict: "pass",
+            summary: "looks good",
+          },
+        }),
+        JSON.stringify({ op: "exit", code: 0 }),
+      ].join("\n") + "\n",
     );
-    assert.equal(runtime.liveAttempt!.handle.worktree, dir, "the attempt's working directory is the project root");
 
-    await waitForExit(runtime.liveAttempt!.handle.pid);
+    try {
+      const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir, scenarioFor: () => "well-formed" });
 
-    const worktreeRows = db.prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ?`).get(runId) as { n: number };
-    assert.equal(worktreeRows.n, 0, "no worktree is ever created for an in-place dispatch");
+      const runtime = createSchedulerRuntime();
+      await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, provider);
 
-    const statusAfter = runGit(dir, ["status", "--porcelain"]);
-    assert.equal(statusAfter, statusBefore, "a well-formed attempt that writes nothing leaves the checkout exactly as found");
+      assert.equal(
+        runtime.liveAttempt,
+        null,
+        "the in-place integration pipeline runs to completion inside dispatchEligible; no live attempt handle is held",
+      );
+      const outcome = runtime.integrationOutcomeByTaskId.get("task-a");
+      assert.ok(outcome, "an integration outcome is recorded for the task");
+      assert.equal(outcome!.outcome, "integrated", `expected integrated; got ${JSON.stringify(outcome)}`);
+
+      const taskWorktreeRow = db
+        .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND path = ?`)
+        .get(runId, dir) as { n: number };
+      assert.equal(taskWorktreeRow.n, 0, "no worktrees row is ever inserted for the operator's own checkout");
+
+      const pendingWorktrees = db
+        .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND cleanup_state != 'cleaned'`)
+        .get(runId) as { n: number };
+      assert.equal(pendingWorktrees.n, 0, "the review candidate worktree is fully cleaned up");
+
+      const worktreeList = runGit(dir, ["worktree", "list", "--porcelain"])
+        .split("\n")
+        .filter((line) => line.startsWith("worktree "));
+      assert.equal(worktreeList.length, 1, "only the operator's own checkout remains as a worktree");
+
+      const headAfter = runGit(dir, ["rev-parse", "HEAD"]);
+      assert.notEqual(headAfter, baseCommit, "the task's commit landed on the operator's checked-out branch");
+      assert.equal(
+        runGit(dir, ["show", "HEAD:implementation-output.txt"]),
+        "implementer output",
+        "the landed commit carries the claimed path's content",
+      );
+    } finally {
+      fs.rmSync(streamsDir, { recursive: true, force: true });
+    }
   });
 });
 
-test("test-supervisor.ts driven with workspaceMode \"in-place\": a well-formed attempt on a task seeded at \"integration\" runs to completion with no worktree ever created", async () => {
+test("test-supervisor.ts driven with workspaceMode \"in-place\": a well-formed attempt on a task seeded at \"integration\" lands a plain commit on the operator's checkout and leaves no worktree behind", async () => {
   await withTempWorkspace(async (dir) => {
     setupGitProject(dir);
     const runId = "run-1";
@@ -723,29 +774,36 @@ test("test-supervisor.ts driven with workspaceMode \"in-place\": a well-formed a
       db.close();
     }
 
+    // Simulates the file the task's own `implementation` dispatch already
+    // wrote to the operator's checkout, uncommitted.
+    fs.writeFileSync(path.join(dir, "implementation-output.txt"), "implementer output\n", "utf8");
+
     // `runTestSupervisor`'s own `FakeAdapter` keys its scenario file by the
     // dispatched attempt's task id (`test-supervisor.ts`'s `scenarioFor`),
-    // not by a fixed name, so this attempt's stream lives at
-    // `integration--task-a.jsonl` under a streams directory scoped to this
-    // test rather than the shared `fixturesStreamsDir`.
+    // not by a fixed name. In-place mode's `integration` stage dispatches
+    // its sub-agent attempt at `cross-task-review` (inside
+    // `runIntegrationStages`), not at `integration` itself, so the stream
+    // lives at `cross-task-review--task-a.jsonl` under a streams directory
+    // scoped to this test rather than the shared `fixturesStreamsDir`.
     const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-scheduler-inplace-streams-"));
     fs.writeFileSync(
-      path.join(streamsDir, "integration--task-a.jsonl"),
+      path.join(streamsDir, "cross-task-review--task-a.jsonl"),
       [
-        JSON.stringify({ op: "output", text: "working" }),
+        JSON.stringify({ op: "output", text: "reviewing" }),
         JSON.stringify({
           op: "report",
           report: {
             protocolVersion: "1",
-            workflowId: "dev-workflow",
-            workflowVersion: "2.0.0",
+            workflowId: "integration",
+            workflowVersion: "1.0.0",
             runId: "run-1",
             taskId: "task-a",
             attemptId: "attempt-fixture",
-            stageId: "integration",
-            roleId: "integrator",
+            stageId: "cross-task-review",
+            roleId: "code-quality-reviewer",
             status: "completed",
-            summary: "did the work",
+            verdict: "pass",
+            summary: "looks good",
           },
         }),
         JSON.stringify({ op: "exit", code: 0 }),
@@ -765,12 +823,23 @@ test("test-supervisor.ts driven with workspaceMode \"in-place\": a well-formed a
           state: string;
           terminal_reason: string | null;
         };
-        assert.equal(run.state, "succeeded");
-        const worktreeRows = verifyDb.prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ?`).get(runId) as { n: number };
-        assert.equal(worktreeRows.n, 0, "no worktree is ever created for an in-place run");
+        assert.equal(run.state, "succeeded", `expected succeeded; got ${JSON.stringify(run)}`);
+        const pendingWorktrees = verifyDb
+          .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND cleanup_state != 'cleaned'`)
+          .get(runId) as { n: number };
+        assert.equal(pendingWorktrees.n, 0, "the review candidate worktree is fully cleaned up");
+        const taskWorktreeRow = verifyDb
+          .prepare(`SELECT COUNT(*) AS n FROM worktrees WHERE run_id = ? AND path = ?`)
+          .get(runId, dir) as { n: number };
+        assert.equal(taskWorktreeRow.n, 0, "no worktrees row is ever inserted for the operator's own checkout");
       } finally {
         verifyDb.close();
       }
+
+      const worktreeList = runGit(dir, ["worktree", "list", "--porcelain"])
+        .split("\n")
+        .filter((line) => line.startsWith("worktree "));
+      assert.equal(worktreeList.length, 1, "only the operator's own checkout remains as a worktree");
     } finally {
       fs.rmSync(streamsDir, { recursive: true, force: true });
     }

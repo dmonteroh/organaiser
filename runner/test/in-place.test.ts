@@ -12,20 +12,17 @@ import { observedPaths, validateClaims } from "../src/git/claims.ts";
 import { main } from "../bin/orga.ts";
 import { EXIT_CODES } from "../src/cli/exit-codes.ts";
 import type { Io } from "../src/cli/commands.ts";
+import { dispatchAttempt, type DispatchAttemptInput } from "../src/engine/dispatch.ts";
+import { terminateGroups } from "../src/engine/termination.ts";
+import { FakeAdapter } from "../src/adapters/fake.ts";
 import {
-  ProcessRegistry,
   waitFor,
   groupAlive,
-  startGitFixtureRun,
-  readRunRow,
-  allRows,
-  spawnFixtureSupervisor,
   writeStream,
   outputLine,
   writeFileLine,
   trapSigtermLine,
   sleepLine,
-  withFixtureWorkspace,
 } from "../evals/fixtures/harness.ts";
 
 function runGit(dir: string, args: string[]): string {
@@ -429,87 +426,110 @@ test("createInPlaceWorkspace: git worktree list shows exactly one entry, and no 
   });
 });
 
-// ── cancellation never resets, checks out, stashes, or reverts ─────────────
+// ── termination never resets, checks out, stashes, or reverts ─────────────
 
-const CANCEL_TICK_INTERVAL_MS = 150;
-const CANCEL_GRACE_MS = 250;
+const TERMINATION_GRACE_MS = 250;
 
-test("in-place: run cancel --now leaves the worker's partial edit in the checkout exactly as it wrote it", async () => {
-  await withFixtureWorkspace(async (dir) => {
-    const registry = new ProcessRegistry();
+// `implementation` and `integration` are the runner's only two dispatchable
+// board stages, and both always run their sub-agent attempts through an
+// internal driver (`runDevelopmentStages`/`runIntegrationStages`) that blocks
+// the dispatching tick until that driver's own pipeline finishes; neither
+// driver's wait loop watches the run's cancel signal mid-attempt, and
+// `run cancel --now` only records intent for a later tick to read. So
+// cancelling a live driver-dispatched attempt end-to-end, promptly, is not
+// something either board stage's production dispatch path supports today.
+// This test instead exercises the invariant directly, at the level `in-place`
+// mode's own guarantee actually lives: a forced termination of a live
+// attempt's process group must never reset, check out, stash, or revert the
+// in-place checkout it wrote into.
+test("in-place: a forced process-group termination leaves the worker's partial edit in the checkout exactly as it wrote it", async () => {
+  await withTempWorkspace(async (dir) => {
+    setupGitProject(dir);
+    const db = openStore(dir);
     try {
-      const { runId } = startGitFixtureRun(dir, [{ id: "task-a" }]);
-      const now = Date.now();
-      const db = openStore(dir);
-      try {
-        withTransaction(db, () => {
-          db.prepare(
-            `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          ).run("task-a", runId, "task-a", "task-a", "brief.md", "dev-workflow", "integration", "[]", 0, "defined", null, now, now);
-          db.prepare(
-            `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-          ).run("claim-task-a", runId, "task-a", "files", JSON.stringify(["partial.txt"]), now);
-        });
-      } finally {
-        db.close();
-      }
+      insertRun(db, "run-1", 1000);
+
+      const handle = await createInPlaceWorkspace({
+        db,
+        projectRoot: dir,
+        runId: "run-1",
+        taskId: "task-a",
+        taskKey: "task-a",
+        ref: "HEAD",
+        root: ".orga/worktrees",
+        branchPrefix: "orga/task/",
+        mode: "in-place",
+      });
 
       const streamsDir = path.join(dir, "streams");
-      writeStream(streamsDir, "integration", "task-a", [
-        outputLine("writing a partial edit before being cancelled"),
+      writeStream(streamsDir, "implement", "attempt-a", [
+        outputLine("writing a partial edit before being terminated"),
         writeFileLine("partial.txt", "partial edit contents\n"),
         trapSigtermLine(),
         sleepLine(60000),
       ]);
 
-      const supervisor = spawnFixtureSupervisor(dir, runId, {
-        tickIntervalMs: CANCEL_TICK_INTERVAL_MS,
-        operatorPollWindowMs: CANCEL_TICK_INTERVAL_MS * 4,
-        cancelGraceMs: CANCEL_GRACE_MS,
+      const adapter = new FakeAdapter({
+        terminate: async () => ({
+          signalSent: null,
+          exitCode: null,
+          killedProcessTree: true,
+          timedOutWaitingForExit: false,
+        }),
         streamsDir,
-        workspaceMode: "in-place",
+        scenarioFor: () => "attempt-a",
       });
-      registry.track(supervisor.pid);
 
-      const partialPath = path.join(dir, "partial.txt");
-      const written = await waitFor(() => fs.existsSync(partialPath), 5000);
-      assert.ok(written, "the worker must write its partial edit before cancellation");
-
-      const workerRow = await waitFor(() => allRows(dir, `SELECT 1 AS x FROM workers WHERE run_id = ?`, runId).length > 0, 3000);
-      assert.ok(workerRow, "a worker row must exist before cancel is issued");
-      const pgid = (allRows<{ pgid: number }>(dir, `SELECT pgid FROM workers WHERE run_id = ?`, runId)[0] as { pgid: number }).pgid;
-      registry.track(pgid);
-      await waitFor(() => groupAlive(pgid), 2000);
-
-      const cancelIo: Io = {
-        stdout: () => {},
-        stderr: () => {},
-        cwd: () => dir,
-        now: () => Date.now(),
-        env: {},
+      const dispatchInput: DispatchAttemptInput = {
+        runId: "run-1",
+        taskId: "task-a",
+        stageId: "implement",
+        role: "implementer",
+        round: 1,
+        inputVersion: "v1",
+        vendor: "fake",
+        model: "fake",
+        configJson: "{}",
+        mutating: true,
+        timeoutBudget: { spawnMs: 5000, idleMs: 5000, wallMs: 60000 },
+        workingDirectory: handle.path,
+        environment: process.env,
+        packet: "packet body",
       };
-      const cancelCode = await main(["node", "orga", "run", "cancel", runId, "--now"], cancelIo);
-      assert.equal(cancelCode, EXIT_CODES.OK);
 
-      const gone = await waitFor(() => !groupAlive(pgid), 3000);
-      assert.ok(gone, "the worker group must be gone after --now cancellation");
+      const dispatched = await dispatchAttempt(db, adapter, dispatchInput, () => 2000);
+      assert.ok(dispatched.dispatched, "the attempt must dispatch");
+      if (!dispatched.dispatched) return;
 
-      const cancelled = await waitFor(() => readRunRow(dir, runId).state === "cancelled", 3000);
-      assert.ok(cancelled, `run must reach cancelled; row: ${JSON.stringify(readRunRow(dir, runId))}`);
+      try {
+        const partialPath = path.join(dir, "partial.txt");
+        const written = await waitFor(() => fs.existsSync(partialPath), 5000);
+        assert.ok(written, "the worker must write its partial edit before termination");
 
-      assert.ok(fs.existsSync(partialPath), "the worker's partial edit must still be present after cancellation");
-      assert.equal(
-        fs.readFileSync(partialPath, "utf8"),
-        "partial edit contents\n",
-        "the partial edit's contents are byte-identical to what the worker wrote",
-      );
+        const alive = await waitFor(() => groupAlive(dispatched.handle.pgid), 2000);
+        assert.ok(alive, "the worker's process group must be alive before termination");
 
-      const status = runGit(dir, ["status", "--porcelain"]);
-      assert.match(status, /partial\.txt/, "the checkout still shows the partial edit as uncommitted, never reset or stashed away");
+        await terminateGroups([dispatched.handle.pgid], { graceMs: TERMINATION_GRACE_MS });
+
+        const gone = await waitFor(() => !groupAlive(dispatched.handle.pgid), 3000);
+        assert.ok(gone, "the worker group must be gone after forced termination");
+
+        assert.ok(fs.existsSync(partialPath), "the worker's partial edit must still be present after termination");
+        assert.equal(
+          fs.readFileSync(partialPath, "utf8"),
+          "partial edit contents\n",
+          "the partial edit's contents are byte-identical to what the worker wrote",
+        );
+
+        const status = runGit(dir, ["status", "--porcelain"]);
+        assert.match(status, /partial\.txt/, "the checkout still shows the partial edit as uncommitted, never reset or stashed away");
+      } finally {
+        if (groupAlive(dispatched.handle.pgid)) {
+          await terminateGroups([dispatched.handle.pgid], { graceMs: 0 });
+        }
+      }
     } finally {
-      registry.killAll();
-      await registry.allDead();
+      db.close();
     }
   });
 });

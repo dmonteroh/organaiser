@@ -52,6 +52,7 @@ import {
   inPlaceRefusesDirty,
   inPlaceSerializes,
   inPlaceClaimsExcludeRecordedDirt,
+  inPlaceIntegratesWithReview,
 } from "../evals/fixtures/19-in-place.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
@@ -102,6 +103,7 @@ test("landed-work-recovery-without-false-success: landed commits alone are not c
 test("in-place: a dirty checkout without --allow-dirty refuses to start and dispatches nothing", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceRefusesDirty);
 test("in-place: a two-task board never runs two mutating attempts at once", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceSerializes);
 test("in-place: pre-run dirt on an unrelated path never appears in an attempt's out-of-claim list", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceClaimsExcludeRecordedDirt);
+test("in-place: a two-task board requiring cross-task review lands one commit per task with no worktree left behind", { timeout: FIXTURE_TIMEOUT_MS }, inPlaceIntegratesWithReview);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

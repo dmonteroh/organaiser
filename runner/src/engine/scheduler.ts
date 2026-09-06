@@ -54,7 +54,7 @@ import type { TaskRow, TaskState } from "../store/types.ts";
 import { resolveVendorProfile, serializeResolvedProfile, type ResolvedVendorProfile } from "../cli/profiles.ts";
 import { runDevelopmentStages, type DevelopmentOutcome } from "./workflow-stages.ts";
 import { runIntegrationStages, type IntegrationStagesOutcome } from "./integration-stages.ts";
-import { resolveDestinationRef } from "../git/integrate.ts";
+import { readRefSha, resolveDestinationRef } from "../git/integrate.ts";
 import { buildDispatchPacketInput } from "../compile/dispatch-packet-input.ts";
 
 export interface StageDefinition {
@@ -732,33 +732,49 @@ export async function dispatchEligible(
     const round = nextAttemptRound(ctx.db, ctx.runId, task.id, stageId);
     const inputVersion = computeInputVersion({ taskId: task.id, stageId, updatedAt: String(task.updated_at) });
 
-    // `integration` never creates a new worktree of its own: when a real
-    // `implementation` dispatch already produced one for this task, this
-    // stage's handle is reconstructed from that still-uncleaned `worktrees`
-    // row (this stage's own candidate worktree, built inside
-    // `runIntegrationStages`, is where any checkout happens instead). Absent
-    // that row — a task seeded directly at `integration` without ever
-    // dispatching `implementation`, as some fixtures and unit tests do — this
-    // falls through to the same fresh-`createWorkspace` path any other
-    // mutating stage takes, unchanged.
+    // `integration` never creates a new worktree of its own: for `worktree`
+    // mode, when a real `implementation` dispatch already produced one for
+    // this task, this stage's handle is reconstructed from that
+    // still-uncleaned `worktrees` row (this stage's own candidate worktree,
+    // built inside `runIntegrationStages`, is where any checkout happens
+    // instead). Absent that row — a task seeded directly at `integration`
+    // without ever dispatching `implementation`, as some fixtures and unit
+    // tests do — this falls through to the same fresh-`createWorkspace` path
+    // any other mutating stage takes, unchanged. `in-place` mode never
+    // inserts a `worktrees` row for its own handle (its `path` is the
+    // project root, and `createWorkspace`/`cleanRunnerOwnedWorktrees` must
+    // never attempt to `git worktree remove` it), so its handle is
+    // synthesized directly from the operator's checkout instead.
     let existingIntegrationWorkspace: WorkspaceHandle | null = null;
     if (stageId === "integration" && workspace) {
-      const row = ctx.db
-        .prepare(
-          `SELECT path, branch, base_commit FROM worktrees
-             WHERE run_id = ? AND task_id = ? AND cleanup_state != 'cleaned'
-             ORDER BY created_at ASC LIMIT 1`,
-        )
-        .get(ctx.runId, task.id) as { path: string; branch: string; base_commit: string } | undefined;
-      if (row) {
+      if (workspace.mode === "in-place") {
+        const destinationRef = resolveDestinationRef(workspace.projectRoot);
         existingIntegrationWorkspace = {
-          mode: "worktree",
+          mode: "in-place",
           root: workspace.root,
-          path: row.path,
-          branch: row.branch,
-          baseCommit: row.base_commit,
+          path: workspace.projectRoot,
+          branch: destinationRef.replace(/^refs\/heads\//, ""),
+          baseCommit: readRefSha(workspace.projectRoot, destinationRef),
           recordedDirt: [],
         };
+      } else {
+        const row = ctx.db
+          .prepare(
+            `SELECT path, branch, base_commit FROM worktrees
+               WHERE run_id = ? AND task_id = ? AND cleanup_state != 'cleaned'
+               ORDER BY created_at ASC LIMIT 1`,
+          )
+          .get(ctx.runId, task.id) as { path: string; branch: string; base_commit: string } | undefined;
+        if (row) {
+          existingIntegrationWorkspace = {
+            mode: "worktree",
+            root: workspace.root,
+            path: row.path,
+            branch: row.branch,
+            baseCommit: row.base_commit,
+            recordedDirt: [],
+          };
+        }
       }
     }
 

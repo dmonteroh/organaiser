@@ -162,25 +162,88 @@ export function advanceDestination(input: AdvanceDestinationInput): boolean {
   return git(["update-ref", input.ref, input.newSha, input.expectedOldSha], { cwd: input.projectRoot, tolerant: true }) !== null;
 }
 
-// The integration strategies a destination can be landed with. This module
-// implements only `replay-and-fast-forward` (candidate worktree, replay,
-// compare-and-swap, all above). `commit-on-branch` is the `in-place`
-// workspace mode's landing step — a commit on the current branch, with no
-// candidate worktree and no compare-and-swap.
+export interface StageClaimedPathsInput {
+  projectRoot: string;
+  claimedPaths: readonly string[];
+}
+
+// `git add -- <path...>`: an explicit, argument-array path list, never `-A`
+// or `.`, so pre-existing dirt in the operator's checkout is never staged
+// alongside the claim set. A no-op when `claimedPaths` is empty (an empty
+// `git add --` prints an advisory hint but stages nothing).
+export function stageClaimedPaths({ projectRoot, claimedPaths }: StageClaimedPathsInput): void {
+  if (claimedPaths.length === 0) return;
+  git(["add", "--", ...claimedPaths], { cwd: projectRoot });
+}
+
+// Writes the current index as a tree object: touches no ref, no HEAD, no
+// working tree.
+export function writeTree(projectRoot: string): string {
+  return git(["write-tree"], { cwd: projectRoot });
+}
+
+export interface CommitTreeInput {
+  projectRoot: string;
+  tree: string;
+  parentSha: string;
+  message: string;
+}
+
+// Creates a real commit object parented at `parentSha`: touches no ref, no
+// HEAD, no working tree. The returned sha exists in the object database
+// without moving anything the operator can observe.
+export function commitTree({ projectRoot, tree, parentSha, message }: CommitTreeInput): string {
+  return git(["commit-tree", tree, "-p", parentSha, "-m", message], { cwd: projectRoot });
+}
+
+export interface CommitOnBranchInput {
+  projectRoot: string;
+  claimedPaths: readonly string[];
+  message: string;
+}
+
+// The `in-place` workspace mode's landing step: re-stages the claim set
+// (idempotent — safe whether or not it is already staged from building the
+// review candidate) and runs a plain, argument-array `git commit` directly
+// on whatever the branch's current tip is. No compare-and-swap, no
+// `update-ref`: this is a normal commit on the operator's own checkout.
+// `--allow-empty` so a task whose claim set is empty, or whose edits net out
+// to no diff against the destination, still lands a commit rather than
+// failing the whole integration on git's own "nothing to commit" refusal.
+export function commitOnBranch({ projectRoot, claimedPaths, message }: CommitOnBranchInput): string {
+  stageClaimedPaths({ projectRoot, claimedPaths });
+  git(["commit", "--allow-empty", "-m", message], { cwd: projectRoot });
+  return headSha(projectRoot);
+}
+
+// The integration strategies a destination can be landed with.
+// `replay-and-fast-forward` is the `worktree` workspace mode's landing step
+// (candidate worktree, replay, compare-and-swap, all above).
+// `commit-on-branch` is the `in-place` workspace mode's landing step — a
+// commit on the current branch, with no candidate worktree and no
+// compare-and-swap.
 export type IntegrationStrategy = "replay-and-fast-forward" | "commit-on-branch";
 
-export interface AdvanceIntegrationInput extends AdvanceDestinationInput {
-  strategy: IntegrationStrategy;
+export interface AdvanceIntegrationReplayInput extends AdvanceDestinationInput {
+  strategy: "replay-and-fast-forward";
 }
+
+export type AdvanceIntegrationCommitInput = CommitOnBranchInput & { strategy: "commit-on-branch" };
+
+export type AdvanceIntegrationInput = AdvanceIntegrationReplayInput | AdvanceIntegrationCommitInput;
 
 // The strategy switch every caller lands an integration through.
 // `replay-and-fast-forward` reduces to `advanceDestination`'s compare-and-
-// swap above; every current call site uses this branch exclusively.
-export function advanceIntegration(input: AdvanceIntegrationInput): boolean {
+// swap above and reports whether the swap succeeded. `commit-on-branch`
+// reduces to `commitOnBranch` above and reports the new commit's sha, since
+// there is no compare-and-swap outcome to report.
+export function advanceIntegration(input: AdvanceIntegrationReplayInput): boolean;
+export function advanceIntegration(input: AdvanceIntegrationCommitInput): string;
+export function advanceIntegration(input: AdvanceIntegrationInput): boolean | string {
   switch (input.strategy) {
     case "replay-and-fast-forward":
       return advanceDestination(input);
     case "commit-on-branch":
-      throw new Error("commit-on-branch: not implemented — P7e fills this in"); // P7e: commit-on-branch integration is not implemented.
+      return commitOnBranch(input);
   }
 }
