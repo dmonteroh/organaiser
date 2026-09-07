@@ -33,6 +33,7 @@ import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { WorkspaceHandle } from "../git/workspace.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
+import { sha256 } from "../store/evidence.ts";
 
 export type DevelopmentStageKind = "agent" | "runner";
 export type DevelopmentStageAuthority = "workspace-write" | "read-only";
@@ -239,6 +240,13 @@ export interface DevelopmentStageInput {
   checks: Record<string, unknown>;
   env: NodeJS.ProcessEnv;
 
+  // Optional. Present, it seeds `DriverContext.lastAgentReport` before the
+  // loop starts, so the first `kind: agent` stage's packet carries it under
+  // the `prior-report` stage input; that stage's own outcome overwrites
+  // `lastAgentReport` immediately afterward. Fixed for the whole call, not
+  // per-stage.
+  resumeContext?: Record<string, unknown> | null;
+
   // Optional. Present enables claim validation on `authority: workspace-write`
   // stages and sets the dispatch working directory to `workspace.path`;
   // absent skips claim validation and dispatches at `executionRoot`.
@@ -360,7 +368,11 @@ function extractVerdict(stage: DevelopmentStageDefinition, outcome: AttemptOutco
 async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverContext): Promise<string> {
   const { input } = ctx;
   const round = nextAttemptRound(input.db, input.runId, input.taskId, stage.id);
-  const inputVersion = computeInputVersion({ taskId: input.taskId, stageId: stage.id, round: String(round) });
+  const inputVersionParts: Record<string, string> = { taskId: input.taskId, stageId: stage.id, round: String(round) };
+  if (input.resumeContext !== undefined && input.resumeContext !== null) {
+    inputVersionParts.resumeContext = sha256(JSON.stringify(input.resumeContext));
+  }
+  const inputVersion = computeInputVersion(inputVersionParts);
   const mutating = stage.authority === "workspace-write";
   const packetFn = input.packet ?? ((stageId: string) => `packet for task ${input.taskId} at stage ${stageId}`);
   const packetText = packetFn(stage.id, stage.role ?? "", ctx.lastAgentReport);
@@ -677,7 +689,12 @@ function evidenceForStage(stage: DevelopmentStageDefinition, ctx: DriverContext)
 }
 
 export async function runDevelopmentStages(input: DevelopmentStageInput): Promise<DevelopmentOutcome> {
-  const ctx: DriverContext = { input, lastAgentAttempt: null, barrierCache: null, lastAgentReport: null };
+  const ctx: DriverContext = {
+    input,
+    lastAgentAttempt: null,
+    barrierCache: null,
+    lastAgentReport: input.resumeContext ?? null,
+  };
   const gateRounds: Record<string, number> = Object.fromEntries(
     Object.keys(DEVELOPMENT_CAPS).map((name) => [name, 0]),
   );

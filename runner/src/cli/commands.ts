@@ -27,7 +27,7 @@ import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts";
 import { validateBoard } from "../board/validate.ts";
 import { renderBoard } from "../board/render.ts";
-import { listOpenQuestions } from "../engine/operator-questions.ts";
+import { listOpenQuestions, unblockAnsweredTasks } from "../engine/operator-questions.ts";
 import { answerQuestions, UnknownQuestionKeyError } from "../engine/answer-questions.ts";
 import type { QuestionRow } from "../store/types.ts";
 import { readYamlFile, type YamlMapping } from "./yaml.ts";
@@ -598,9 +598,12 @@ function readAnswersFile(answersPath: string): Map<string, string> {
 
 // `--json` emits exactly one JSON value on stdout:
 //   {"runId": "<run-id>", "answered": [{"questionId": "...", "rowIds": ["..."],
-//     "artifact": {"path": "...", "sha256": "..."}}], "unblockedTaskIds": ["..."]}
+//     "artifact": {"path": "...", "sha256": "..."}}], "unblockedTaskIds": ["..."],
+//     "reopenedTasks": [{"taskId": "...", "questionIds": ["..."]}],
+//     "skippedTasks": [{"taskId": "...", "latestAttemptStageId": "..."}]}
 // `answered` lists only keys that had at least one `open` row in this invocation; a key whose
-// matching rows were already all non-`open` is a no-op and absent from it.
+// matching rows were already all non-`open` is a no-op and absent from it. `reopenedTasks` and
+// `skippedTasks` report the same-invocation `unblockAnsweredTasks` call.
 function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run answer requires <run-id>");
@@ -610,11 +613,14 @@ function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
   readRun(root, runId);
 
   const answers = readAnswersFile(answersPath);
+  const now = io.now();
 
   const db = openStore(root);
   let result;
+  let unblockResult;
   try {
-    result = answerQuestions(db, { root, runId, answers }, io.now());
+    result = answerQuestions(db, { root, runId, answers }, now);
+    unblockResult = unblockAnsweredTasks(db, { runId, now });
   } catch (err) {
     if (err instanceof UnknownQuestionKeyError) throw new NotFoundError(err.message);
     throw err;
@@ -623,11 +629,29 @@ function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
   }
 
   if (flagBool(parsed.flags, "json")) {
-    io.stdout(JSON.stringify({ runId, answered: result.answered, unblockedTaskIds: result.unblockedTaskIds }));
+    io.stdout(
+      JSON.stringify({
+        runId,
+        answered: result.answered,
+        unblockedTaskIds: result.unblockedTaskIds,
+        reopenedTasks: unblockResult.unblocked,
+        skippedTasks: unblockResult.skipped,
+      }),
+    );
   } else {
     for (const entry of result.answered) io.stdout(`answered ${entry.questionId}`);
     if (result.unblockedTaskIds.length > 0) {
       io.stdout(`tasks with no open blocking question: ${result.unblockedTaskIds.join(", ")}`);
+    }
+    if (unblockResult.unblocked.length > 0) {
+      io.stdout(`reopened for implementation: ${unblockResult.unblocked.map((entry) => entry.taskId).join(", ")}`);
+    }
+    if (unblockResult.skipped.length > 0) {
+      io.stdout(
+        `skipped un-terminal (guard): ${unblockResult.skipped
+          .map((entry) => `${entry.taskId} (latest stage ${entry.latestAttemptStageId})`)
+          .join(", ")}`,
+      );
     }
   }
 

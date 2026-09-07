@@ -1,7 +1,25 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { withTransaction } from "../store/db.ts";
+import { appendEvent } from "../store/events.ts";
 import type { QuestionRow, TaskRow } from "../store/types.ts";
+
+// Mirrors `workflow-stages.ts`'s `DEVELOPMENT_STAGES` id set by hand, kept
+// local to this file to avoid a value-level import cycle with
+// `workflow-stages.ts`. A `development.v1.yaml` stage-list change means
+// updating both copies by hand.
+const DEVELOPMENT_STAGE_IDS: ReadonlySet<string> = new Set([
+  "implement",
+  "collect-implementation-artifacts",
+  "verify-task",
+  "review-spec",
+  "fix-spec",
+  "review-quality",
+  "fix-quality",
+  "record-minors",
+  "ready-to-integrate",
+]);
 
 export interface PersistOperatorQuestionsInput {
   runId: string;
@@ -101,4 +119,124 @@ export function hasOpenBlockingQuestion(db: DatabaseSync, task: TaskRow): boolea
     .prepare(`SELECT COUNT(*) AS n FROM questions WHERE run_id = ? AND task_id = ? AND status = 'open'`)
     .get(task.run_id, task.id) as { n: number };
   return row.n > 0;
+}
+
+function rawQuestionId(row: QuestionRow): string {
+  if (row.payload !== null) {
+    try {
+      const parsed = JSON.parse(row.payload) as unknown;
+      if (parsed !== null && typeof parsed === "object" && typeof (parsed as { id?: unknown }).id === "string") {
+        return (parsed as { id: string }).id;
+      }
+    } catch {
+      // fall through to the compound row primary key below
+    }
+  }
+  return row.id;
+}
+
+export interface UnblockAnsweredTasksInput {
+  runId: string;
+  now: number;
+}
+
+export interface UnblockAnsweredTasksResult {
+  unblocked: Array<{ taskId: string; questionIds: string[] }>;
+  skipped: Array<{ taskId: string; latestAttemptStageId: string | null }>;
+}
+
+export function unblockAnsweredTasks(
+  db: DatabaseSync,
+  input: UnblockAnsweredTasksInput,
+): UnblockAnsweredTasksResult {
+  const { runId, now } = input;
+
+  return withTransaction(db, () => {
+    const candidates = db
+      .prepare(
+        `SELECT * FROM tasks
+           WHERE run_id = ? AND disposition = 'waiting-operator'
+             AND EXISTS (SELECT 1 FROM questions q WHERE q.run_id = tasks.run_id AND q.task_id = tasks.id AND q.status = 'answered')
+             AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.run_id = tasks.run_id AND q.task_id = tasks.id AND q.status = 'open')
+           ORDER BY priority ASC, created_at ASC`,
+      )
+      .all(runId) as unknown as TaskRow[];
+
+    const unblocked: UnblockAnsweredTasksResult["unblocked"] = [];
+    const skipped: UnblockAnsweredTasksResult["skipped"] = [];
+
+    for (const task of candidates) {
+      const latestAttempt = db
+        .prepare(
+          `SELECT stage_id FROM attempts WHERE run_id = ? AND task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+        )
+        .get(runId, task.id) as { stage_id: string } | undefined;
+      const latestAttemptStageId = latestAttempt?.stage_id ?? null;
+
+      if (latestAttemptStageId === null || !DEVELOPMENT_STAGE_IDS.has(latestAttemptStageId)) {
+        appendEvent(db, {
+          id: randomUUID(),
+          run_id: runId,
+          task_id: task.id,
+          type: "task.unblock-skipped",
+          payload: JSON.stringify({ reasonCode: "guard-stage-not-development", latestAttemptStageId }),
+          created_at: now,
+        });
+        skipped.push({ taskId: task.id, latestAttemptStageId });
+        continue;
+      }
+
+      const answeredRows = db
+        .prepare(
+          `SELECT * FROM questions WHERE run_id = ? AND task_id = ? AND status = 'answered' ORDER BY created_at ASC, id ASC`,
+        )
+        .all(runId, task.id) as unknown as QuestionRow[];
+      const questionIds = answeredRows.map(rawQuestionId);
+
+      db.prepare(
+        `UPDATE tasks SET disposition = NULL, stage_id = 'implementation', state = 'implementing', updated_at = ? WHERE id = ? AND disposition = 'waiting-operator'`,
+      ).run(now, task.id);
+
+      appendEvent(db, {
+        id: randomUUID(),
+        run_id: runId,
+        task_id: task.id,
+        type: "task.unblocked",
+        payload: JSON.stringify({
+          previousState: "waiting-operator",
+          nextState: "implementing",
+          reasonCode: "operator-answer",
+          questionIds,
+        }),
+        created_at: now,
+      });
+
+      unblocked.push({ taskId: task.id, questionIds });
+    }
+
+    return { unblocked, skipped };
+  });
+}
+
+export function buildResumeContext(
+  db: DatabaseSync,
+  runId: string,
+  taskId: string,
+): { operatorAnswers: Array<{ questionId: string; question: string; answer: string; answeredAt: number }> } | null {
+  const rows = db
+    .prepare(
+      `SELECT * FROM questions WHERE run_id = ? AND task_id = ? AND status = 'answered' ORDER BY created_at ASC, id ASC`,
+    )
+    .all(runId, taskId) as unknown as QuestionRow[];
+
+  if (rows.length === 0) return null;
+
+  return {
+    operatorAnswers: rows.map((row) => ({
+      questionId: rawQuestionId(row),
+      question: row.prompt,
+      answer: row.answer ?? "",
+      answeredAt: row.answered_at ?? 0,
+    })),
+  };
 }
