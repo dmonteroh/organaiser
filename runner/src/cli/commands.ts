@@ -188,7 +188,6 @@ function cmdInit(parsed: ParsedArgs, io: Io): ExitCode {
     throw new UsageError(`invalid --runner-checksum: expected 64 lowercase hex characters, got ${checksumRaw}`);
   }
   const result = initProject(root, checksumRaw ?? "");
-  openStore(result.root).close();
   emit(io, flagBool(parsed.flags, "json"), result, `initialized ${result.root} (created=${result.created})`);
   return EXIT_CODES.OK;
 }
