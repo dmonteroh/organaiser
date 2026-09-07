@@ -29,6 +29,7 @@ import { validateBoard } from "../board/validate.ts";
 import { renderBoard } from "../board/render.ts";
 import { listOpenQuestions, unblockAnsweredTasks } from "../engine/operator-questions.ts";
 import { answerQuestions, UnknownQuestionKeyError } from "../engine/answer-questions.ts";
+import { isSupervisorLive } from "../store/lease.ts";
 import type { QuestionRow } from "../store/types.ts";
 import { readYamlFile, type YamlMapping } from "./yaml.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
@@ -55,12 +56,19 @@ const RUN_STATE_SET = new Set([
   "paused",
 ]);
 
+export type SpawnFn = (
+  command: string,
+  args: readonly string[],
+  options: { detached: boolean; stdio: readonly [string, number, number]; cwd: string },
+) => { pid: number | undefined; unref(): void };
+
 export interface Io {
   stdout: (line: string) => void;
   stderr: (line: string) => void;
   cwd: () => string;
   now: () => number;
   env: NodeJS.ProcessEnv;
+  spawnFn?: SpawnFn;
 }
 
 export const processIo: Io = {
@@ -308,18 +316,17 @@ function cmdRunLogs(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
-// `startRun` (P5b) always both commits a fresh run row and spawns the
-// detached supervisor in one call; there is no exported primitive that
-// resumes an existing run id without re-creating the run. Resume therefore
-// spawns `supervisor.ts` directly against the existing run id, mirroring
-// exactly what `startRun` itself does after its own insert — the new process
-// makes its own lease-acquisition decision (acquireLease, P5a) and exits 4
-// on its own if a fresher lease is already held, per goals spec 25.3.
-function cmdRunResume(parsed: ParsedArgs, io: Io): ExitCode {
-  const runId = parsed.positionals[0];
-  if (!runId) throw new UsageError("run resume requires <run-id>");
-  const root = resolveRoot(io);
-  readRun(root, runId); // throws NotFoundError if absent
+// Spawns `supervisor.ts` directly against an existing run id, mirroring what
+// `startRun` itself does after its own insert — the new process makes its own
+// lease-acquisition decision (acquireLease, P5a) and exits 4 on its own if a
+// fresher lease is already held, per goals spec 25.3. `opts.spawn === false`
+// mirrors `supervisor-spawn.ts`'s `startRun` escape hatch.
+function spawnSupervisor(
+  root: string,
+  runId: string,
+  opts?: { spawn?: boolean; spawnFn?: SpawnFn },
+): { pid: number; logPath: string } | null {
+  if (opts?.spawn === false) return null;
 
   const runDir = path.join(root, ".orga", "runs", runId);
   fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
@@ -327,7 +334,7 @@ function cmdRunResume(parsed: ParsedArgs, io: Io): ExitCode {
   const logFd = fs.openSync(logPath, "a", 0o600);
   let child;
   try {
-    child = spawn(process.execPath, [SUPERVISOR_ENTRY_PATH, root, runId], {
+    child = (opts?.spawnFn ?? spawn)(process.execPath, [SUPERVISOR_ENTRY_PATH, root, runId], {
       detached: true,
       stdio: ["ignore", logFd, logFd],
       cwd: root,
@@ -335,15 +342,31 @@ function cmdRunResume(parsed: ParsedArgs, io: Io): ExitCode {
   } finally {
     fs.closeSync(logFd);
   }
-  if (typeof child.pid !== "number") throw new Error(`failed to spawn resumed supervisor for run ${runId}: no pid`);
+  if (typeof child.pid !== "number") throw new Error(`failed to spawn supervisor for run ${runId}: no pid`);
   fs.writeFileSync(path.join(runDir, "supervisor.pid"), String(child.pid), { mode: 0o600 });
   child.unref();
+
+  return { pid: child.pid, logPath };
+}
+
+// `startRun` (P5b) always both commits a fresh run row and spawns the
+// detached supervisor in one call; there is no exported primitive that
+// resumes an existing run id without re-creating the run. Resume therefore
+// spawns unconditionally via `spawnSupervisor`.
+function cmdRunResume(parsed: ParsedArgs, io: Io): ExitCode {
+  const runId = parsed.positionals[0];
+  if (!runId) throw new UsageError("run resume requires <run-id>");
+  const root = resolveRoot(io);
+  readRun(root, runId); // throws NotFoundError if absent
+
+  const spawned = spawnSupervisor(root, runId, { spawnFn: io.spawnFn });
+  if (!spawned) throw new Error(`failed to spawn supervisor for run ${runId}: no pid`);
 
   emit(
     io,
     flagBool(parsed.flags, "json"),
-    { runId, supervisorPid: child.pid, logPath },
-    `resumed run ${runId} (supervisor pid ${child.pid})`,
+    { runId, supervisorPid: spawned.pid, logPath: spawned.logPath },
+    `resumed run ${runId} (supervisor pid ${spawned.pid})`,
   );
   return EXIT_CODES.OK;
 }
@@ -600,10 +623,13 @@ function readAnswersFile(answersPath: string): Map<string, string> {
 //   {"runId": "<run-id>", "answered": [{"questionId": "...", "rowIds": ["..."],
 //     "artifact": {"path": "...", "sha256": "..."}}], "unblockedTaskIds": ["..."],
 //     "reopenedTasks": [{"taskId": "...", "questionIds": ["..."]}],
-//     "skippedTasks": [{"taskId": "...", "latestAttemptStageId": "..."}]}
+//     "skippedTasks": [{"taskId": "...", "latestAttemptStageId": "..."}],
+//     "supervisorPid": <number-or-null>}
 // `answered` lists only keys that had at least one `open` row in this invocation; a key whose
 // matching rows were already all non-`open` is a no-op and absent from it. `reopenedTasks` and
-// `skippedTasks` report the same-invocation `unblockAnsweredTasks` call.
+// `skippedTasks` report the same-invocation `unblockAnsweredTasks` call. `supervisorPid` is the
+// pid of a supervisor spawned by this invocation, or `null` when one was already live or
+// `--no-supervisor` was passed.
 function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run answer requires <run-id>");
@@ -614,18 +640,30 @@ function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
 
   const answers = readAnswersFile(answersPath);
   const now = io.now();
+  const config = readConfig(io);
+  const noSupervisor = flagBool(parsed.flags, "no-supervisor");
 
   const db = openStore(root);
   let result;
   let unblockResult;
+  let live: boolean | undefined;
   try {
     result = answerQuestions(db, { root, runId, answers }, now);
+    if (!noSupervisor) {
+      live = isSupervisorLive(db, { runId, tickIntervalMs: config.timing.tickIntervalMs, now: io.now });
+    }
     unblockResult = unblockAnsweredTasks(db, { runId, now });
   } catch (err) {
     if (err instanceof UnknownQuestionKeyError) throw new NotFoundError(err.message);
     throw err;
   } finally {
     db.close();
+  }
+
+  let supervisorPid: number | null = null;
+  if (!noSupervisor && live === false) {
+    const spawned = spawnSupervisor(root, runId, { spawnFn: io.spawnFn });
+    supervisorPid = spawned?.pid ?? null;
   }
 
   if (flagBool(parsed.flags, "json")) {
@@ -636,6 +674,7 @@ function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
         unblockedTaskIds: result.unblockedTaskIds,
         reopenedTasks: unblockResult.unblocked,
         skippedTasks: unblockResult.skipped,
+        supervisorPid,
       }),
     );
   } else {
@@ -652,6 +691,9 @@ function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
           .map((entry) => `${entry.taskId} (latest stage ${entry.latestAttemptStageId})`)
           .join(", ")}`,
       );
+    }
+    if (live !== undefined) {
+      io.stdout(live ? "supervisor already live" : `started supervisor pid ${supervisorPid}`);
     }
   }
 

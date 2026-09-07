@@ -33,13 +33,33 @@ export class LeaseLostError extends LeaseError {
   }
 }
 
-function getActiveLease(db: DatabaseSync, runId: string): LockRow | null {
+export function readActiveLease(db: DatabaseSync, runId: string): LockRow | null {
   const row = db
     .prepare(
       `SELECT * FROM locks WHERE kind = ? AND resource = ? AND released_at IS NULL`,
     )
     .get(RUN_LEASE_KIND, runId) as LockRow | undefined;
   return row ?? null;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isSupervisorLive(
+  db: DatabaseSync,
+  { runId, tickIntervalMs, now }: { runId: string; tickIntervalMs: number; now: () => number },
+): boolean {
+  const existing = readActiveLease(db, runId);
+  if (!existing) return false;
+  const staleThresholdMs = 3 * tickIntervalMs;
+  if (now() - existing.heartbeat_at > staleThresholdMs) return false;
+  return pidAlive(existing.owner_pid);
 }
 
 function insertLease(db: DatabaseSync, runId: string, ownerPid: number, now: number): LockRow {
@@ -72,7 +92,7 @@ export interface AcquireLeaseOptions {
 // Throws LeaseUnavailableError when a fresher lease is held by someone else.
 export function acquireLease(db: DatabaseSync, opts: AcquireLeaseOptions): LockRow {
   return withTransaction(db, () => {
-    const existing = getActiveLease(db, opts.runId);
+    const existing = readActiveLease(db, opts.runId);
     const nowMs = opts.now();
     if (existing) {
       // "older than" is strict: a heartbeat exactly `3 * tickIntervalMs` old is
@@ -105,7 +125,7 @@ export interface RenewLeaseOptions {
 // pid (another supervisor already reclaimed it).
 export function renewLease(db: DatabaseSync, opts: RenewLeaseOptions): LockRow {
   return withTransaction(db, () => {
-    const existing = getActiveLease(db, opts.runId);
+    const existing = readActiveLease(db, opts.runId);
     if (!existing || existing.owner_pid !== opts.ownerPid) {
       throw new LeaseLostError(opts.runId);
     }
@@ -126,7 +146,7 @@ export interface ReleaseLeaseOptions {
 // it unconditionally.
 export function releaseLease(db: DatabaseSync, opts: ReleaseLeaseOptions): void {
   withTransaction(db, () => {
-    const existing = getActiveLease(db, opts.runId);
+    const existing = readActiveLease(db, opts.runId);
     if (!existing || existing.owner_pid !== opts.ownerPid) return;
     db.prepare(`UPDATE locks SET released_at = ? WHERE id = ?`).run(opts.now(), existing.id);
   });
