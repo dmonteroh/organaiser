@@ -870,7 +870,9 @@ test("three review-spec needs-info verdicts exhaust questionsLoop and park on th
 
     queueImplementerScenario(env.streamsDir, "implement", "round-3", "completed");
     queue("implement", "round-3");
-    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "round-3", "needs-info");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "round-3", "needs-info", [
+      { id: "oq-r3", taskId: TASK_ID, owner: "operator", question: "round 3?", context: "c", impact: "i", safeDefault: { summary: "A" }, blocks: [] },
+    ]);
     queue("review-spec", "round-3");
     const round3 = await runDevelopmentStages(baseInput(env, adapter));
     assert.equal(round3.outcome, "parked");
