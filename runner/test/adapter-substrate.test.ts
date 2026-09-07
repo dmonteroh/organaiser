@@ -373,6 +373,15 @@ test("redact: the sk- token pattern leaves ordinary task-id-shaped text untouche
   });
 });
 
+test("redact: the sk- token pattern's lookbehind leaves a word like 'risk-' with a long trailing run untouched", async () => {
+  await withTempWorkspace(async (dir) => {
+    const redactor = redactorForRoot(dir, {});
+    const input = "risk-mitigation-plan-2026 shipped";
+    const sanitized = redactor(input);
+    assert.equal(sanitized, input, "'risk-mitigation-plan-2026' must not be treated as an sk- token");
+  });
+});
+
 // --- vendor-adapter.ts: type-level seam ------------------------------------
 
 // A stub spec instantiated purely to prove `VendorAdapterSpec`'s four members compile
