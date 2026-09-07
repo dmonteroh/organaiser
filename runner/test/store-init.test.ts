@@ -25,7 +25,7 @@ test("initProject creates orga.yaml, orgaw, and .orga/ with correct modes", asyn
     assert.equal(mode(path.join(dir, ".orga")), 0o700);
 
     const yaml = fs.readFileSync(path.join(dir, "orga.yaml"), "utf8");
-    assert.match(yaml, /runner:\n\s+version: "[^"]+"/);
+    assert.match(yaml, /runner:\n\s+version: "[^"]+"\n\s+url: "[^"]+"\n\s+checksum: ""\n/);
   });
 });
 
