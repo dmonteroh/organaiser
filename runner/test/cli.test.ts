@@ -547,6 +547,221 @@ test("run questions exits 3 for an unknown run id and 2 for a missing run id", a
   });
 });
 
+test("run questions --template writes an answers file that round-trips through run answer for a plain, an unrepresentable, and a missing default", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q5";
+    seedRunAtState(dir, runId, "waiting-operator", 1000);
+
+    const plainRowId = `${runId}#oq-plain#t1`;
+    const quoteRowId = `${runId}#oq-quote#t2`;
+    const noneRowId = `${runId}#oq-none#t3`;
+    const plainId = "oq-plain";
+    const quoteId = "oq-quote";
+    const noneId = "oq-none";
+
+    seedQuestion(dir, {
+      id: plainRowId,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "plain default",
+      status: "open",
+      createdAt: 1000,
+      payload: JSON.stringify({ id: plainId, owner: "operator", question: "plain default", blocks: ["t1"] }),
+      safeDefault: "go left",
+    });
+    seedQuestion(dir, {
+      id: quoteRowId,
+      runId,
+      taskId: "t2",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "unrepresentable default",
+      status: "open",
+      createdAt: 2000,
+      payload: JSON.stringify({ id: quoteId, owner: "operator", question: "unrepresentable default", blocks: ["t2"] }),
+      safeDefault: 'contains "a quote"',
+    });
+    seedQuestion(dir, {
+      id: noneRowId,
+      runId,
+      taskId: "t3",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "no default",
+      status: "open",
+      createdAt: 3000,
+      payload: JSON.stringify({ id: noneId, owner: "operator", question: "no default", blocks: ["t3"] }),
+      safeDefault: null,
+    });
+
+    const templatePath = path.join(dir, "answers-template.yaml");
+    const writeIo = ioAt(dir);
+    const writeCode = await main(["node", "orga", "run", "questions", runId, "--template", templatePath], writeIo);
+    assert.equal(writeCode, EXIT_CODES.OK);
+    assert.equal(writeIo.outLines.length, 1);
+    assert.ok((writeIo.outLines[0] as string).includes(templatePath));
+
+    const templateText = fs.readFileSync(templatePath, "utf8");
+    assert.ok(templateText.startsWith("answers:\n"));
+    assert.ok(templateText.includes(`  ${plainId}: "go left"`));
+    assert.ok(templateText.includes(`  ${quoteId}: ""`));
+    assert.ok(templateText.includes(`  ${noneId}: ""`));
+    const quoteCommentLine = templateText
+      .split("\n")
+      .find((line) => line.trimStart().startsWith("#") && line.includes(quoteId));
+    assert.ok(quoteCommentLine, "expected a comment line naming the unrepresentable-default id");
+    const noneCommentLine = templateText
+      .split("\n")
+      .find((line) => line.trimStart().startsWith("#") && line.includes(noneId));
+    assert.ok(noneCommentLine, "expected a comment line naming the no-default id");
+
+    const answerIo = ioAt(dir);
+    const answerCode = await main(
+      ["node", "orga", "run", "answer", runId, "--file", templatePath, "--json"],
+      answerIo,
+    );
+    assert.equal(answerCode, EXIT_CODES.OK);
+    const answerOutput = JSON.parse(answerIo.outLines[0] as string) as {
+      answered: Array<{ questionId: string; rowIds: string[] }>;
+    };
+    assert.equal(answerOutput.answered.length, 3);
+    assert.deepEqual(
+      answerOutput.answered.map((entry) => entry.questionId).sort(),
+      [noneId, plainId, quoteId].sort(),
+    );
+
+    const db = openStore(dir);
+    try {
+      const plainRow = db.prepare(`SELECT answer, status FROM questions WHERE id = ?`).get(plainRowId) as {
+        answer: string;
+        status: string;
+      };
+      assert.equal(plainRow.answer, "go left");
+      assert.equal(plainRow.status, "answered");
+
+      const quoteRow = db.prepare(`SELECT answer, status FROM questions WHERE id = ?`).get(quoteRowId) as {
+        answer: string;
+        status: string;
+      };
+      assert.equal(quoteRow.answer, "");
+      assert.equal(quoteRow.status, "answered");
+
+      const noneRow = db.prepare(`SELECT answer, status FROM questions WHERE id = ?`).get(noneRowId) as {
+        answer: string;
+        status: string;
+      };
+      assert.equal(noneRow.answer, "");
+      assert.equal(noneRow.status, "answered");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("run questions --template with zero pending questions prints the no-open-questions line and writes no file", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q6";
+    seedRunAtState(dir, runId, "running", 1000);
+
+    const templatePath = path.join(dir, "answers-template.yaml");
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "questions", runId, "--template", templatePath], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.deepEqual(io.outLines, ["no open questions"]);
+    assert.equal(fs.existsSync(templatePath), false);
+  });
+});
+
+test("run questions --template combined with --json is a usage error, exit 2", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q7";
+    seedRunAtState(dir, runId, "waiting-operator", 1000);
+    seedQuestion(dir, {
+      id: `${runId}#oq-1#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "which way?",
+      status: "open",
+      createdAt: 1000,
+      payload: null,
+      safeDefault: "go left",
+    });
+
+    const templatePath = path.join(dir, "answers-template.yaml");
+    const io = ioAt(dir);
+    const code = await main(
+      ["node", "orga", "run", "questions", runId, "--template", templatePath, "--json"],
+      io,
+    );
+    assert.equal(code, EXIT_CODES.INVALID_ARGS);
+    assert.equal(fs.existsSync(templatePath), false);
+  });
+});
+
+test("run questions --template prints one confirmation line naming the path and both counts, without the table", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q8";
+    seedRunAtState(dir, runId, "waiting-operator", 1000);
+    seedQuestion(dir, {
+      id: `${runId}#oq-a#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "a",
+      status: "open",
+      createdAt: 1000,
+      payload: null,
+      safeDefault: "default a",
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-b#t2`,
+      runId,
+      taskId: "t2",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "b",
+      status: "open",
+      createdAt: 2000,
+      payload: null,
+      safeDefault: "default b",
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-c#t3`,
+      runId,
+      taskId: "t3",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "c",
+      status: "open",
+      createdAt: 3000,
+      payload: null,
+      safeDefault: null,
+    });
+
+    const templatePath = path.join(dir, "answers-template.yaml");
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "questions", runId, "--template", templatePath], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.equal(io.outLines.length, 1);
+    const line = io.outLines[0] as string;
+    assert.ok(line.includes(templatePath), `expected line to include ${templatePath}: ${line}`);
+    const withoutPath = line.split(templatePath).join("");
+    assert.match(withoutPath, /\b2\b/);
+    assert.match(withoutPath, /\b1\b/);
+    assert.match(withoutPath, /prefilled/);
+    assert.match(withoutPath, /blank/);
+  });
+});
+
 // ── run status: pending-question visibility ─────────────────────────────────
 
 test("run status reports pending-questions=<n> aggregated by raw id, both on the human line and --json's additive fields", async () => {
