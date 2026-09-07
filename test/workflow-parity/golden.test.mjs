@@ -45,6 +45,47 @@ function readRoleRegister(conventionsText) {
   return roles;
 }
 
+function readVerdictRegister(conventionsText) {
+  const lines = conventionsText.split("\n");
+  const start = lines.findIndex((line) => line.trim() === "### Verdict enums");
+  const end = lines.findIndex(
+    (line, index) => index > start && /^#{1,6}\s/.test(line),
+  );
+  const section = lines.slice(start + 1, end === -1 ? lines.length : end);
+  const register = new Map();
+  for (const line of section) {
+    const headMatch = line.match(/^- `([^`]+)`: (.*)$/);
+    if (!headMatch) continue;
+    const role = headMatch[1];
+    let rest = headMatch[2];
+    const values = [];
+    while (true) {
+      const valueMatch = rest.match(/^`([^`]+)`(, |\.)/);
+      if (!valueMatch) break;
+      values.push(valueMatch[1]);
+      rest = rest.slice(valueMatch[0].length);
+      if (valueMatch[2] === ".") break;
+    }
+    if (values.length === 1 && values[0] === "verdicts: none") {
+      register.set(role, "none");
+    } else {
+      register.set(role, values);
+    }
+  }
+  return register;
+}
+
+function verdictDefsKey(role) {
+  const parts = role.split("-");
+  return (
+    parts
+      .map((part, index) =>
+        index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1),
+      )
+      .join("") + "Verdict"
+  );
+}
+
 // Restricted-dialect YAML reader for workflows/manifests/*.yaml, duplicated from static.test.mjs.
 
 function dialectError(filePath, lineNum, message) {
@@ -313,17 +354,9 @@ const OPTIONAL_ARRAY_FIELDS = Object.entries(resultSchema.properties)
   .map(([key]) => key);
 const STATUS_ENUM = resultSchema.properties.status.enum;
 
-const ROLE_VERDICT_DEFS = {
-  analyst: "analystVerdict",
-  architect: "architectVerdict",
-  "problem-definer": "problemDefinerVerdict",
-  "spec-challenger": "specChallengerVerdict",
-  "spec-reviewer": "specReviewerVerdict",
-  "code-quality-reviewer": "codeQualityReviewerVerdict",
-};
-
 const conventionsText = fs.readFileSync(conventionsPath, "utf8");
 const roleRegister = readRoleRegister(conventionsText);
+const verdictRegister = readVerdictRegister(conventionsText);
 
 const goldenFiles = fs
   .readdirSync(goldenDir)
@@ -337,16 +370,26 @@ const packetsByRole = new Map(
   ]),
 );
 
-test("exactly one golden packet exists per role id in the conventions.md role register, and no others", () => {
-  const expectedFiles = roleRegister.map((entry) => `${entry.role}.packet.md`).sort();
+function ownerRunnerMode(ownedBy) {
+  const ownerFile = path.join(workflowsDir, `${ownedBy}.md`);
+  if (!fs.existsSync(ownerFile)) return undefined;
+  return readFrontmatter(ownerFile).runnerMode;
+}
+
+test("exactly one golden packet exists per role id in the conventions.md role register whose owning workflow is runnerMode: supported, and no others", () => {
+  const expectedFiles = roleRegister
+    .filter((entry) => ownerRunnerMode(entry.ownedBy) === "supported")
+    .map((entry) => `${entry.role}.packet.md`)
+    .sort();
   assert.deepEqual(
     goldenFiles,
     expectedFiles,
-    `test/workflow-parity/golden/ must contain exactly one <role>.packet.md file per role id in workflows/conventions.md's role register`,
+    `test/workflow-parity/golden/ must contain exactly one <role>.packet.md file per role id in workflows/conventions.md's role register whose owning workflow is runnerMode: supported`,
   );
 });
 
 for (const { role, template: registerTemplate, ownedBy } of roleRegister) {
+  if (ownerRunnerMode(ownedBy) !== "supported") continue;
   const packet = packetsByRole.get(role);
 
   test(`${role}.packet.md: four sections present in order, Packet Header keys all present and non-empty`, () => {
@@ -525,22 +568,31 @@ for (const { role, template: registerTemplate, ownedBy } of roleRegister) {
     );
   });
 
-  test(`${role}.packet.md: Result Contract verdict values equal the role's schema $defs enum (implementer states none)`, () => {
+  test(`${role}.packet.md: Result Contract verdict values equal the role's schema $defs enum (a role with verdicts: none in the conventions.md Verdict enums register states none)`, () => {
     const sections = locateSections(packet.text, packet.file);
     const contract = sections["## Result Contract"];
 
-    if (role === "implementer") {
+    const verdictEntry = verdictRegister.get(role);
+    assert.ok(
+      verdictEntry !== undefined,
+      `${packet.file}: role "${role}" has no entry in conventions.md's Verdict enums register`,
+    );
+
+    if (verdictEntry === "none") {
       assert.ok(
         contract.includes(
           "- Allowed `verdict` values: none, and this role's outcome is carried by `status`.",
         ),
-        `${packet.file}: implementer's Result Contract must state allowed verdict values as none, outcome carried by status`,
+        `${packet.file}: role "${role}" has "verdicts: none" in the conventions.md Verdict enums register; its Result Contract must state allowed verdict values as none, outcome carried by status`,
       );
       return;
     }
 
-    const defsKey = ROLE_VERDICT_DEFS[role];
-    assert.ok(defsKey, `${packet.file}: role "${role}" has no known stage-result schema verdict enum`);
+    const defsKey = verdictDefsKey(role);
+    assert.ok(
+      resultSchema.$defs[defsKey],
+      `${packet.file}: role "${role}"'s derived $defs key "${defsKey}" is not in stage-result.schema.json's $defs`,
+    );
     const expectedEnum = resultSchema.$defs[defsKey].enum;
 
     const verdictMatch = contract.match(/^- Allowed `verdict` values: (.+) \(`verdict` is required for this role\)\.$/m);
