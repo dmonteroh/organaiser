@@ -28,6 +28,7 @@ import { runVerificationBarrier, taskChecksPass, type BarrierResult } from "./ba
 import { partitionFindings } from "./review-stages.ts";
 import { appendMinorFindings } from "./minor-findings.ts";
 import { persistOperatorQuestions } from "./operator-questions.ts";
+import { watchForTimeout } from "./timeout-watchdog.ts";
 import {
   STAGE_DISPATCH_LOG_ROLE,
   appendDispatchLogRow,
@@ -67,11 +68,12 @@ export interface DevelopmentStageDefinition {
   retry: DevelopmentRetryPolicy | null;
 }
 
-const IMPLEMENTER_VERDICTS = ["completed", "questions", "failed"] as const;
+const IMPLEMENTER_VERDICTS = ["completed", "questions", "failed", "worker-timeout"] as const;
 const IMPLEMENTER_TRANSITIONS = {
   completed: "collect-implementation-artifacts",
   questions: "waiting-operator",
   failed: "parked",
+  "worker-timeout": "parked",
 } as const;
 const IMPLEMENTER_RETRY: DevelopmentRetryPolicy = { malformedResult: 1, processFailure: 1 };
 
@@ -116,8 +118,13 @@ export const DEVELOPMENT_STAGES: readonly DevelopmentStageDefinition[] = [
     predicate: null,
     authority: "read-only",
     freshSession: true,
-    verdicts: ["pass", "fail", "needs-info"],
-    transitions: { pass: "review-quality", fail: "fix-spec", "needs-info": "waiting-operator" },
+    verdicts: ["pass", "fail", "needs-info", "worker-timeout"],
+    transitions: {
+      pass: "review-quality",
+      fail: "fix-spec",
+      "needs-info": "waiting-operator",
+      "worker-timeout": "parked",
+    },
     retry: { malformedResult: 1, processFailure: 1 },
   },
   {
@@ -138,12 +145,19 @@ export const DEVELOPMENT_STAGES: readonly DevelopmentStageDefinition[] = [
     predicate: null,
     authority: "read-only",
     freshSession: true,
-    verdicts: ["pass", "needs-info", "fail-with-severity: critical", "fail-with-severity: important"],
+    verdicts: [
+      "pass",
+      "needs-info",
+      "fail-with-severity: critical",
+      "fail-with-severity: important",
+      "worker-timeout",
+    ],
     transitions: {
       pass: "record-minors",
       "needs-info": "waiting-operator",
       "fail-with-severity: critical": "fix-quality",
       "fail-with-severity: important": "fix-quality",
+      "worker-timeout": "parked",
     },
     retry: { malformedResult: 1, processFailure: 1 },
   },
@@ -425,6 +439,70 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
       );
     }
     const { attemptId, handle } = dispatched;
+
+    // Races the watchdog against normal exit detection. `graceMs` mirrors
+    // `resolveRecordMinors`'s own `loadConfig({ env: process.env })` call
+    // below, read for `.timing.cancelGraceMs` instead of `.followUpsFilePath`:
+    // no new config knob, consistent with every other termination path in
+    // this codebase. The armed budget is `dispatchInput.timeoutBudget` (the
+    // already-defaulted value used for dispatch itself), never the raw
+    // optional `input.timeoutBudget`.
+    //
+    // `Promise.all`, not `Promise.race`: once the watchdog fires, it kills
+    // the process itself (`terminateGroups`, internally), and the plain
+    // `waitForExit` below is polling that very same process-death condition
+    // independently, on the same poll granularity. A raw race between the
+    // two is a coin flip over which poller happens to notice the death
+    // first, which would sometimes resolve as a normal exit instead of a
+    // timeout even though the watchdog is the one that caused it (verified
+    // empirically: the same hung-process test flaked between "worker-timeout"
+    // and a classify()-derived "schema-invalid" verdict under load). Sibling
+    // task P9d-iii hit and fixed the identical hazard in its own watchdog
+    // wiring the same way. `Promise.all` waits for both regardless of which
+    // settles first, so the watchdog's own outcome is always authoritative;
+    // on the non-timeout path both settle at essentially the same moment
+    // (the watchdog's own `no-timeout` return already means it observed the
+    // same exit `waitForExit` is polling for), so this adds no meaningful
+    // latency to the common case.
+    const graceMs = loadConfig({ env: process.env }).timing.cancelGraceMs;
+    const [, watchdogResult] = await Promise.all([
+      waitForExit(handle),
+      watchForTimeout(input.adapter, handle, dispatchInput.timeoutBudget, { now: input.now }, graceMs),
+    ]);
+
+    if (watchdogResult.outcome !== "no-timeout") {
+      // `watchForTimeout` has already run `terminateGroups` internally by the
+      // time it resolves, so no separate termination call is made here.
+      // `adapter.collect(handle)` is awaited only now, after the race has
+      // settled, and `classify()` is never called on this path: a killed,
+      // mid-work process has no valid output to interpret, and skipping it
+      // keeps this branch's evidence single-sourced on the watchdog's own
+      // fired budget. No dispatch-log row, reviewer report, or claim
+      // validation is produced for a timed-out attempt.
+      const firedBudget = watchdogResult.outcome;
+      const artifacts = await input.adapter.collect(handle);
+      const timedOutAt = input.now();
+      withTransaction(input.db, () => {
+        input.db
+          .prepare(`UPDATE workers SET termination_state = 'signalled', ended_at = ? WHERE attempt_id = ?`)
+          .run(timedOutAt, attemptId);
+        input.db
+          .prepare(
+            `UPDATE attempts SET status = 'interrupted', interrupt_reason = 'worker-timeout', exit_code = ?, ended_at = ? WHERE id = ?`,
+          )
+          .run(artifacts.exitCode, timedOutAt, attemptId);
+        appendEvent(input.db, {
+          id: randomUUID(),
+          run_id: input.runId,
+          task_id: input.taskId,
+          attempt_id: attemptId,
+          type: "attempt.timed-out",
+          payload: JSON.stringify({ firedBudget }),
+          created_at: timedOutAt,
+        });
+      });
+      return "worker-timeout";
+    }
 
     await waitForExit(handle);
 

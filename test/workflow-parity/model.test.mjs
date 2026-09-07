@@ -223,13 +223,13 @@ test("duplicated restricted-dialect reader reproves the P2b-iv worked examples",
   assert.ok(reviewQuality, "development.v1.yaml is missing stage review-quality");
   assert.deepEqual(
     reviewQuality.verdicts,
-    ["pass", "needs-info", "fail-with-severity: critical", "fail-with-severity: important"],
-    "development.v1.yaml:99-100 sequence items did not parse to the exact expected strings",
+    ["pass", "needs-info", "fail-with-severity: critical", "fail-with-severity: important", "worker-timeout"],
+    "development.v1.yaml:103-107 sequence items did not parse to the exact expected strings",
   );
   assert.deepEqual(
     Object.keys(reviewQuality.transitions),
-    ["pass", "needs-info", "fail-with-severity: critical", "fail-with-severity: important"],
-    "development.v1.yaml:104-105 mapping keys did not parse to the exact expected strings",
+    ["pass", "needs-info", "fail-with-severity: critical", "fail-with-severity: important", "worker-timeout"],
+    "development.v1.yaml:109-113 mapping keys did not parse to the exact expected strings",
   );
 
   const productSpec = readManifest(path.join(manifestsDir, "product-spec.v1.yaml"));

@@ -1239,3 +1239,127 @@ test("attempt-artifacts: a fake-adapter development run produces a task director
     assert.notEqual(ledger.evidence.qualityReviewer, null, "qualityReviewer evidence should be recorded");
   });
 });
+
+// ── Watchdog timeout on the agent-stage race (P9d-ii) ────────────────────
+// `noopTerminate` above never sends a real signal, so it cannot actually end
+// a hung real process (`FakeAdapter.start` always spawns one, regardless of
+// scenario). These tests reuse the real SIGTERM/SIGKILL `terminate` and
+// `isAlive` helpers already written for exactly this purpose in
+// `timeout-watchdog.test.ts` (lines 13-52), the module this behavior is
+// wired against, rather than inventing a second copy.
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const realTerminate: TerminateFn = async ({ pgid }, gracePeriodMs) => {
+  let signalSent: NodeJS.Signals | null = null;
+  try {
+    process.kill(-pgid, "SIGTERM");
+    signalSent = "SIGTERM";
+  } catch {
+    return { signalSent: null, exitCode: null, killedProcessTree: true, timedOutWaitingForExit: false };
+  }
+  const deadline = Date.now() + gracePeriodMs;
+  while (Date.now() < deadline && isAlive(pgid)) {
+    await sleep(10);
+  }
+  if (isAlive(pgid)) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+      signalSent = "SIGKILL";
+    } catch {
+      // already gone
+    }
+    for (let i = 0; i < 20 && isAlive(pgid); i++) await sleep(10);
+  }
+  return {
+    signalSent,
+    exitCode: null,
+    killedProcessTree: !isAlive(pgid),
+    timedOutWaitingForExit: isAlive(pgid),
+  };
+};
+
+function makeHangingAdapter(
+  streamsDir: string,
+): { adapter: FakeAdapter; queue: (stageId: string, scenario: string) => void } {
+  const queues = new Map<string, string[]>();
+  const adapter = new FakeAdapter({
+    terminate: realTerminate,
+    streamsDir,
+    scenarioFor: (attempt: AttemptDescriptor) => {
+      const queue = queues.get(attempt.stageId);
+      if (queue && queue.length > 0) return queue.shift() as string;
+      throw new Error(`no scenario queued for stage ${attempt.stageId}`);
+    },
+  });
+  return {
+    adapter,
+    queue: (stageId, scenario) => {
+      const existing = queues.get(stageId) ?? [];
+      existing.push(scenario);
+      queues.set(stageId, existing);
+    },
+  };
+}
+
+test("a hung implement attempt past its spawn budget is recorded interrupted/signalled/worker-timeout, parks without classification, dispatch-log, reviewer report, or claim validation", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeHangingAdapter(env.streamsDir);
+    // No trailing `{"op":"exit",...}`: the replay process sleeps well past
+    // the test's own budget and would otherwise run for a full minute.
+    writeStreamFile(env.streamsDir, "implement", "hangs", [{ op: "sleep", ms: 60000 }]);
+    queue("implement", "hangs");
+
+    const outcome = await runDevelopmentStages(
+      baseInput(env, adapter, { timeoutBudget: { spawnMs: 150, idleMs: 5000, wallMs: 5000 } }),
+    );
+
+    assert.equal(outcome.outcome, "parked");
+    assert.deepEqual(outcome.stages, [{ stageId: "implement", verdict: "worker-timeout" }]);
+    assert.equal(outcome.schemaInvalid, undefined);
+
+    const attemptRow = env.db
+      .prepare(
+        `SELECT id, status, interrupt_reason FROM attempts WHERE run_id = ? AND task_id = ? AND stage_id = 'implement'`,
+      )
+      .get(RUN_ID, TASK_ID) as { id: string; status: string; interrupt_reason: string | null };
+    assert.equal(attemptRow.status, "interrupted");
+    assert.equal(attemptRow.interrupt_reason, "worker-timeout");
+
+    const workerRow = env.db
+      .prepare(`SELECT pgid, termination_state FROM workers WHERE attempt_id = ?`)
+      .get(attemptRow.id) as { pgid: number; termination_state: string | null };
+    assert.equal(workerRow.termination_state, "signalled");
+    assert.equal(isAlive(workerRow.pgid), false, "the hung process must actually be dead, not merely marked so");
+
+    const timedOutEvents = env.db
+      .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.timed-out'`)
+      .all(RUN_ID) as Array<{ payload: string }>;
+    assert.equal(timedOutEvents.length, 1);
+    assert.deepEqual(JSON.parse(timedOutEvents[0]!.payload), { firedBudget: "spawn-timeout" });
+
+    const normalizedEvents = env.db
+      .prepare(`SELECT id FROM events WHERE run_id = ? AND type = 'attempt.normalized'`)
+      .all(RUN_ID);
+    assert.equal(normalizedEvents.length, 0, "no attempt.normalized event on the timeout path");
+
+    const violationEvents = env.db
+      .prepare(`SELECT id FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`)
+      .all(RUN_ID);
+    assert.equal(violationEvents.length, 0, "no attempt.claim-violation event on the timeout path");
+
+    const attemptDir = path.join(env.taskDir, "attempt1-artifacts");
+    assert.equal(fs.existsSync(attemptDir), false, "no dispatch-log row or reviewer report is written");
+  });
+});

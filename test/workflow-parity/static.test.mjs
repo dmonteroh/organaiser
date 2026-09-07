@@ -525,6 +525,17 @@ const PENDING_POLICY_TARGETS = {};
 
 const RUNNER_ONLY_MANIFESTS = ["integration.v1.yaml"];
 
+// Verdicts the runner itself synthesizes as a `FailureClass` (never a value
+// an agent process self-reports through stage-result.schema.json — a killed,
+// hung process never produces a parseable report at all) are exempt from the
+// schema/status-enum equality checks and the Verdict-Rule-section membership
+// check below, but still participate in the "transition key must be a
+// declared verdict" check and must transition to "parked". This mechanism is
+// shared with sibling task P9d-iii (`cross-task-review`, `integration.v1.yaml`):
+// a future addition there should extend this same Set, not declare a second,
+// differently-shaped constant.
+const RUNNER_SYNTHESIZED_VERDICTS = new Set(["worker-timeout"]);
+
 const expectedManifestFiles = new Set(RUNNER_ONLY_MANIFESTS);
 for (const file of workflowFiles) {
   const fields = frontmatterByFile.get(file);
@@ -663,6 +674,7 @@ test("agent-stage verdicts equal the role's schema $defs enum (a role with verdi
     const manifest = manifestsByFile.get(file);
     for (const stage of manifest.spec.stages) {
       if (stage.kind !== "agent") continue;
+      const declaredVerdicts = stage.verdicts.filter((v) => !RUNNER_SYNTHESIZED_VERDICTS.has(v));
       const verdictEntry = verdictRegister.get(stage.role);
       assert.ok(
         verdictEntry !== undefined,
@@ -670,7 +682,7 @@ test("agent-stage verdicts equal the role's schema $defs enum (a role with verdi
       );
       if (verdictEntry === "none") {
         assert.deepEqual(
-          stage.verdicts,
+          declaredVerdicts,
           statusEnum,
           `${file} stage "${stage.id}" (role ${stage.role}, "verdicts: none" in the conventions.md Verdict enums register) verdicts do not equal the stage-result schema's status enum`,
         );
@@ -686,12 +698,12 @@ test("agent-stage verdicts equal the role's schema $defs enum (a role with verdi
           `${file} stage "${stage.id}": conventions.md's Verdict enums register entry for role "${stage.role}" (${verdictEntry.join(", ")}) does not cover $defs.${defsKey}.enum (${schemaEnum.join(", ")})`,
         );
         assert.deepEqual(
-          stage.verdicts,
+          declaredVerdicts,
           schemaEnum,
           `${file} stage "${stage.id}" (role ${stage.role}) verdicts do not equal $defs.${defsKey}.enum`,
         );
         const section = getVerdictSection(stage.role);
-        for (const value of stage.verdicts) {
+        for (const value of declaredVerdicts) {
           assert.ok(
             appearsInVerdictSection(value, section),
             `${file} stage "${stage.id}": verdict "${value}" does not appear in the ${stage.role} template's Verdict Rule section`,
@@ -702,6 +714,14 @@ test("agent-stage verdicts equal the role's schema $defs enum (a role with verdi
         assert.ok(
           stage.verdicts.includes(transitionKey),
           `${file} stage "${stage.id}": transition key "${transitionKey}" is not one of the stage's declared verdicts`,
+        );
+      }
+      for (const value of stage.verdicts) {
+        if (!RUNNER_SYNTHESIZED_VERDICTS.has(value)) continue;
+        assert.equal(
+          stage.transitions[value],
+          "parked",
+          `${file} stage "${stage.id}": runner-synthesized verdict "${value}" must transition to "parked"`,
         );
       }
     }
