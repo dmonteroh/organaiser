@@ -1,0 +1,4 @@
+runner:
+  version: "0.0.0"
+  url: "https://github.com/dmonteroh/organaiser/releases/download/v0.0.0/organaiser-0.0.0.tgz"
+  checksum: ""
