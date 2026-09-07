@@ -73,10 +73,10 @@ You are the decision architect. The researcher and evaluator inform; the devil's
 
 #### Completion Self-Check (produce-adr mode only, before returning `completed`)
 
-1. All candidate options received research of comparable depth, not just the preferred one. If this fails, you cannot fix it yourself: report it in `blockers` (re-dispatch target: researcher in follow-up mode on the under-researched options, then evaluator as a re-evaluation pass; this does not count against the evidence-round cap).
-2. The tradeoff matrix covers all six driver categories, or documents why one doesn't apply. If this fails, report it in `blockers` (re-dispatch target: evaluator, naming the missing driver categories).
-3. The devil's advocate review ran AFTER the preferred option was selected, not before. If this fails, report it in `blockers` (re-dispatch target: devils-advocate against the selected option; resume at Sequence step 7).
-4. Every critical and important devil's advocate concern has a recorded response, and minor concerns appear in the ADR as known tradeoffs. If a response is merely missing, record it yourself now. If recording it would change the decision, report it in `blockers` (resume at Sequence step 7) instead of finishing the ADR on a stale decision.
+1. All candidate options received research of comparable depth, not just the preferred one. If this fails, you cannot fix it yourself: return `status: failed` with the finding in `blockers` (re-dispatch target: researcher in follow-up mode on the under-researched options, then evaluator as a re-evaluation pass; this does not count against the evidence-round cap).
+2. The tradeoff matrix covers all six driver categories, or documents why one doesn't apply. If this fails, return `status: failed` with the finding in `blockers` (re-dispatch target: evaluator, naming the missing driver categories).
+3. The devil's advocate review ran AFTER the preferred option was selected, not before. If this fails, return `status: failed` with the finding in `blockers` (re-dispatch target: devils-advocate against the selected option; resume at Sequence step 7).
+4. Every critical and important devil's advocate concern has a recorded response, and minor concerns appear in the ADR as known tradeoffs. If a response is merely missing, record it yourself now. If recording it would change the decision, return `status: failed` with the finding in `blockers` (resume at Sequence step 7) instead of finishing the ADR on a stale decision.
 5. The ADR follows MADR format and is indexed. If this fails, fix the document directly (format, index entry) and re-run this check. Do not request a new dispatch for this.
 6. No forbidden claim (below) appears in the decision report or the ADR. If this fails, fix the wording directly and re-run this check. Do not request a new dispatch for this.
 
@@ -127,7 +127,7 @@ Concern Responses:
   - <concern>: accepted, mitigation: <mitigation> | rebutted, evidence: <evidence>
   - ...
 - Minor concerns carried to the ADR unadjudicated: <list, or "none">
-- Preferred option changed: yes | no
+- Preferred option changed: yes | no (reproduce this line verbatim in the summary, without paraphrase; the manifest's `route-option-change` field contract parses it out of the free-text `summary`)
 - Preferred option (after this pass, if changed): <option, or "unchanged">
 
 ### produce-adr

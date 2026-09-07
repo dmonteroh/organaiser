@@ -87,9 +87,9 @@ Workflows may add domain-specific drivers. The evaluator must cover at least the
    - What are the decision drivers and their relative weights?
 2. Dispatch `researcher` per its template with the decision question, the candidate options as scope, and a per-option findings deliverable format.
 3. Dispatch `evaluator` per its template with the research findings, the candidate options, and the weighted decision drivers.
-4. If the evaluator returns `insufficient` evidence:
+4. If the evaluator returns `insufficient evidence`:
    - Re-dispatch `researcher` in follow-up mode with the evaluator's re-research items as the gap list, merge the returned delta into the findings, then re-dispatch `evaluator` as a re-evaluation pass with the merged findings and its prior matrix.
-   - Maximum evidence rounds: 1 (manifest authority: manifests/decision-workflow.v1.yaml's caps.evidenceRounds) (a round is one researcher follow-up plus one evaluator re-evaluation). If evidence is still `insufficient` after the round, proceed with the `unknown` ratings standing; the architect must name each remaining gap in the rationale or escalate the decision to the operator.
+   - Maximum evidence rounds: 1 (manifest authority: manifests/decision-workflow.v1.yaml's caps.evidenceRounds) (a round is one researcher follow-up plus one evaluator re-evaluation). If the verdict is still `insufficient evidence` after the round, proceed with the `unknown` ratings standing; the architect must name each remaining gap in the rationale or escalate the decision to the operator.
 5. Architect reviews the tradeoff matrix and selects a preferred option with a written rationale, including reasons for rejecting each alternative.
 6. Dispatch `devils-advocate` per its template against the preferred option, passing the rationale, the tradeoff matrix, the research findings, and the rejected options. On a repeat pass, also pass all prior devil's advocate reports.
 7. If devils-advocate returns `concerns-raised`:
