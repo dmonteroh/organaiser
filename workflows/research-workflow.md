@@ -2,9 +2,11 @@
 id: research-workflow
 name: Research Workflow
 triggers: [research, analysis, investigation, comparison]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/research-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # Research Workflow Contract
@@ -66,18 +68,19 @@ The cross-checker flags any `verified` or `corroborated` claim that lacks suffic
 5. When the cross-checker returns `pass`, or step 4 resolved all remaining items by downgrade or cap: orchestrator synthesizes the final report from the findings (consolidate and trim, do not add new claims, carry all evidence labels and "not confirmed" notes).
 6. Mark task `ready`.
 
-### Post-all-tasks
+### Board-stage reconciliation
 
 1. If multiple research tasks: check for contradictions across task findings. Document each in the consolidated summary with both positions and their citations; do not silently pick a side. If a cross-task contradiction undermines a `verified` or `corroborated` claim, downgrade that claim to `unverified` and list the conflict as an open question.
 2. Produce consolidated research summary with cross-references.
-3. Mark all `ready` tasks `integrated`.
+3. Report each task's final state to the board workflow.
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
-- Maximum follow-up rounds: 2. A round is one scoped researcher re-dispatch plus one cross-checker re-check; downgrade-only resolutions do not count against the cap. If gaps persist after 2 rounds, include them as `unverified` items with explicit "not confirmed" notes; the task still completes.
+- Maximum follow-up rounds: 2 (manifest authority: `research-workflow.v1.yaml` caps). A round is one scoped researcher re-dispatch plus one cross-checker re-check; downgrade-only resolutions do not count against the cap. If gaps persist after 2 rounds, include them as `unverified` items with explicit "not confirmed" notes; the task still completes.
 - The researcher must never modify project files. Research output goes into the report, not the codebase.
 - The cross-checker operates with a fresh context: pass the dispatched scope and the researcher's findings and citations, never the researcher's reasoning. On re-checks, also pass the cross-checker's own prior report for scoping.
+- If `researcher` returns `questions`, answer clearly and re-dispatch it. If it returns `failed`, park the task.
 
 ## Anti-Rationalization Rules
 
