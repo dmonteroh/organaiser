@@ -2,9 +2,11 @@
 id: reliability-resiliency-workflow
 name: Reliability / Resiliency Analysis Workflow
 triggers: [reliability-analysis, resiliency-analysis, resilience-review, failure-mode-analysis, operational-readiness]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/reliability-resiliency-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # Reliability / Resiliency Analysis Workflow Contract
@@ -136,18 +138,21 @@ The investigator assigns these levels when reporting evidence, the mapper carrie
    - Explicit unknowns and assumptions, including rejected challenges with their rationale
 10. Mark task `ready`
 
-### Post-all-tasks
+### Assessment queue reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple systems or subsystems were assessed, compare shared dependencies and repeated failure patterns
 2. If two assessments disagree about the same shared dependency or control, document both ratings with their evidence and record the disagreement as a cross-cutting unknown; do not silently average or overwrite either assessment
 3. Consolidate recurring issues into cross-cutting remediation themes
-4. Mark all `ready` tasks `integrated`
+4. Report each assessment's final state to the board workflow
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - The workflow is assessment-only. It must not produce production code changes.
 - Maximum revision rounds: 2. A round is one pass through step 7 that ends in a challenger Re-Check Pass. Orchestrator downgrades, recorded rejections, needs-info resolutions, and pre-synthesis corrections do not count against the cap. At cap exhaustion, set each still-contested dimension rating to `unknown`, list the disagreement under explicit unknowns rather than pretending confidence, and run no further challenger pass.
+- Maximum Completion Self-Check retries: 2 (manifest authority: `manifests/reliability-resiliency-workflow.v1.yaml`'s `caps.finalizeAttempts`). This is a separate cap from the revision-round cap above: a Completion Self-Check failure is not a step-7 challenger round, since it is discovered after step 9, not during step 7. Each Completion Self-Check failure that re-dispatches the investigator (Completion Self-Check, below) counts as one retry. At cap exhaustion, stop re-dispatching and mark the assessment `waiting-operator` with the unresolved self-check items.
 - The assessment must begin with critical journeys and dependency boundaries, not with isolated files or services. Reliability is cross-boundary by default.
 - "No issue found" is valid only when the assessor looked for specific failure classes and found evidence-backed controls.
 
@@ -217,7 +222,7 @@ Before marking a reliability assessment as complete, the orchestrator must verif
 6. Every priority finding identifies the affected journey, likely trigger, and weak or missing control.
 7. No forbidden claims appear in the report.
 
-If check 1 fails, fix the scope definition, then re-dispatch the investigator in a Follow-Up Pass on the journeys the scoring missed. If check 2 or 3 fails, re-dispatch the investigator in a Follow-Up Pass on the uninspected failure paths or unruled dependency categories. If check 4 fails, re-dispatch the mapper in a Revision Pass on the stale rows, then the challenger as a Re-Check Pass. If check 5 fails, dispatch the challenger as a Re-Check Pass scoped to what it has not seen. If check 6 or 7 fails, the orchestrator fixes the report directly (finding fields, phrasing) without new dispatches. After any fix, re-run this self-check.
+If check 1 fails, fix the scope definition, then re-dispatch the investigator in a Follow-Up Pass on the journeys the scoring missed. If check 2 or 3 fails, re-dispatch the investigator in a Follow-Up Pass on the uninspected failure paths or unruled dependency categories. If check 4 fails, re-dispatch the mapper in a Revision Pass on the stale rows, then the challenger as a Re-Check Pass. If check 5 fails, dispatch the challenger as a Re-Check Pass scoped to what it has not seen. If check 6 or 7 fails, the orchestrator fixes the report directly (finding fields, phrasing) without new dispatches. After any fix, re-run this self-check. Any self-check failure counts toward the Completion Self-Check retry cap (Rules). If that cap is exhausted, do not retry again: mark the assessment `waiting-operator` with the unresolved self-check items.
 
 ## Output Contract
 
