@@ -1,0 +1,134 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: design-handoff-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../design-handoff-workflow.md
+  entryStage: gather-intent
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    revisionRounds: 2
+  stages:
+    - id: gather-intent
+      kind: runner
+      predicate: intent-gathered
+      transitions:
+        "true": survey-ui
+        "false": waiting-operator
+    - id: survey-ui
+      kind: agent
+      role: ui-surveyor
+      prompt: ../subagents/ui-surveyor-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: review-survey
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: review-survey
+      kind: runner
+      predicate: survey-resolution
+      transitions:
+        runtime: explore-runtime-observe
+        follow-up: survey-ui
+        ready: assemble-package
+    - id: explore-runtime-observe
+      kind: agent
+      role: runtime-explorer
+      prompt: ../subagents/runtime-explorer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: review-survey
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: assemble-package
+      kind: runner
+      predicate: package-assembled
+      transitions:
+        "true": challenge-package
+        "false": waiting-operator
+    - id: challenge-package
+      kind: agent
+      role: handoff-challenger
+      prompt: ../subagents/handoff-challenger-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - package-ready
+        - gaps-found
+        - needs-info
+      transitions:
+        package-ready: check-runtime-capture
+        gaps-found: route-gap-findings
+        needs-info: route-needs-info
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: route-needs-info
+      kind: runner
+      predicate: needs-info-resolution
+      transitions:
+        orchestrator-context: challenge-package
+        operator: waiting-operator
+    - id: route-gap-findings
+      kind: runner
+      predicate: gap-routing
+      transitions:
+        assembly: challenge-package
+        survey: survey-ui
+        cap-exhausted: waiting-operator
+    - id: check-runtime-capture
+      kind: runner
+      predicate: runtime-capture-declared
+      transitions:
+        "true": explore-runtime-capture
+        "false": deliver-package
+    - id: explore-runtime-capture
+      kind: agent
+      role: runtime-explorer
+      prompt: ../subagents/runtime-explorer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: deliver-package
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: deliver-package
+      kind: runner
+      predicate: package-delivered
+      transitions:
+        "true": ready
+        "false": waiting-operator
