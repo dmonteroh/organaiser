@@ -1,0 +1,73 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: roadmap-health-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../roadmap-health-workflow.md
+  entryStage: progress-assessment
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    assumptionAuditorPasses: 1
+  stages:
+    - id: progress-assessment
+      kind: agent
+      role: progress-assessor
+      prompt: ../subagents/progress-assessor-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: assumption-audit
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: assumption-audit
+      kind: agent
+      role: assumption-auditor
+      prompt: ../subagents/assumption-auditor-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - plan-sound
+        - corrections-needed
+        - needs-info
+      transitions:
+        plan-sound: produce-report
+        corrections-needed: review-recommendations
+        needs-info: resolve-needs-info
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: resolve-needs-info
+      kind: runner
+      predicate: needs-info-route
+      transitions:
+        orchestrator-context: assumption-audit
+        progress-data: progress-assessment
+        operator: waiting-operator
+    - id: review-recommendations
+      kind: runner
+      predicate: recommendations-resolved
+      transitions:
+        "true": produce-report
+        "false": waiting-operator
+    - id: produce-report
+      kind: runner
+      predicate: health-report-complete
+      transitions:
+        "true": ready
+        "false": waiting-operator
