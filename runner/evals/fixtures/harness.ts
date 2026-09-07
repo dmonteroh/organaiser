@@ -149,6 +149,15 @@ export interface CaptureContextStore {
   runId?: string;
   before?: CaptureGitBoardSnapshot;
   after?: CaptureGitBoardSnapshot;
+  /**
+   * `git diff <before.gitHead>`, computed inside `captureBeforeTeardown` while `dir`
+   * still exists (before the adjacent `fs.rmSync` in `withFixtureWorkspace`'s
+   * `finally`) — see that function's own comment for why this cannot be deferred to
+   * `evals/cell-runner.ts`. `undefined` until `captureBeforeTeardown` runs; `null`
+   * thereafter when there was no "before" head or the `git diff` invocation itself
+   * failed.
+   */
+  gitDiff?: string | null;
   streamFiles?: CaptureStreamFile[];
   workerReports?: unknown[];
 }
@@ -167,6 +176,24 @@ export const captureContext = new AsyncLocalStorage<CaptureContextStore>();
 function tryGitCapture(dir: string, args: readonly string[]): string | null {
   try {
     return execFileSync("git", args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// Must run while `dir` still exists — see `CaptureContextStore.gitDiff`'s doc comment.
+// A prior version of this computation lived in `evals/cell-runner.ts`, run against
+// `ctx.workspaceDir` *after* `runSingleInvocation`/`runSequenceInvocation` returned;
+// by then `withFixtureWorkspace`'s `finally` block (this same function's caller,
+// `captureBeforeTeardown`, plus the adjacent `fs.rmSync`) had already deleted `dir`, so
+// `git diff` always ran against a nonexistent cwd, threw ENOENT, and was silently
+// swallowed by the `catch` below — `git.diff` on every `CapturedCellRecord` was `null`,
+// even for fixtures (e.g. `secret-redaction`) that make real commits. Moving the call
+// here, before `fs.rmSync`, is the fix.
+function gitDiffSince(dir: string, headBefore: string | null): string | null {
+  if (headBefore === null) return null;
+  try {
+    return execFileSync("git", ["diff", headBefore], { cwd: dir, encoding: "utf8" });
   } catch {
     return null;
   }
@@ -284,14 +311,16 @@ export function recordCaptureRunId(runId: string): void {
  * Called inside `withFixtureWorkspace`'s `finally`, immediately before the existing
  * `fs.rmSync` — the one point at which the workspace directory is guaranteed to still
  * exist and the run id (if any) is already known via the store `recordCaptureRunId`
- * populated. Snapshots git/board "after" state and the fixture's own scripted stream
- * files (the sanctioned source for vendor stdout and worker-report evidence per that
- * task's C2/C3) while both are still readable.
+ * populated. Snapshots git/board "after" state, the `git diff` since the "before" head
+ * (see `CaptureContextStore.gitDiff`), and the fixture's own scripted stream files (the
+ * sanctioned source for vendor stdout and worker-report evidence per that task's C2/C3)
+ * while all three are still readable/computable.
  */
 export function captureBeforeTeardown(dir: string, runId: string | undefined): void {
   const store = captureContext.getStore();
   if (!store) return;
   store.after = snapshotGitAndBoard(dir, runId ?? store.runId);
+  store.gitDiff = gitDiffSince(dir, store.before?.gitHead ?? null);
   store.streamFiles = collectStreamFiles(dir);
   store.workerReports = extractWorkerReports(store.streamFiles);
 }

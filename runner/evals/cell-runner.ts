@@ -13,7 +13,7 @@
 // narrower capture scope (C3/C9) — this engine never opens a capture context for them,
 // so `captureContext`'s hooks simply find nothing to record into.
 
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import {
   captureContext,
@@ -66,7 +66,13 @@ export interface EvalCellBoardCapture {
 export interface EvalCellGitCapture {
   before: string | null;
   after: string | null;
-  /** `git diff <headBefore>` taken at teardown time: everything that changed since the "before" snapshot. */
+  /**
+   * `git diff <headBefore>`: everything that changed since the "before" snapshot.
+   * Computed by `harness.ts`'s `captureBeforeTeardown`, inside `withFixtureWorkspace`'s
+   * `finally` block, before that block's own `fs.rmSync` deletes the workspace — not
+   * here, and not lazily against `ctx.workspaceDir` after this engine's own call
+   * returns, since by then the directory is already gone.
+   */
   diff: string | null;
 }
 
@@ -77,10 +83,34 @@ export interface EvalCellProcessCapture {
   wallTimeMs: number;
 }
 
+/**
+ * The same section 29.7/29.8 evidence `assembleCapturedEvidence` assembles for a
+ * Single cell, scoped to exactly the one constituent it ran for. Added so a
+ * `runSequenceInvocation` caller can recover *each* constituent's own git/board/
+ * vendor-stdout/events/report evidence, not only whichever constituent happened to run
+ * last (see `CapturedCellRecord.constituents`'s doc comment).
+ */
+export interface EvalSequenceConstituentEvidence {
+  git: EvalCellGitCapture | null;
+  board: EvalCellBoardCapture | null;
+  recordedPgids: readonly number[] | null;
+  vendorStdout: Record<string, string> | null;
+  events: readonly Record<string, unknown>[] | null;
+  stateTransitions: readonly Record<string, unknown>[] | null;
+  workerReport: unknown | null;
+}
+
 export interface EvalSequenceConstituentResult {
   name: string;
   disposition: "pass" | "fail";
   error: string | null;
+  /**
+   * This constituent's own full evidence bundle — independent of every other
+   * constituent's, and independent of the cell's top-level `git`/`board`/`vendorStdout`/
+   * `events`/`workerReport` fields (which remain the *representative* — last-run —
+   * constituent's evidence, kept for backward compatibility with existing consumers).
+   */
+  evidence: EvalSequenceConstituentEvidence;
 }
 
 export interface CapturedCellRecord {
@@ -93,19 +123,37 @@ export interface CapturedCellRecord {
   disposition: EvalCellDisposition;
   /** Fail message, skip reason, or a "constituent X failed: ..." note. `null` on a plain pass. */
   dispositionDetail: string | null;
-  /** Populated for Sequence cells only; `null` for every other shape. */
+  /**
+   * Populated for Sequence cells only; `null` for every other shape. Each entry carries
+   * its own full evidence bundle (`evidence`) in addition to name/disposition/error, so
+   * a non-final constituent's git/board/vendor-stdout/events/report evidence is never
+   * silently unrecoverable — only the cell's top-level `git`/`board`/`vendorStdout`/
+   * `events`/`workerReport` fields below are scoped to the *representative*
+   * (last-run) constituent.
+   */
   constituents: readonly EvalSequenceConstituentResult[] | null;
   snapshot: EvalCellSnapshot;
-  /** `null` for Parametrized-factory/Whole-test-file/Live (negative scope; see C3/C9). */
+  /**
+   * `null` for Parametrized-factory/Whole-test-file/Live (negative scope; see C3/C9).
+   * For Sequence, this is the representative (last-run) constituent's evidence only —
+   * see each entry's own `evidence` field on `constituents` for every constituent's.
+   */
   git: EvalCellGitCapture | null;
-  /** `null` for Parametrized-factory/Whole-test-file/Live (negative scope; see C3/C9). */
+  /** Same representative-constituent scoping as `git` for Sequence; see that field's doc comment. */
   board: EvalCellBoardCapture | null;
   process: EvalCellProcessCapture;
-  /** Single/Sequence/Parametrized-factory: the fixture's own scripted stream files' raw text, keyed by filename. */
+  /**
+   * Single/Sequence/Parametrized-factory: the fixture's own scripted stream files' raw
+   * text, keyed by filename. Same representative-constituent scoping as `git` for
+   * Sequence.
+   */
   vendorStdout: Record<string, string> | null;
   /** No distinct stderr channel exists in the scripted wire format or in any live fixture's return value; always `null`. */
   vendorStderr: string | null;
-  /** The store's full event log for the run (Single/Sequence only), ordered by `seq`. */
+  /**
+   * The store's full event log for the run (Single/Sequence only), ordered by `seq`.
+   * Same representative-constituent scoping as `git` for Sequence.
+   */
   events: readonly Record<string, unknown>[] | null;
   /** `events` filtered to `type === "task.transitioned"` (Single/Sequence only). */
   stateTransitions: readonly Record<string, unknown>[] | null;
@@ -139,15 +187,6 @@ function parseWorkflowRevision(configSnapshotRef: string | null | undefined): st
 function formatGitText(snapshot: CaptureGitBoardSnapshot | undefined): string | null {
   if (!snapshot || snapshot.gitHead === null) return null;
   return `HEAD ${snapshot.gitHead}\n${snapshot.gitStatus ?? ""}`;
-}
-
-function gitDiffSince(dir: string, headBefore: string | null): string | null {
-  if (headBefore === null) return null;
-  try {
-    return execFileSync("git", ["diff", headBefore], { cwd: dir, encoding: "utf8" });
-  } catch {
-    return null;
-  }
 }
 
 function stateTransitionsOf(events: readonly Record<string, unknown>[]): Record<string, unknown>[] {
@@ -189,10 +228,11 @@ function assembleCapturedEvidence(ctx: CaptureContextStore): {
       ? {
           before: formatGitText(before),
           after: formatGitText(after),
-          diff:
-            ctx.workspaceDir !== undefined && before !== undefined
-              ? gitDiffSince(ctx.workspaceDir, before.gitHead)
-              : null,
+          // Computed inside `captureBeforeTeardown` (harness.ts), while the workspace
+          // directory still existed — see `CaptureContextStore.gitDiff`'s doc comment
+          // for why this can no longer be recomputed here against `ctx.workspaceDir`
+          // (by this point `withFixtureWorkspace`'s `finally` has already deleted it).
+          diff: ctx.gitDiff ?? null,
         }
       : null;
 
@@ -227,6 +267,20 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Narrows `assembleCapturedEvidence`'s return shape to one constituent's own evidence bundle. */
+function constituentEvidenceOf(ctx: CaptureContextStore): EvalSequenceConstituentEvidence {
+  const evidence = assembleCapturedEvidence(ctx);
+  return {
+    git: evidence.git,
+    board: evidence.board,
+    recordedPgids: evidence.recordedPgids,
+    vendorStdout: evidence.vendorStdout,
+    events: evidence.events,
+    stateTransitions: evidence.stateTransitions,
+    workerReport: evidence.workerReport,
+  };
+}
+
 /**
  * Runs one Single/Parametrized-factory-shaped call, wrapped in its own capture context.
  * Capture is captured regardless of outcome: `harness.ts`'s hooks fire from inside
@@ -259,11 +313,21 @@ export async function runSequenceInvocation(
     const ctx: CaptureContextStore = {};
     try {
       await captureContext.run(ctx, constituent.run);
-      constituentResults.push({ name: constituent.name, disposition: "pass", error: null });
+      constituentResults.push({
+        name: constituent.name,
+        disposition: "pass",
+        error: null,
+        evidence: constituentEvidenceOf(ctx),
+      });
       representativeCtx = ctx;
     } catch (err) {
       const message = errorMessage(err);
-      constituentResults.push({ name: constituent.name, disposition: "fail", error: message });
+      constituentResults.push({
+        name: constituent.name,
+        disposition: "fail",
+        error: message,
+        evidence: constituentEvidenceOf(ctx),
+      });
       representativeCtx = ctx;
       return {
         outcome: {

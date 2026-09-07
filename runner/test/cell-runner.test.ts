@@ -73,6 +73,73 @@ test(
   },
 );
 
+test(
+  "single shape: git.diff is genuinely populated for a fixture that makes real git commits (P9f-b critical-fix regression)",
+  { timeout: TIMEOUT_MS },
+  async () => {
+    // secret-redaction (`fake-adapter`) is a real git checkout: `startGitFixtureRunWithRedaction`
+    // commits `orga.yaml`/`orgaw`/`.gitignore` before the run starts, then
+    // `git/integrate.ts`'s `commitOnBranch` lands a real second commit (in-place workspace
+    // mode) once the task integrates. Before this fix, `git.diff` was computed in
+    // `evals/cell-runner.ts` against `ctx.workspaceDir` *after* this call returned — by
+    // which point `withFixtureWorkspace`'s `finally` had already `fs.rmSync`'d the
+    // directory, so `git diff` always threw ENOENT, was swallowed, and returned `null`
+    // regardless of how much git state genuinely changed.
+    const runner = createCellRunner("evalrun-gitdiff");
+    const record = await runner.runCell("fake-adapter", "fake", "secret-redaction");
+
+    assert.equal(record.disposition, "pass", record.dispositionDetail ?? undefined);
+    assert.notEqual(record.git, null);
+    assert.notEqual(record.git?.before, null, "secret-redaction commits before startFixtureRun ever runs");
+    assert.notEqual(record.git?.after, null);
+    assert.notEqual(
+      record.git?.before,
+      record.git?.after,
+      "HEAD must have moved: git/integrate.ts's commitOnBranch lands a real commit during the run",
+    );
+    assert.notEqual(
+      record.git?.diff,
+      null,
+      "git.diff must be genuinely computed, not silently null (this is the critical-fix regression check)",
+    );
+    assert.match(
+      record.git?.diff ?? "",
+      /task-a\.txt/,
+      "the diff must show the real file git/integrate.ts committed during the run",
+    );
+  },
+);
+
+test(
+  "single shape: two cells run back-to-back through one runner do not leak captured evidence between each other",
+  { timeout: TIMEOUT_MS },
+  async () => {
+    const runner = createCellRunner("evalrun-no-leak");
+
+    const first = await runner.runCell("store", "fake", "board-not-drained");
+    const second = await runner.runCell("supervisor", "fake", "worker-final-is-data");
+
+    assert.equal(first.disposition, "pass");
+    assert.equal(second.disposition, "pass");
+    assert.notEqual(first.cellId, second.cellId);
+
+    const firstTaskIds = new Set((first.board?.after?.tasks ?? []).map((t) => t.id));
+    const secondTaskIds = new Set((second.board?.after?.tasks ?? []).map((t) => t.id));
+    assert.deepEqual(firstTaskIds, new Set(["task-a", "task-b"]));
+    assert.deepEqual(secondTaskIds, new Set(["impersonating", "benign"]));
+    assert.ok(
+      ![...secondTaskIds].some((id) => firstTaskIds.has(id)),
+      "the second cell's board must never carry the first cell's task ids",
+    );
+
+    const firstStreamKeys = Object.keys(first.vendorStdout ?? {});
+    const secondStreamKeys = Object.keys(second.vendorStdout ?? {});
+    assert.ok(secondStreamKeys.some((k) => k.includes("impersonating")));
+    assert.ok(!secondStreamKeys.some((k) => k.includes("task-a")), "the second cell's streams must never carry the first cell's stream file names");
+    assert.ok(!firstStreamKeys.some((k) => k.includes("impersonating")), "the first cell's streams must never carry the second cell's stream file names");
+  },
+);
+
 test("cell id counter increments per (unit, profile, fixtureId) triple", { timeout: TIMEOUT_MS }, async () => {
   const runner = createCellRunner("evalrun-counter");
   const first = await runner.runCell("claude-adapter", "fake", "partial-jsonl");
@@ -104,6 +171,57 @@ test("sequence shape: both constituents run and capture is present", { timeout: 
   const tasksAfter = record.board?.after?.tasks ?? [];
   assert.ok(tasksAfter.some((t) => t.id === "task-a"));
 });
+
+test(
+  "sequence shape: each constituent's own evidence is captured, not only the representative (last-run) one's",
+  { timeout: TIMEOUT_MS },
+  async () => {
+    // stale-running-recovery's two constituents each seed a distinct attempt id
+    // ("att-stale" vs "att-indeterminate") into their own fresh workspace/store, and
+    // `reconcile()` mirrors an event carrying that attempt id. Before this fix,
+    // `runSequenceInvocation` discarded every constituent's evidence but the last-run
+    // one's `ctx` (`representativeCtx`): constituent 1's git/board/vendorStdout/events/
+    // workerReport was structurally unrecoverable from the returned record, even though
+    // `constituents[]` already named which constituent passed or failed.
+    const runner = createCellRunner("evalrun-sequence-per-constituent");
+    const record = await runner.runCell("store", "fake", "stale-running-recovery");
+
+    assert.equal(record.constituents?.length, 2);
+    const [first, second] = record.constituents ?? [];
+    assert.ok(first);
+    assert.ok(second);
+
+    const firstAttemptIds = (first.evidence.events ?? []).map((e) => e.attempt_id);
+    const secondAttemptIds = (second.evidence.events ?? []).map((e) => e.attempt_id);
+
+    assert.ok(
+      firstAttemptIds.includes("att-stale"),
+      `constituent 1's own event log must carry its own attempt id; got ${JSON.stringify(firstAttemptIds)}`,
+    );
+    assert.ok(
+      !firstAttemptIds.includes("att-indeterminate"),
+      "constituent 1's evidence must not leak constituent 2's attempt id",
+    );
+    assert.ok(
+      secondAttemptIds.includes("att-indeterminate"),
+      `constituent 2's own event log must carry its own attempt id; got ${JSON.stringify(secondAttemptIds)}`,
+    );
+    assert.ok(
+      !secondAttemptIds.includes("att-stale"),
+      "constituent 2's evidence must not leak constituent 1's attempt id",
+    );
+
+    // The pre-existing top-level fields remain scoped to the representative (last-run)
+    // constituent only — this fix adds per-constituent `evidence`, it does not change
+    // that pre-existing, documented scoping.
+    const topAttemptIds = (record.events ?? []).map((e) => e.attempt_id);
+    assert.ok(topAttemptIds.includes("att-indeterminate"));
+    assert.ok(
+      !topAttemptIds.includes("att-stale"),
+      "without per-constituent evidence, constituent 1's data was unrecoverable from the top-level fields alone",
+    );
+  },
+);
 
 test("sequence shape: first rejection ends the cell as failed", { timeout: TIMEOUT_MS }, async () => {
   const order: string[] = [];
