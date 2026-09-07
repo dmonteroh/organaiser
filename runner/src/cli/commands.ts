@@ -28,7 +28,9 @@ import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts
 import { validateBoard } from "../board/validate.ts";
 import { renderBoard } from "../board/render.ts";
 import { listOpenQuestions } from "../engine/operator-questions.ts";
+import { answerQuestions, UnknownQuestionKeyError } from "../engine/answer-questions.ts";
 import type { QuestionRow } from "../store/types.ts";
+import { readYamlFile, type YamlMapping } from "./yaml.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
@@ -561,9 +563,90 @@ function cmdRunQuestions(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
+function readAnswersFile(answersPath: string): Map<string, string> {
+  let parsed: YamlMapping;
+  try {
+    parsed = readYamlFile(answersPath);
+  } catch (err) {
+    throw new UsageError(
+      `cannot read answers file ${answersPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  const topLevelKeys = Object.keys(parsed);
+  if (topLevelKeys.length !== 1 || topLevelKeys[0] !== "answers") {
+    throw new UsageError(`answers file ${answersPath} must have exactly one top-level key: "answers"`);
+  }
+
+  const answersValue = parsed.answers;
+  if (answersValue === null || typeof answersValue !== "object" || Array.isArray(answersValue)) {
+    throw new UsageError(`answers file ${answersPath}: "answers" must be a mapping of question id to answer string`);
+  }
+
+  const answers = new Map<string, string>();
+  for (const [key, value] of Object.entries(answersValue)) {
+    if (key.length === 0) {
+      throw new UsageError(`answers file ${answersPath}: empty question id key is not allowed`);
+    }
+    if (typeof value !== "string") {
+      throw new UsageError(`answers file ${answersPath}: answer for "${key}" must be a string`);
+    }
+    answers.set(key, value);
+  }
+  return answers;
+}
+
+// `--json` emits exactly one JSON value on stdout:
+//   {"runId": "<run-id>", "answered": [{"questionId": "...", "rowIds": ["..."],
+//     "artifact": {"path": "...", "sha256": "..."}}], "unblockedTaskIds": ["..."]}
+// `answered` lists only keys that had at least one `open` row in this invocation; a key whose
+// matching rows were already all non-`open` is a no-op and absent from it.
+function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
+  const runId = parsed.positionals[0];
+  if (!runId) throw new UsageError("run answer requires <run-id>");
+  const answersPath = flagString(parsed.flags, "file");
+  if (!answersPath) throw new UsageError("run answer requires --file <path>");
+  const root = resolveRoot(io);
+  readRun(root, runId);
+
+  const answers = readAnswersFile(answersPath);
+
+  const db = openStore(root);
+  let result;
+  try {
+    result = answerQuestions(db, { root, runId, answers }, io.now());
+  } catch (err) {
+    if (err instanceof UnknownQuestionKeyError) throw new NotFoundError(err.message);
+    throw err;
+  } finally {
+    db.close();
+  }
+
+  if (flagBool(parsed.flags, "json")) {
+    io.stdout(JSON.stringify({ runId, answered: result.answered, unblockedTaskIds: result.unblockedTaskIds }));
+  } else {
+    for (const entry of result.answered) io.stdout(`answered ${entry.questionId}`);
+    if (result.unblockedTaskIds.length > 0) {
+      io.stdout(`tasks with no open blocking question: ${result.unblockedTaskIds.join(", ")}`);
+    }
+  }
+
+  return EXIT_CODES.OK;
+}
+
 // ── Dispatch table ───────────────────────────────────────────────────────────
 
-const VALUE_FLAGS = new Set(["board", "workflow", "template", "until", "timeout", "vendor", "input", "output"]);
+const VALUE_FLAGS = new Set([
+  "board",
+  "workflow",
+  "template",
+  "until",
+  "timeout",
+  "vendor",
+  "input",
+  "output",
+  "file",
+]);
 
 type CommandBody = (parsed: ParsedArgs, io: Io) => ExitCode | Promise<ExitCode>;
 
@@ -584,6 +667,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "board validate": cmdBoardValidate,
   "board render": cmdBoardRender,
   "run questions": cmdRunQuestions,
+  "run answer": cmdRunAnswer,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);
