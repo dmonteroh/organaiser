@@ -539,7 +539,8 @@ function gatherFacts(
       }
       const outcome = runtime.scratch.outcomeByTaskId.get(task.id);
       if (!outcome) return null;
-      return { attemptOk: outcome.ok, hasIntegrationRejection: false, hasBlockingOperatorQuestion: false };
+      const attemptOk = outcome.report !== null && outcome.report.status === "completed";
+      return { attemptOk, hasIntegrationRejection: false, hasBlockingOperatorQuestion: false };
     }
     case "integration-slot-available":
       return {};
@@ -968,6 +969,19 @@ export async function dispatchEligible(
       return;
     }
 
+    let packet: string;
+    try {
+      packet = buildDispatchPacketInput(
+        { id: task.id, title: task.title, briefPath: task.brief_path },
+        { db: ctx.db, runId: ctx.runId, projectRoot: workspace?.projectRoot ?? process.cwd() },
+      )(stageId, role);
+    } catch (err) {
+      runtime.scratch.invariantViolations.push(
+        `packet build failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+
     const outcome = await dispatchAttempt(
       ctx.db,
       adapter,
@@ -985,7 +999,7 @@ export async function dispatchEligible(
         timeoutBudget: { spawnMs: 30000, idleMs: 30000, wallMs: 300000 },
         workingDirectory,
         environment: process.env,
-        packet: `packet for task ${task.id} at stage ${stageId}`,
+        packet,
       },
       ctx.now,
     );
