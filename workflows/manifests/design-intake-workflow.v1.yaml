@@ -1,0 +1,137 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: design-intake-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../design-intake-workflow.md
+  entryStage: gather-inputs
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    revisionRounds: 2
+    followUpRounds: 1
+  stages:
+    - id: gather-inputs
+      kind: runner
+      predicate: inputs-gathered
+      transitions:
+        "true": analyze-delta
+        "false": waiting-operator
+    - id: analyze-delta
+      kind: agent
+      role: design-delta-analyst
+      prompt: ../subagents/design-delta-analyst-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: delta-accounting-check
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: delta-accounting-check
+      kind: runner
+      predicate: delta-accounted
+      transitions:
+        "true": challenge-delta
+        "false": analyze-delta
+    - id: challenge-delta
+      kind: agent
+      role: intake-challenger
+      prompt: ../subagents/intake-challenger-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - delta-sound
+        - gaps-found
+        - needs-info
+      transitions:
+        delta-sound: check-ambiguities
+        gaps-found: route-gap-findings
+        needs-info: route-needs-info
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: route-needs-info
+      kind: runner
+      predicate: needs-info-resolution
+      transitions:
+        orchestrator-context: challenge-delta
+        operator: waiting-operator
+    - id: route-gap-findings
+      kind: runner
+      predicate: gap-routing
+      transitions:
+        classification-runtime: explore-runtime-classification
+        classification-direct: check-ambiguities
+        coverage: analyze-delta
+        cap-exhausted: waiting-operator
+    - id: explore-runtime-classification
+      kind: agent
+      role: runtime-explorer
+      prompt: ../subagents/runtime-explorer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: check-ambiguities
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: check-ambiguities
+      kind: runner
+      predicate: ambiguities-resolved
+      transitions:
+        runtime: explore-runtime-ambiguity
+        design-intent: analyze-delta
+        resolved: resolve-removed-rows
+        operator-ruling: waiting-operator
+    - id: explore-runtime-ambiguity
+      kind: agent
+      role: runtime-explorer
+      prompt: ../subagents/runtime-explorer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: resolve-removed-rows
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: resolve-removed-rows
+      kind: runner
+      predicate: removed-rows-confirmed
+      transitions:
+        "true": produce-report
+        "false": waiting-operator
+    - id: produce-report
+      kind: runner
+      predicate: report-complete
+      transitions:
+        "true": ready
+        "false": parked
