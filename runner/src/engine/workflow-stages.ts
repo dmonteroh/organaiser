@@ -570,7 +570,7 @@ function gateForEdge(stageId: string, verdict: string, target: string): string |
   ) {
     return "qualityReviewGate";
   }
-  if (verdict === "questions" && target === "waiting-operator") return "questionsLoop";
+  if (target === "waiting-operator") return "questionsLoop";
   if (stageId === "collect-implementation-artifacts" && verdict === "false" && target === "implement") {
     return "artifactRepair";
   }
@@ -578,17 +578,21 @@ function gateForEdge(stageId: string, verdict: string, target: string): string |
   return null;
 }
 
-// The single `DEVELOPMENT_CAPS` key a stage could ever advance, known before
-// that stage's verdict is resolved (unlike `gateForEdge`, which additionally
-// needs the verdict and target). Every gate name in `DEVELOPMENT_CAPS` has
-// exactly one entry here.
-function gateForStage(stageId: string): string | null {
-  if (stageId === "review-spec") return "specReviewGate";
-  if (stageId === "review-quality") return "qualityReviewGate";
-  if (stageId === "collect-implementation-artifacts") return "artifactRepair";
-  if (stageId === "verify-task") return "taskChecksGate";
-  if (stageId === "implement" || stageId === "fix-spec" || stageId === "fix-quality") return "questionsLoop";
-  return null;
+// The `DEVELOPMENT_CAPS` keys a stage could ever advance, known before that
+// stage's verdict is resolved (unlike `gateForEdge`, which additionally needs
+// the verdict and target). Every gate name `gateForEdge` can return for a
+// stage must appear in that stage's array here, or the round is silently
+// uncounted: five stages route to `waiting-operator` per the manifest
+// (`implement`, `review-spec`, `fix-spec`, `review-quality`, `fix-quality`),
+// so each of their arrays must carry `questionsLoop` alongside any
+// stage-specific gate.
+function gatesForStage(stageId: string): readonly string[] {
+  if (stageId === "review-spec") return ["specReviewGate", "questionsLoop"];
+  if (stageId === "review-quality") return ["qualityReviewGate", "questionsLoop"];
+  if (stageId === "collect-implementation-artifacts") return ["artifactRepair"];
+  if (stageId === "verify-task") return ["taskChecksGate"];
+  if (stageId === "implement" || stageId === "fix-spec" || stageId === "fix-quality") return ["questionsLoop"];
+  return [];
 }
 
 // Resumes `gateRounds` from the run's durable `gates` rows for this task, so
@@ -688,12 +692,11 @@ export async function runDevelopmentStages(input: DevelopmentStageInput): Promis
       throw new Error(`unknown development stage id: ${currentId}`);
     }
 
-    const gateName = gateForStage(stage.id);
-    let pendingGateId: string | null = null;
-    let pendingRound = 0;
-    if (gateName) {
-      pendingRound = (gateRounds[gateName] ?? 0) + 1;
-      pendingGateId = insertPendingGate(
+    const pendingGates: Array<{ gateName: string; pendingGateId: string; pendingRound: number }> = gatesForStage(
+      stage.id,
+    ).map((gateName) => {
+      const pendingRound = (gateRounds[gateName] ?? 0) + 1;
+      const pendingGateId = insertPendingGate(
         input.db,
         input.runId,
         input.taskId,
@@ -702,7 +705,8 @@ export async function runDevelopmentStages(input: DevelopmentStageInput): Promis
         DEVELOPMENT_CAPS[gateName]!,
         input.now(),
       );
-    }
+      return { gateName, pendingGateId, pendingRound };
+    });
 
     const verdict = stage.kind === "agent" ? await runAgentStage(stage, ctx) : await resolveRunnerStage(stage, ctx);
 
@@ -712,12 +716,12 @@ export async function runDevelopmentStages(input: DevelopmentStageInput): Promis
 
     const resolvedGate = target === undefined ? null : gateForEdge(stage.id, verdict, target);
 
-    if (pendingGateId) {
-      if (resolvedGate === gateName) {
-        gateRounds[gateName!] = pendingRound;
-        finalizeGate(input.db, pendingGateId, evidenceForStage(stage, ctx), input.now());
+    for (const pending of pendingGates) {
+      if (pending.gateName === resolvedGate) {
+        gateRounds[pending.gateName] = pending.pendingRound;
+        finalizeGate(input.db, pending.pendingGateId, evidenceForStage(stage, ctx), input.now());
       } else {
-        discardPendingGate(input.db, pendingGateId);
+        discardPendingGate(input.db, pending.pendingGateId);
       }
     }
 

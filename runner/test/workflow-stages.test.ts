@@ -322,8 +322,13 @@ function implementerReport(
   return report;
 }
 
-function reviewerReport(stageId: string, roleId: string, verdict: string): Record<string, unknown> {
-  return {
+function reviewerReport(
+  stageId: string,
+  roleId: string,
+  verdict: string,
+  questions?: readonly unknown[],
+): Record<string, unknown> {
+  const report: Record<string, unknown> = {
     protocolVersion: "1",
     workflowId: "dev-workflow",
     workflowVersion: "2.0.0",
@@ -336,6 +341,8 @@ function reviewerReport(stageId: string, roleId: string, verdict: string): Recor
     verdict,
     summary: `reviewer reported ${verdict}`,
   };
+  if (questions !== undefined) report.questions = questions;
+  return report;
 }
 
 function queueImplementerScenario(
@@ -352,10 +359,17 @@ function queueImplementerScenario(
   writeStreamFile(streamsDir, stageId, scenario, ops);
 }
 
-function queueReviewerScenario(streamsDir: string, stageId: string, roleId: string, scenario: string, verdict: string): void {
+function queueReviewerScenario(
+  streamsDir: string,
+  stageId: string,
+  roleId: string,
+  scenario: string,
+  verdict: string,
+  questions?: readonly unknown[],
+): void {
   writeStreamFile(streamsDir, stageId, scenario, [
     { op: "output", text: "reviewing" },
-    { op: "report", report: reviewerReport(stageId, roleId, verdict) },
+    { op: "report", report: reviewerReport(stageId, roleId, verdict, questions) },
     { op: "exit", code: 0 },
   ]);
 }
@@ -810,6 +824,121 @@ test("verify-task false -> implement counts only taskChecksGate", async () => {
 
     assertOneHotGates(outcome.gateRounds, "taskChecksGate");
     assert.equal(outcome.outcome, "integrating");
+  });
+});
+
+// ── `questionsLoop` bounds every `waiting-operator` edge, not just the
+// implementer's `questions` verdict ──────────────────────────────────────
+
+function seedTaskRow(env: TestEnv): void {
+  withTransaction(env.db, () => {
+    env.db
+      .prepare(
+        `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(TASK_ID, RUN_ID, TASK_ID, "Task 1", "brief.md", "task-board", null, "[]", 0, "implementing", null, 1000, 1000);
+  });
+}
+
+test("three review-spec needs-info verdicts exhaust questionsLoop and park on the third", async () => {
+  await withEnv(async (env) => {
+    seedTaskRow(env);
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+
+    queueImplementerScenario(env.streamsDir, "implement", "round-1", "completed");
+    queue("implement", "round-1");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "round-1", "needs-info", [
+      { id: "oq-r1", taskId: TASK_ID, owner: "operator", question: "round 1?", context: "c", impact: "i", safeDefault: { summary: "A" }, blocks: [] },
+    ]);
+    queue("review-spec", "round-1");
+    const round1 = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(round1.outcome, "waiting-operator");
+    assert.equal(round1.gateRounds.questionsLoop, 1);
+    assert.equal(round1.gateRounds.specReviewGate, 0);
+
+    queueImplementerScenario(env.streamsDir, "implement", "round-2", "completed");
+    queue("implement", "round-2");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "round-2", "needs-info", [
+      { id: "oq-r2", taskId: TASK_ID, owner: "operator", question: "round 2?", context: "c", impact: "i", safeDefault: { summary: "A" }, blocks: [] },
+    ]);
+    queue("review-spec", "round-2");
+    const round2 = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(round2.outcome, "waiting-operator");
+    assert.equal(round2.gateRounds.questionsLoop, 2);
+    assert.equal(round2.gateRounds.specReviewGate, 0);
+
+    queueImplementerScenario(env.streamsDir, "implement", "round-3", "completed");
+    queue("implement", "round-3");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "round-3", "needs-info", [
+      { id: "oq-r3", taskId: TASK_ID, owner: "operator", question: "round 3?", context: "c", impact: "i", safeDefault: { summary: "A" }, blocks: [] },
+    ]);
+    queue("review-spec", "round-3");
+    const round3 = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(round3.outcome, "parked");
+    assert.equal(round3.gateRounds.questionsLoop, 3);
+
+    const row = env.db.prepare(`SELECT COUNT(*) AS n FROM questions WHERE run_id = ?`).get(RUN_ID) as { n: number };
+    assert.equal(row.n, 2);
+  });
+});
+
+test("the gates table holds exactly one finalized row per counted edge and no orphan", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "fail", "fail");
+    queue("review-spec", "fail");
+    queueImplementerScenario(env.streamsDir, "fix-spec", "completed", "completed");
+    queue("fix-spec", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "needs-info", "needs-info");
+    queue("review-spec", "needs-info");
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(outcome.outcome, "waiting-operator");
+    assert.equal(outcome.gateRounds.specReviewGate, 1);
+    assert.equal(outcome.gateRounds.questionsLoop, 1);
+
+    const rows = env.db
+      .prepare(`SELECT gate_type, round, verdict FROM gates WHERE run_id = ? AND task_id = ?`)
+      .all(RUN_ID, TASK_ID) as Array<{ gate_type: string; round: number; verdict: string | null }>;
+
+    const finalized = rows.filter((row) => row.verdict === "fail");
+    assert.deepEqual(
+      finalized.map((row) => `${row.gate_type}:${row.round}`).sort(),
+      ["questionsLoop:1", "specReviewGate:1"],
+    );
+    assert.equal(
+      rows.filter((row) => row.verdict === null).length,
+      0,
+    );
+  });
+});
+
+test("resumeGateRounds folds an orphaned verdict IS NULL row's round into gateRounds and discards it", async () => {
+  await withEnv(async (env) => {
+    withTransaction(env.db, () => {
+      env.db
+        .prepare(
+          `INSERT INTO gates (id, run_id, task_id, gate_type, round, cap, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run("orphan-gate-1", RUN_ID, TASK_ID, "specReviewGate", 2, DEVELOPMENT_CAPS.specReviewGate, 1000);
+    });
+
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "fail", "fail");
+    queue("review-spec", "fail");
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter));
+
+    assert.equal(outcome.outcome, "parked");
+    assert.equal(outcome.gateRounds.specReviewGate, 3);
+
+    const orphan = env.db.prepare(`SELECT id FROM gates WHERE id = ?`).get("orphan-gate-1");
+    assert.equal(orphan, undefined);
   });
 });
 
