@@ -455,6 +455,19 @@ test("advanceTransitions records an invariant violation instead of writing a tas
   });
 });
 
+test("advanceTransitions consumes a seeded refinementOutcomeByTaskId entry, routes per STAGE_DEFINITIONS, and deletes the entry", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "task-refinement", now: clock.now() });
+
+    const runtime = createSchedulerRuntime();
+    runtime.refinementOutcomeByTaskId.set("task-a", "ready-to-implement");
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+    assert.equal(getTask(db, "task-a").stage_id, "implementation");
+    assert.equal(runtime.refinementOutcomeByTaskId.has("task-a"), false);
+  });
+});
+
 test("classifyTick: active when a worker is live, regardless of other counts", () => {
   const outcome = classifyTick({
     totalTaskCount: 1,
