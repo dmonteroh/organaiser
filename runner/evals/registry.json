@@ -1,5 +1,29 @@
 {
   "units": {
+    "scheduler": {
+      "deterministic": [
+        "dependency-order",
+        "claim-overlap-serializes",
+        "disjoint-claims-parallelize",
+        "operator-block-does-not-global-stop",
+        "terminal-task-never-dispatches",
+        "duplicate-dispatch"
+      ],
+      "live": ["live-board-drain"]
+    },
+    "store": {
+      "deterministic": ["stale-running-recovery", "supervisor-restart"],
+      "live": ["live-board-drain"]
+    },
+    "supervisor": {
+      "deterministic": [
+        "caller-exit-survival",
+        "supervisor-restart",
+        "supervisor-exits-at-rest",
+        "cancel-run"
+      ],
+      "live": ["live-board-drain"]
+    },
     "claude-adapter": {
       "deterministic": [
         "known-bad-version-refused",
@@ -27,7 +51,45 @@
         "board-not-drained",
         "duplicate-dispatch"
       ],
-      "live": ["caller-exit-survival"]
+      "liveExemptReason": "the live tier invokes the installed authenticated CLIs (06-eval-suite.md:9); a scripted fake CLI cannot be a live subject"
+    },
+    "process-supervisor": {
+      "deterministic": ["descendant-process-cleanup", "cancel-run"],
+      "live": ["live-board-drain"]
+    },
+    "git-integrator": {
+      "deterministic": [
+        "destination-cas",
+        "integration-conflict",
+        "worktree-cleanup",
+        "historical-commit-rewrite",
+        "landed-work-recovery-without-false-success"
+      ],
+      "live": ["live-single-task"]
+    },
+    "board-compiler": {
+      "deterministic": ["board-validate"],
+      "live": ["live-single-task"]
+    },
+    "workflow-compiler": {
+      "deterministic": ["gate-order", "fresh-reviewer", "minor-findings-append-once"],
+      "live": ["live-single-task"]
+    },
+    "packet-compiler": {
+      "deterministic": ["worker-final-is-data"],
+      "live": ["live-single-task"]
+    },
+    "report-validator": {
+      "deterministic": ["invalid-report-fails-closed"],
+      "live": ["live-single-task"]
+    },
+    "renderer": {
+      "deterministic": ["board-render"],
+      "liveExemptReason": "BOARD.md is an operator-facing projection the runner never reads back (runner/test/board-render.test.ts:390), so no live scenario can observe it"
+    },
+    "importer": {
+      "deterministic": ["import-markdown", "legacy-import"],
+      "liveExemptReason": "no section 29.6 scenario imports a Markdown board; both implemented live fixtures construct board JSON directly"
     }
   }
 }
