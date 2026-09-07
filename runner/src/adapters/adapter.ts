@@ -35,7 +35,7 @@ export interface CapabilityReport {
 export interface TimeoutBudget {
   /** The process fails to start or initialize. */
   spawnMs: number;
-  /** No output, heartbeat, or observable filesystem progress occurs. */
+  /** No `NormalizedEvent` arrives from `adapter.observe()` within this bound; the stream's events are its only signal. */
   idleMs: number;
   /**
    * Total attempt duration exceeds its configured limit. A wall timeout MUST terminate
