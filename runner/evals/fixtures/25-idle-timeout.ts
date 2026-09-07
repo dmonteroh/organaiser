@@ -157,6 +157,11 @@ export async function idleTimeout(): Promise<void> {
           .prepare(`SELECT * FROM events WHERE run_id = ? AND attempt_id = ? AND type = 'attempt.timed-out'`)
           .all(runId, attemptRow.id as string) as Array<Record<string, unknown>>;
         assert.equal(timedOutEvents.length, 1, "exactly one attempt.timed-out event for the timed-out attempt");
+        assert.deepEqual(
+          JSON.parse(timedOutEvents[0]!.payload as string),
+          { firedBudget: "idle-timeout" },
+          "the timed-out event must record the idle timer, not the wall or spawn timer, as the one that fired",
+        );
 
         const normalizedEvents = db
           .prepare(`SELECT * FROM events WHERE run_id = ? AND attempt_id = ? AND type = 'attempt.normalized'`)
