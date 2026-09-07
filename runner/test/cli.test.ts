@@ -318,6 +318,7 @@ interface QuestionSeed {
   status: string;
   createdAt: number;
   payload: string | null;
+  safeDefault?: string | null;
 }
 
 function seedQuestion(root: string, seed: QuestionSeed): void {
@@ -326,8 +327,19 @@ function seedQuestion(root: string, seed: QuestionSeed): void {
     withTransaction(db, () => {
       db.prepare(
         `INSERT INTO questions (id, run_id, task_id, owner, blocking_scope, prompt, safe_default, answer, status, created_at, answered_at, payload)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?)`,
-      ).run(seed.id, seed.runId, seed.taskId, seed.owner, seed.blockingScope, seed.prompt, seed.status, seed.createdAt, seed.payload);
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?)`,
+      ).run(
+        seed.id,
+        seed.runId,
+        seed.taskId,
+        seed.owner,
+        seed.blockingScope,
+        seed.prompt,
+        seed.safeDefault ?? null,
+        seed.status,
+        seed.createdAt,
+        seed.payload,
+      );
     });
   } finally {
     db.close();
@@ -407,7 +419,7 @@ test("run questions --json with no open questions emits an empty array and exits
   });
 });
 
-test("run questions without --json prints one human line per row, or a single no-open-questions line", async () => {
+test("run questions without --json prints a table with a single row, or a single no-open-questions line", async () => {
   await withTempWorkspace(async (dir) => {
     initProject(dir);
     const runId = "run-q3";
@@ -422,14 +434,16 @@ test("run questions without --json prints one human line per row, or a single no
       status: "open",
       createdAt: 2000,
       payload: null,
+      safeDefault: "go left",
     });
 
     const withRowsIo = ioAt(dir);
     const withRowsCode = await main(["node", "orga", "run", "questions", runId], withRowsIo);
     assert.equal(withRowsCode, EXIT_CODES.OK);
-    assert.equal(withRowsIo.outLines.length, 1);
+    assert.equal(withRowsIo.outLines.length, 2);
     assert.throws(() => JSON.parse(withRowsIo.outLines[0] as string));
-    assert.equal(withRowsIo.outLines[0], `- ${runId}#oq-1#t1 [task] owner=operator: which way?`);
+    assert.equal(withRowsIo.outLines[0], "id              question    default  blocked tasks");
+    assert.equal(withRowsIo.outLines[1], `${runId}#oq-1#t1  which way?  go left  t1           `);
 
     const emptyRunId = "run-q3-empty";
     seedRunAtState(dir, emptyRunId, "running", 1000);
@@ -437,6 +451,85 @@ test("run questions without --json prints one human line per row, or a single no
     const emptyCode = await main(["node", "orga", "run", "questions", emptyRunId], emptyIo);
     assert.equal(emptyCode, EXIT_CODES.OK);
     assert.deepEqual(emptyIo.outLines, ["no open questions"]);
+  });
+});
+
+test("run questions without --json aggregates fan-out and mixed run+task rows by raw question id", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q4";
+    seedRunAtState(dir, runId, "waiting-operator", 1000);
+
+    seedQuestion(dir, {
+      id: `${runId}#legacy#t9`,
+      runId,
+      taskId: "t9",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "legacy prompt\nwith a newline",
+      status: "open",
+      createdAt: 500,
+      payload: null,
+      safeDefault: "keep\ndefault",
+    });
+
+    const fanoutQuestion = { id: "oq-1", owner: "operator", question: "fanout A", blocks: ["t1", "t2"] };
+    seedQuestion(dir, {
+      id: `${runId}#oq-1#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "fanout A",
+      status: "open",
+      createdAt: 1000,
+      payload: JSON.stringify(fanoutQuestion),
+      safeDefault: "left directions",
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-1#t2`,
+      runId,
+      taskId: "t2",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "fanout B",
+      status: "open",
+      createdAt: 1000,
+      payload: JSON.stringify({ ...fanoutQuestion, question: "fanout B" }),
+    });
+
+    const mixedQuestion = { id: "oq-2", owner: "operator", question: "mixed", blocks: [runId, "t3"] };
+    seedQuestion(dir, {
+      id: `${runId}#oq-2#run`,
+      runId,
+      taskId: null,
+      owner: "operator",
+      blockingScope: "run",
+      prompt: "mixed",
+      status: "open",
+      createdAt: 2000,
+      payload: JSON.stringify(mixedQuestion),
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-2#t3`,
+      runId,
+      taskId: "t3",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "mixed later",
+      status: "open",
+      createdAt: 2500,
+      payload: JSON.stringify({ ...mixedQuestion, question: "mixed later" }),
+    });
+
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "questions", runId], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.equal(io.outLines.length, 4);
+    assert.equal(io.outLines[0], "id                question                      default          blocked tasks");
+    assert.equal(io.outLines[1], `${runId}#legacy#t9  legacy prompt with a newline  keep default     t9           `);
+    assert.equal(io.outLines[2], "oq-1              fanout A                      left directions  t1, t2       ");
+    assert.equal(io.outLines[3], "oq-2              mixed                         (none)           (run), t3    ");
   });
 });
 
@@ -451,6 +544,126 @@ test("run questions exits 3 for an unknown run id and 2 for a missing run id", a
     const missingIo = ioAt(dir);
     const missingCode = await main(["node", "orga", "run", "questions"], missingIo);
     assert.equal(missingCode, EXIT_CODES.INVALID_ARGS);
+  });
+});
+
+// ── run status: pending-question visibility ─────────────────────────────────
+
+test("run status reports pending-questions=<n> aggregated by raw id, both on the human line and --json's additive fields", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-s1";
+    seedRunAtState(dir, runId, "waiting-operator", 1000);
+
+    const zeroIo = ioAt(dir);
+    const zeroCode = await main(["node", "orga", "run", "status", runId], zeroIo);
+    assert.equal(zeroCode, EXIT_CODES.OK);
+    assert.equal(
+      zeroIo.outLines[0],
+      `run ${runId}: state=waiting-operator desired=waiting-operator pending-questions=0`,
+    );
+
+    const fanoutQuestion = { id: "oq-1", owner: "operator", question: "fanout", blocks: ["t1", "t2"] };
+    seedQuestion(dir, {
+      id: `${runId}#oq-1#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "fanout",
+      status: "open",
+      createdAt: 1000,
+      payload: JSON.stringify(fanoutQuestion),
+      safeDefault: "pick one",
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-1#t2`,
+      runId,
+      taskId: "t2",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "fanout",
+      status: "open",
+      createdAt: 1500,
+      payload: JSON.stringify(fanoutQuestion),
+    });
+
+    const mixedQuestion = { id: "oq-2", owner: "operator", question: "mixed", blocks: [runId, "t3"] };
+    seedQuestion(dir, {
+      id: `${runId}#oq-2#run`,
+      runId,
+      taskId: null,
+      owner: "operator",
+      blockingScope: "run",
+      prompt: "mixed",
+      status: "open",
+      createdAt: 2000,
+      payload: JSON.stringify(mixedQuestion),
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-2#t3`,
+      runId,
+      taskId: "t3",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "mixed",
+      status: "open",
+      createdAt: 2500,
+      payload: JSON.stringify(mixedQuestion),
+    });
+
+    seedQuestion(dir, {
+      id: `${runId}#oq-3#t9`,
+      runId,
+      taskId: "t9",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "already answered",
+      status: "answered",
+      createdAt: 100,
+      payload: null,
+    });
+
+    const humanIo = ioAt(dir);
+    const humanCode = await main(["node", "orga", "run", "status", runId], humanIo);
+    assert.equal(humanCode, EXIT_CODES.OK);
+    assert.equal(humanIo.outLines.length, 1);
+    assert.equal(
+      humanIo.outLines[0],
+      `run ${runId}: state=waiting-operator desired=waiting-operator pending-questions=2`,
+    );
+
+    const jsonIo = ioAt(dir);
+    const jsonCode = await main(["node", "orga", "run", "status", runId, "--json"], jsonIo);
+    assert.equal(jsonCode, EXIT_CODES.OK);
+    const value = JSON.parse(jsonIo.outLines[0] as string) as {
+      id: string;
+      pendingQuestionCount: number;
+      pendingQuestions: Array<{
+        questionId: string;
+        taskIds: string[];
+        blocksRun: boolean;
+        status: string;
+        question: unknown;
+      }>;
+    };
+    assert.equal(value.id, runId);
+    assert.equal(value.pendingQuestionCount, 2);
+    assert.equal(value.pendingQuestions.length, 2);
+    assert.deepEqual(value.pendingQuestions[0], {
+      questionId: "oq-1",
+      taskIds: ["t1", "t2"],
+      blocksRun: false,
+      status: "open",
+      question: fanoutQuestion,
+    });
+    assert.deepEqual(value.pendingQuestions[1], {
+      questionId: "oq-2",
+      taskIds: ["t3"],
+      blocksRun: true,
+      status: "open",
+      question: mixedQuestion,
+    });
   });
 });
 
