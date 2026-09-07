@@ -1,0 +1,217 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import { CAPTURE_CASES, loadCapture, type CaptureCase } from "../src/adapters/captures.ts";
+import knownBadData from "../src/adapters/known-bad.json" with { type: "json" };
+import type { CaptureEvidence, CompatibilityFile } from "./compatibility-schema.ts";
+
+export interface AdapterTableRow {
+  vendor: string;
+  cliVersion: string;
+  captureDate: string;
+  captureDatesByCase: Readonly<Record<string, string>>;
+  captureEvidence: CaptureEvidence;
+  syntheticCases: readonly string[];
+}
+
+export interface DriftError {
+  kind:
+    | "vendor-version-missing-from-compatibility"
+    | "vendor-version-missing-from-tree"
+    | "capture-evidence-mismatch"
+    | "synthetic-cases-mismatch"
+    | "known-bad-version-listed"
+    | "capture-date-inconsistent"
+    | "capture-date-mismatch";
+  vendor: string;
+  cliVersion: string;
+  detail: string;
+}
+
+interface KnownBadEntry {
+  version: string;
+  reason: string;
+}
+
+type CompatibilityVendorEntry = NonNullable<
+  CompatibilityFile["vendors"][keyof CompatibilityFile["vendors"]]
+>;
+
+const KNOWN_BAD: Readonly<Record<string, readonly KnownBadEntry[]>> = knownBadData as Record<
+  string,
+  readonly KnownBadEntry[]
+>;
+
+function listDirectories(dirPath: string): string[] {
+  return fs
+    .readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+}
+
+function rowKey(vendor: string, cliVersion: string): string {
+  return `${vendor}::${cliVersion}`;
+}
+
+function canonicalCaseFor(captureDatesByCase: Readonly<Record<string, string>>): CaptureCase | null {
+  return CAPTURE_CASES.find((caseName) => caseName in captureDatesByCase) ?? null;
+}
+
+export function enumerateAdapterTable(capturesRoot: string): AdapterTableRow[] {
+  const rows: AdapterTableRow[] = [];
+
+  for (const vendor of listDirectories(capturesRoot)) {
+    const vendorPath = path.join(capturesRoot, vendor);
+    for (const cliVersion of listDirectories(vendorPath)) {
+      const versionPath = path.join(vendorPath, cliVersion);
+      const files = fs.readdirSync(versionPath).filter((name) => name.endsWith(".jsonl"));
+
+      const captureDatesByCase: Record<string, string> = {};
+      const synthesizedCaseNames = new Set<CaptureCase>();
+
+      for (const file of files) {
+        const raw = fs.readFileSync(path.join(versionPath, file), "utf8");
+        const capture = loadCapture(raw);
+        captureDatesByCase[capture.metadata.case] = capture.metadata.captureDate;
+        if (capture.metadata.synthesized === true) {
+          synthesizedCaseNames.add(capture.metadata.case);
+        }
+      }
+
+      const syntheticCases = CAPTURE_CASES.filter((caseName) => synthesizedCaseNames.has(caseName));
+      const captureEvidence: CaptureEvidence =
+        syntheticCases.length === 0 ? "recorded" : "partially-synthesized";
+      const canonicalCase = canonicalCaseFor(captureDatesByCase);
+      const captureDate = canonicalCase !== null ? captureDatesByCase[canonicalCase]! : "";
+
+      rows.push({
+        vendor,
+        cliVersion,
+        captureDate,
+        captureDatesByCase,
+        captureEvidence,
+        syntheticCases,
+      });
+    }
+  }
+
+  return rows;
+}
+
+export function checkDrift(table: AdapterTableRow[], compatibility: CompatibilityFile): DriftError[] {
+  const errors: DriftError[] = [];
+
+  const compatibilityRows: Array<{ vendor: string; cliVersion: string; entry: CompatibilityVendorEntry }> = [];
+  for (const [vendor, entry] of Object.entries(compatibility.vendors)) {
+    if (entry) {
+      compatibilityRows.push({ vendor, cliVersion: entry.cliVersion, entry });
+    }
+  }
+
+  const tableByKey = new Map<string, AdapterTableRow>();
+  for (const row of table) {
+    tableByKey.set(rowKey(row.vendor, row.cliVersion), row);
+  }
+
+  const compatibilityByKey = new Map<string, { vendor: string; cliVersion: string; entry: CompatibilityVendorEntry }>();
+  for (const compatRow of compatibilityRows) {
+    compatibilityByKey.set(rowKey(compatRow.vendor, compatRow.cliVersion), compatRow);
+  }
+
+  for (const row of table) {
+    if (!compatibilityByKey.has(rowKey(row.vendor, row.cliVersion))) {
+      errors.push({
+        kind: "vendor-version-missing-from-compatibility",
+        vendor: row.vendor,
+        cliVersion: row.cliVersion,
+        detail: `captures/${row.vendor}/${row.cliVersion}/ exists in the tree, but compatibility.json's vendors["${row.vendor}"] does not name cliVersion "${row.cliVersion}"`,
+      });
+    }
+  }
+
+  for (const compatRow of compatibilityRows) {
+    if (!tableByKey.has(rowKey(compatRow.vendor, compatRow.cliVersion))) {
+      errors.push({
+        kind: "vendor-version-missing-from-tree",
+        vendor: compatRow.vendor,
+        cliVersion: compatRow.cliVersion,
+        detail: `vendors["${compatRow.vendor}"] names cliVersion "${compatRow.cliVersion}" in compatibility.json, but no captures/${compatRow.vendor}/${compatRow.cliVersion}/ directory exists in the tree`,
+      });
+    }
+  }
+
+  for (const row of table) {
+    const compatRow = compatibilityByKey.get(rowKey(row.vendor, row.cliVersion));
+    if (!compatRow) {
+      continue;
+    }
+
+    if (row.captureEvidence !== compatRow.entry.captureEvidence) {
+      errors.push({
+        kind: "capture-evidence-mismatch",
+        vendor: row.vendor,
+        cliVersion: row.cliVersion,
+        detail: `captures/${row.vendor}/${row.cliVersion}/ derives captureEvidence "${row.captureEvidence}", but compatibility.json names "${compatRow.entry.captureEvidence}"`,
+      });
+    }
+
+    const tableSyntheticSet = new Set(row.syntheticCases);
+    const compatSyntheticSet = new Set(compatRow.entry.syntheticCases);
+    const onlyInTree = row.syntheticCases.filter((caseName) => !compatSyntheticSet.has(caseName));
+    const onlyInCompatibility = compatRow.entry.syntheticCases.filter(
+      (caseName) => !tableSyntheticSet.has(caseName),
+    );
+    if (onlyInTree.length > 0 || onlyInCompatibility.length > 0) {
+      errors.push({
+        kind: "synthetic-cases-mismatch",
+        vendor: row.vendor,
+        cliVersion: row.cliVersion,
+        detail: `captures/${row.vendor}/${row.cliVersion}/ and compatibility.json disagree on syntheticCases: only in tree [${onlyInTree.join(", ")}], only in compatibility.json [${onlyInCompatibility.join(", ")}]`,
+      });
+    }
+
+    if (row.captureDate !== compatRow.entry.captureDate) {
+      errors.push({
+        kind: "capture-date-mismatch",
+        vendor: row.vendor,
+        cliVersion: row.cliVersion,
+        detail: `captures/${row.vendor}/${row.cliVersion}/ derives captureDate "${row.captureDate}", but compatibility.json names captureDate "${compatRow.entry.captureDate}"`,
+      });
+    }
+  }
+
+  for (const row of table) {
+    const canonicalCase = canonicalCaseFor(row.captureDatesByCase);
+    if (canonicalCase === null) {
+      continue;
+    }
+    const canonicalDate = row.captureDatesByCase[canonicalCase]!;
+    for (const [caseName, date] of Object.entries(row.captureDatesByCase)) {
+      if (caseName === canonicalCase || date === canonicalDate) {
+        continue;
+      }
+      errors.push({
+        kind: "capture-date-inconsistent",
+        vendor: row.vendor,
+        cliVersion: row.cliVersion,
+        detail: `captures/${row.vendor}/${row.cliVersion}/: canonical case "${canonicalCase}" has captureDate "${canonicalDate}", but case "${caseName}" has captureDate "${date}"`,
+      });
+      break;
+    }
+  }
+
+  for (const compatRow of compatibilityRows) {
+    const knownBadEntries = KNOWN_BAD[compatRow.vendor] ?? [];
+    const match = knownBadEntries.find((entry) => entry.version === compatRow.cliVersion);
+    if (match) {
+      errors.push({
+        kind: "known-bad-version-listed",
+        vendor: compatRow.vendor,
+        cliVersion: compatRow.cliVersion,
+        detail: `compatibility.json's vendors["${compatRow.vendor}"] names cliVersion "${compatRow.cliVersion}", but known-bad.json lists that exact version as known-bad for "${compatRow.vendor}": ${match.reason}`,
+      });
+    }
+  }
+
+  return errors;
+}
