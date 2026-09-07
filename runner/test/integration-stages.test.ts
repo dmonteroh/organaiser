@@ -356,6 +356,70 @@ function makeAdapter(streamsDir: string): { adapter: FakeAdapter; queue: (scenar
   return { adapter, queue: (scenario) => queue.push(scenario) };
 }
 
+// ── Watchdog timeout on the cross-task-review agent stage (P9d-iii) ───────
+// `noopTerminate` above never sends a real signal, so it cannot actually end
+// a hung real process (`FakeAdapter.start` always spawns one, regardless of
+// scenario). This reuses the real SIGTERM/SIGKILL `terminate`/`isAlive`
+// helpers already written for exactly this purpose in
+// `timeout-watchdog.test.ts` and mirrored by sibling task P9d-ii's own
+// `workflow-stages.test.ts`, rather than inventing a third copy.
+
+function watchdogSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const realTerminate: TerminateFn = async ({ pgid }, gracePeriodMs) => {
+  let signalSent: NodeJS.Signals | null = null;
+  try {
+    process.kill(-pgid, "SIGTERM");
+    signalSent = "SIGTERM";
+  } catch {
+    return { signalSent: null, exitCode: null, killedProcessTree: true, timedOutWaitingForExit: false };
+  }
+  const deadline = Date.now() + gracePeriodMs;
+  while (Date.now() < deadline && isAlive(pgid)) {
+    await watchdogSleep(10);
+  }
+  if (isAlive(pgid)) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+      signalSent = "SIGKILL";
+    } catch {
+      // already gone
+    }
+    for (let i = 0; i < 20 && isAlive(pgid); i++) await watchdogSleep(10);
+  }
+  return {
+    signalSent,
+    exitCode: null,
+    killedProcessTree: !isAlive(pgid),
+    timedOutWaitingForExit: isAlive(pgid),
+  };
+};
+
+function makeHangingAdapter(streamsDir: string): { adapter: FakeAdapter; queue: (scenario: string) => void } {
+  const queue: string[] = [];
+  const adapter = new FakeAdapter({
+    terminate: realTerminate,
+    streamsDir,
+    scenarioFor: (_attempt: AttemptDescriptor) => {
+      const next = queue.shift();
+      if (!next) throw new Error("no cross-task-review scenario queued");
+      return next;
+    },
+  });
+  return { adapter, queue: (scenario) => queue.push(scenario) };
+}
+
 interface TestEnv {
   dir: string;
   db: ReturnType<typeof openStore>;
@@ -489,6 +553,58 @@ test("the happy path reaches integrated through all eight stages, and the destin
     }>;
     assert.ok(worktreeRows.length >= 2, "the task and candidate worktree rows both exist");
     assert.ok(worktreeRows.every((r) => r.cleanup_state === "cleaned"), "cleanup removed every recorded worktree");
+  });
+});
+
+test("a hung cross-task-review attempt past its spawn budget is recorded interrupted/signalled/worker-timeout, parks without classification, and still releases the destination lock", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeHangingAdapter(env.streamsDir);
+    // No trailing `{"op":"exit",...}`: the replay process sleeps well past
+    // the test's own budget and would otherwise run for a full minute.
+    fs.writeFileSync(path.join(env.streamsDir, "cross-task-review--hangs.jsonl"), `${JSON.stringify({ op: "sleep", ms: 60000 })}\n`, "utf8");
+    queue("hangs");
+
+    const outcome = await runIntegrationStages(
+      baseInput(env, adapter, { timeoutBudget: { spawnMs: 150, idleMs: 5000, wallMs: 5000 }, graceMs: 100 }),
+    );
+
+    assert.equal(outcome.outcome, "parked");
+    assert.deepEqual(
+      outcome.stages.map((s) => s.stageId),
+      ["lock-destination", "create-candidate", "replay-task", "verify-candidate", "cross-task-review"],
+    );
+    assert.equal(outcome.stages[outcome.stages.length - 1]!.verdict, "worker-timeout");
+    assert.equal(outcome.schemaInvalid, undefined);
+
+    const attemptRow = env.db
+      .prepare(
+        `SELECT id, status, interrupt_reason FROM attempts WHERE run_id = ? AND task_id = ? AND stage_id = 'cross-task-review'`,
+      )
+      .get(RUN_ID, TASK_ID) as { id: string; status: string; interrupt_reason: string | null };
+    assert.equal(attemptRow.status, "interrupted");
+    assert.equal(attemptRow.interrupt_reason, "worker-timeout");
+
+    const workerRow = env.db
+      .prepare(`SELECT pgid, termination_state FROM workers WHERE attempt_id = ?`)
+      .get(attemptRow.id) as { pgid: number; termination_state: string | null };
+    assert.equal(workerRow.termination_state, "signalled");
+    assert.equal(isAlive(workerRow.pgid), false, "the hung process must actually be dead, not merely marked so");
+
+    const timedOutEvents = env.db
+      .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.timed-out'`)
+      .all(RUN_ID) as Array<{ payload: string }>;
+    assert.equal(timedOutEvents.length, 1);
+    assert.deepEqual(JSON.parse(timedOutEvents[0]!.payload), { firedBudget: "spawn-timeout" });
+
+    const normalizedEvents = env.db
+      .prepare(`SELECT id FROM events WHERE run_id = ? AND type = 'attempt.normalized'`)
+      .all(RUN_ID);
+    assert.equal(normalizedEvents.length, 0, "no attempt.normalized event on the timeout path");
+
+    const lockRow = env.db
+      .prepare(`SELECT released_at FROM locks WHERE run_id = ? AND resource = ?`)
+      .get(RUN_ID, "refs/heads/main") as { released_at: number | null };
+    assert.ok(lockRow.released_at, "the destination lock is released on the timeout-parked exit path");
   });
 });
 

@@ -30,6 +30,7 @@ import {
   type DispatchAttemptInput,
 } from "./dispatch.ts";
 import { runVerificationBarrier, taskChecksPass } from "./barrier.ts";
+import { watchForTimeout, type WatchdogClock } from "./timeout-watchdog.ts";
 import { positiveInt, type Read } from "../cli/config.ts";
 import { removeWorkspace, type WorkspaceHandle, type WorkspaceRemovalResult } from "../git/workspace.ts";
 import {
@@ -72,6 +73,7 @@ const CROSS_TASK_REVIEW_VERDICTS = [
   "needs-info",
   "fail-with-severity: critical",
   "fail-with-severity: important",
+  "worker-timeout",
 ] as const;
 
 const CROSS_TASK_REVIEW_TRANSITIONS: Readonly<Record<string, string>> = {
@@ -79,6 +81,7 @@ const CROSS_TASK_REVIEW_TRANSITIONS: Readonly<Record<string, string>> = {
   "needs-info": "waiting-operator",
   "fail-with-severity: critical": "ready-to-implement",
   "fail-with-severity: important": "ready-to-implement",
+  "worker-timeout": "parked",
 };
 
 const CROSS_TASK_REVIEW_RETRY: IntegrationRetryPolicy = { malformedResult: 1, processFailure: 1 };
@@ -228,6 +231,12 @@ export interface IntegrationStagesInput {
   model?: string;
   configJson?: string;
   timeoutBudget?: TimeoutBudget;
+  // Grace period passed to `watchForTimeout`'s own `terminateGroups` call
+  // once a budget fires. Not imported from `control-commands.ts`'s
+  // `DEFAULT_CANCEL_GRACE_MS` (this file imports nothing from files outside
+  // its own driver+adapter+store dependencies, per the header comment
+  // above) — `DEFAULT_WATCHDOG_GRACE_MS` below mirrors it in magnitude only.
+  graceMs?: number;
   packet?: (stageId: string, role: string, priorReport: Record<string, unknown> | null) => string;
 
   // Test seam only: invoked immediately before `advance-destination` reads
@@ -238,6 +247,8 @@ export interface IntegrationStagesInput {
 }
 
 const DEFAULT_TIMEOUT_BUDGET: TimeoutBudget = { spawnMs: 30000, idleMs: 30000, wallMs: 300000 };
+// Mirrors `control-commands.ts`'s `DEFAULT_CANCEL_GRACE_MS` in magnitude only.
+const DEFAULT_WATCHDOG_GRACE_MS = 10000;
 
 export interface IntegrationStageVisit {
   stageId: string;
@@ -759,7 +770,55 @@ async function runAgentStage(stage: IntegrationStageDefinition, ctx: Integration
   }
   const { attemptId, handle } = dispatched;
 
-  await waitForExit(handle, () => renewDestinationLock(ctx));
+  // Races the watchdog against normal exit detection. `Promise.all`, not
+  // `Promise.race`: `watchForTimeout` only resolves after it has already
+  // awaited `terminateGroups` to completion (or observed a clean exit), so
+  // `Promise.all` guarantees `onPollTick` (destination-lock renewal) keeps
+  // firing at its existing interval for the whole time the watchdog is
+  // armed, and leaves no dangling un-awaited renewal loop running past this
+  // function's return. The armed budget is `dispatchInput.timeoutBudget`
+  // (the already-defaulted value used for dispatch itself), never the raw
+  // optional `input.timeoutBudget`.
+  const clock: WatchdogClock = { now: input.now };
+  const [, watchdogResult] = await Promise.all([
+    waitForExit(handle, () => renewDestinationLock(ctx)),
+    watchForTimeout(input.adapter, handle, dispatchInput.timeoutBudget, clock, input.graceMs ?? DEFAULT_WATCHDOG_GRACE_MS),
+  ]);
+
+  if (watchdogResult.outcome !== "no-timeout") {
+    // `watchForTimeout` has already run `terminateGroups` internally by the
+    // time it resolves, so no separate termination call is made here.
+    // `adapter.collect(handle)` is awaited only now, after the race has
+    // settled, and `classify()` is never called on this path: a killed,
+    // mid-work process has no valid output to interpret, and skipping it
+    // keeps this branch's evidence single-sourced on the watchdog's own
+    // fired budget.
+    const firedBudget = watchdogResult.outcome;
+    const artifacts = await input.adapter.collect(handle);
+    const outcome: AttemptOutcome = { ok: false, report: null, failureClass: "worker-timeout", reason: firedBudget };
+    const timedOutAt = input.now();
+    withTransaction(input.db, () => {
+      input.db
+        .prepare(`UPDATE workers SET termination_state = 'signalled', ended_at = ? WHERE attempt_id = ?`)
+        .run(timedOutAt, attemptId);
+      input.db
+        .prepare(
+          `UPDATE attempts SET status = 'interrupted', interrupt_reason = 'worker-timeout', exit_code = ?, ended_at = ? WHERE id = ?`,
+        )
+        .run(artifacts.exitCode, timedOutAt, attemptId);
+      appendEvent(input.db, {
+        id: randomUUID(),
+        run_id: input.runId,
+        task_id: input.taskId,
+        attempt_id: attemptId,
+        type: "attempt.timed-out",
+        payload: JSON.stringify({ firedBudget }),
+        created_at: timedOutAt,
+      });
+    });
+    ctx.lastAgentReport = null;
+    return extractVerdict(outcome);
+  }
 
   const reapedAt = input.now();
   withTransaction(input.db, () => {

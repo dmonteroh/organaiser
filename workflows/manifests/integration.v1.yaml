@@ -53,11 +53,13 @@ spec:
         - needs-info
         - "fail-with-severity: critical"
         - "fail-with-severity: important"
+        - worker-timeout
       transitions:
         pass: advance-destination
         needs-info: waiting-operator
         "fail-with-severity: critical": ready-to-implement
         "fail-with-severity: important": ready-to-implement
+        worker-timeout: parked
       retry:
         malformedResult: 1
         processFailure: 1
