@@ -61,6 +61,25 @@ function writeStubRunner(dir: string, version: string = PINNED_VERSION): void {
   );
 }
 
+function writeSelfSignalingRunner(dir: string, version: string = PINNED_VERSION): void {
+  const target = pinnedRunnerBinPath(dir, version);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, 'process.kill(process.pid, "SIGTERM");\n');
+}
+
+test("maps a pinned runner that dies by signal to the outer STATE_CONFLICT exit code", async () => {
+  await withTempWorkspace((dir) => {
+    markAsProjectRoot(dir);
+    writeSelfSignalingRunner(dir);
+
+    const result = runOrga(["run", "status", "abc"], dir);
+
+    assert.equal(result.signal, null, `outer process itself should exit normally; stderr: ${result.stderr}`);
+    assert.equal(result.status, EXIT_CODES.STATE_CONFLICT, `stderr: ${result.stderr}`);
+    assert.match(result.stderr, /orga: pinned runner terminated by signal SIGTERM/);
+  });
+});
+
 test("delegates to the pinned runner, propagating argv, the delegation marker, and the exit code", async () => {
   await withTempWorkspace((dir) => {
     markAsProjectRoot(dir);

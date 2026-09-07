@@ -20,6 +20,15 @@ test("findProjectRoot finds a directory with orga.yaml and an adjacent .orga/sta
   });
 });
 
+test("initProject alone (no separate openStore call) leaves a directory immediately discoverable by findProjectRoot", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+
+    assert.equal(fs.existsSync(path.join(dir, ".orga", "state.sqlite")), true);
+    assert.equal(findProjectRoot(dir), dir);
+  });
+});
+
 test("findProjectRoot skips a bare orga.yaml with no adjacent .orga/ (task-worktree shape)", async () => {
   await withTempWorkspace(async (dir) => {
     const outer = path.join(dir, "outer");
