@@ -41,7 +41,18 @@ export type AttemptStatus = "pending" | "running" | "completed" | "failed" | "in
 //                       clears it for retry.
 //   stale-lease:        same reconciliation path as supervisor-crash.
 //   indeterminate:      never redispatched automatically.
-//   worker-timeout:     never redispatched automatically.
+//   worker-timeout:     redispatch policy depends on the dispatch route that
+//                       recorded it. Via the development-pipeline or
+//                       integration-pipeline agent-stage dispatch
+//                       (workflow-stages.ts / integration-stages.ts), it
+//                       routes the stage verdict to `parked`, a task-board
+//                       attention state requiring operator intervention --
+//                       never redispatched automatically. Via the generic
+//                       scheduler dispatch route (scheduler.ts's
+//                       reapWorkers, used outside those two pipelines), no
+//                       task-state transition is wired, so the task is
+//                       automatically re-eligible for dispatch on the very
+//                       next tick.
 export type InterruptReason =
   | "operator-pause"
   | "operator-cancel"
