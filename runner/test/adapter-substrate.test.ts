@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createJsonlFramer } from "../src/adapters/jsonl.ts";
 import { classifyAttempt, type VendorSignals } from "../src/adapters/classify.ts";
 import { CAPTURE_CASES, loadCapture, sanitizeCaptureLine } from "../src/adapters/captures.ts";
+import {
+  DEFAULT_SECRET_ENV_NAMES,
+  DEFAULT_TOKEN_PATTERNS,
+  redactorForRoot,
+  resolveRedactionConfig,
+} from "../src/store/redact.ts";
 import {
   createVendorAdapter,
   type RecordedProcessInfo,
@@ -18,6 +27,7 @@ import {
 import type { AttemptArtifacts, AttemptDescriptor, ExecutionSurface } from "../src/adapters/adapter.ts";
 import { createReportValidator, ReportValidationError, type ReportValidator } from "../src/compile/report-validator.ts";
 import { adapterStreamCases } from "../evals/fixtures/13-adapter-stream-cases.ts";
+import { withTempWorkspace } from "./helpers/workspace.ts";
 
 const FIXTURE_DIR = fileURLToPath(new URL("./fixtures/adapter-substrate/", import.meta.url));
 
@@ -280,6 +290,96 @@ test("captures: sanitizeCaptureLine leaves nothing recoverable from a line carry
   assert.ok(!sanitized.includes("sk-abcdefgh123"), "sk- token must be redacted");
   assert.ok(!sanitized.includes("Bearer abc.def.ghi"), "Bearer token must be redacted");
   assert.ok(!sanitized.includes("ghp_1234567890abcdef"), "ghp_ token must be redacted");
+});
+
+// --- store/redact.ts --------------------------------------------------------
+
+test("redact: resolveRedactionConfig unions an orga.yaml redaction: block onto the built-in defaults", async () => {
+  await withTempWorkspace(async (dir) => {
+    fs.writeFileSync(
+      path.join(dir, "orga.yaml"),
+      [
+        "redaction:",
+        "  secretPatterns:",
+        "    - custom-token-[a-f0-9]+",
+        "  environmentVariableNames:",
+        "    - CUSTOM_SECRET_NAME",
+        "",
+      ].join("\n"),
+    );
+    const config = resolveRedactionConfig(dir, {});
+    for (const pattern of DEFAULT_TOKEN_PATTERNS) {
+      assert.ok(config.secretPatterns.includes(pattern), `default pattern retained: ${pattern}`);
+    }
+    for (const name of DEFAULT_SECRET_ENV_NAMES) {
+      assert.ok(config.environmentVariableNames.includes(name), `default env name retained: ${name}`);
+    }
+    assert.ok(config.secretPatterns.includes("custom-token-[a-f0-9]+"));
+    assert.ok(config.environmentVariableNames.includes("CUSTOM_SECRET_NAME"));
+  });
+});
+
+test("redact: resolveRedactionConfig falls back to the defaults for a missing orga.yaml", async () => {
+  await withTempWorkspace(async (dir) => {
+    const config = resolveRedactionConfig(path.join(dir, "does-not-exist"), {});
+    assert.deepEqual(config.secretPatterns, DEFAULT_TOKEN_PATTERNS);
+    assert.deepEqual(config.environmentVariableNames, DEFAULT_SECRET_ENV_NAMES);
+  });
+});
+
+test("redact: resolveRedactionConfig falls back to the defaults for an orga.yaml with no redaction: block", async () => {
+  await withTempWorkspace(async (dir) => {
+    fs.writeFileSync(path.join(dir, "orga.yaml"), "runner:\n  version: \"0.0.0\"\n");
+    const config = resolveRedactionConfig(dir, {});
+    assert.deepEqual(config.secretPatterns, DEFAULT_TOKEN_PATTERNS);
+    assert.deepEqual(config.environmentVariableNames, DEFAULT_SECRET_ENV_NAMES);
+  });
+});
+
+test("redact: resolveRedactionConfig falls back to the defaults for a malformed redaction: block and never throws", async () => {
+  await withTempWorkspace(async (dir) => {
+    fs.writeFileSync(
+      path.join(dir, "orga.yaml"),
+      ["redaction:", "  secretPatterns: not-an-array", "  environmentVariableNames: also-not-an-array", ""].join("\n"),
+    );
+    const config = resolveRedactionConfig(dir, {});
+    assert.deepEqual(config.secretPatterns, DEFAULT_TOKEN_PATTERNS);
+    assert.deepEqual(config.environmentVariableNames, DEFAULT_SECRET_ENV_NAMES);
+  });
+});
+
+test("redact: a memoized redactor applied twice to the same input produces the same output", async () => {
+  await withTempWorkspace(async (dir) => {
+    const redactor = redactorForRoot(dir, {});
+    const input = "first sk-aaaaaaaa123456 then sk-bbbbbbbb654321 in the same line";
+    const first = redactor(input);
+    const second = redactor(input);
+    assert.equal(first, second);
+    assert.ok(!first.includes("sk-aaaaaaaa123456"));
+    assert.ok(!first.includes("sk-bbbbbbbb654321"));
+    const secondCallResult = redactorForRoot(dir, {})(input);
+    assert.equal(secondCallResult, first);
+  });
+});
+
+test("redact: the sk- token pattern leaves ordinary task-id-shaped text untouched but still catches a real key", async () => {
+  await withTempWorkspace(async (dir) => {
+    const redactor = redactorForRoot(dir, {});
+    const input = "task-a and task-b claimed files while key=sk-ThisLooksLikeARealApiKey123456 leaked";
+    const sanitized = redactor(input);
+    assert.ok(sanitized.includes("task-a"), "task-a must not be mangled by the sk- pattern");
+    assert.ok(sanitized.includes("task-b"), "task-b must not be mangled by the sk- pattern");
+    assert.ok(!sanitized.includes("sk-ThisLooksLikeARealApiKey123456"), "a genuine sk- token must still be redacted");
+  });
+});
+
+test("redact: the sk- token pattern's lookbehind leaves a word like 'risk-' with a long trailing run untouched", async () => {
+  await withTempWorkspace(async (dir) => {
+    const redactor = redactorForRoot(dir, {});
+    const input = "risk-mitigation-plan-2026 shipped";
+    const sanitized = redactor(input);
+    assert.equal(sanitized, input, "'risk-mitigation-plan-2026' must not be treated as an sk- token");
+  });
 });
 
 // --- vendor-adapter.ts: type-level seam ------------------------------------

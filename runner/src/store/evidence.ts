@@ -13,6 +13,8 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 
+import { redactorForRoot } from "./redact.ts";
+
 const LEDGER_FILENAME = "ledger.json";
 
 // The accreting evidence fields. Each records the first satisfying attempt; the
@@ -192,8 +194,19 @@ export function readLedger(taskDir: string): Ledger | null {
   return JSON.parse(fs.readFileSync(file, "utf8")) as Ledger;
 }
 
+// Derives the project root from `taskDir` by taking the substring before its
+// `/.orga/` segment; a `taskDir` carrying no such segment yields `undefined`,
+// which `redactorForRoot` falls back on to the built-in pattern set.
+function projectRootFromTaskDir(taskDir: string): string | undefined {
+  const marker = "/.orga/";
+  const idx = taskDir.indexOf(marker);
+  return idx === -1 ? undefined : taskDir.slice(0, idx);
+}
+
 export function writeLedger(taskDir: string, ledger: Ledger): string {
   const file = ledgerPath(taskDir);
-  fs.writeFileSync(file, `${JSON.stringify(ledger, null, 2)}\n`, "utf8");
+  const root = projectRootFromTaskDir(taskDir);
+  const redacted = redactorForRoot(root, process.env)(JSON.stringify(ledger, null, 2));
+  fs.writeFileSync(file, `${redacted}\n`, "utf8");
   return file;
 }

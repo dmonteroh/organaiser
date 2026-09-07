@@ -66,6 +66,7 @@ import {
   interruptedSplitInsertsNoChildrenAndLeavesParentUnchanged,
 } from "../evals/fixtures/21-task-split.ts";
 import { upstreamChangeRoutesTransitiveDownstreamToEarliestStage } from "../evals/fixtures/22-artifact-staleness.ts";
+import { secretRedaction } from "../evals/fixtures/24-secret-redaction.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -124,6 +125,7 @@ test("board-parallelism: two tasks with disjoint claims both hold live attempts 
 test("task-split: a successful split inserts all children and supersedes the parent in one commit", { timeout: FIXTURE_TIMEOUT_MS }, successfulSplitInsertsChildrenAndSupersedesParent);
 test("task-split: a failing split leaves zero child rows and the parent's disposition unchanged", { timeout: FIXTURE_TIMEOUT_MS }, interruptedSplitInsertsNoChildrenAndLeavesParentUnchanged);
 test("artifact-staleness: an upstream artifact change routes transitively-dependent downstream tasks back to their earliest affected stage", { timeout: FIXTURE_TIMEOUT_MS }, upstreamChangeRoutesTransitiveDownstreamToEarliestStage);
+test("secret-redaction: a known secret seeded into a run never reaches any file under the completed run tree", { timeout: FIXTURE_TIMEOUT_MS }, secretRedaction);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

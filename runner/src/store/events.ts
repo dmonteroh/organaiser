@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { EventRow } from "./types.ts";
+import { redactorForRoot } from "./redact.ts";
 
 export class EventTransactionError extends Error {
   constructor(message: string) {
@@ -85,7 +86,8 @@ export function mirrorEvent(root: string, event: EventRow): void {
   ensureSecureDir(path.join(resolvedRoot, ".orga"), path.dirname(filePath));
 
   const fileExisted = fs.existsSync(filePath);
-  fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+  const redactedLine = redactorForRoot(resolvedRoot, process.env)(JSON.stringify(event));
+  fs.appendFileSync(filePath, `${redactedLine}\n`, { mode: 0o600 });
   if (!fileExisted) {
     fs.chmodSync(filePath, 0o600);
   }
