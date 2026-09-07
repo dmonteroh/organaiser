@@ -1,0 +1,83 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: research-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../research-workflow.md
+  entryStage: researcher-investigate
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    followUpRounds: 2
+  stages:
+    - id: researcher-investigate
+      kind: agent
+      role: researcher
+      prompt: ../subagents/researcher-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: cross-checker-review
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: cross-checker-review
+      kind: agent
+      role: cross-checker
+      prompt: ../subagents/cross-checker-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - pass
+        - fail-with-gaps
+      transitions:
+        pass: synthesize-report
+        fail-with-gaps: resolve-gaps
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: resolve-gaps
+      kind: runner
+      predicate: gaps-resolution
+      transitions:
+        re-research: researcher-followup
+        downgrade-only: synthesize-report
+        cap-reached: synthesize-report
+    - id: researcher-followup
+      kind: agent
+      role: researcher
+      prompt: ../subagents/researcher-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: cross-checker-review
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: synthesize-report
+      kind: runner
+      predicate: report-synthesized
+      transitions:
+        "true": ready
+        "false": cross-checker-review
