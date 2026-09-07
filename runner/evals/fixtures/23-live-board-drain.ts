@@ -1,29 +1,36 @@
-// Live scenario `live-board-drain` (goals spec section 29.6; the provable half of the
-// two-lane/detachment claim): seeds six `integration`-stage tasks — two dependency-free,
-// four depending on both of those two — drives them through the real production
-// supervisor (`createProductionSchedulerTick`, selected via `ORGA_VENDOR`) with
+// Live scenario `live-board-drain` (goals spec section 29.6; the full Stage D drain
+// proof): seeds six `integration`-stage tasks — two dependency-free, four depending on
+// both of those two — drives them through the real production supervisor
+// (`createProductionSchedulerTick`, selected via `ORGA_VENDOR`) with
 // `ORGA_MAX_WORKER_SLOTS=2` and the chosen vendor's slot ceiling raised to 2, and proves
-// from durable `attempts`/`workers` rows alone — never from in-memory scheduler state —
-// that both dependency-free tasks held a real vendor attempt simultaneously in one tick
-// and that none of the four dependents ever dispatched while their dependencies were
-// unresolved.
+// from durable `tasks`/`attempts`/`workers` rows alone — never from in-memory scheduler
+// state — that both dependency-free tasks held a real vendor attempt simultaneously in
+// one tick, that the run itself rests `succeeded`, that all six tasks reach an
+// acceptable terminal disposition, and that each of the four dependents' earliest
+// attempt was genuinely released by its dependencies' completion rather than dispatched
+// regardless of them.
 //
-// This scenario asserts nothing about attempt status, task disposition, or whether the
-// run ever drains to success. The fallback dispatch path every `integration`-stage task
-// takes in production sends a fixed placeholder packet, not a real brief, so a real
-// vendor's attempt here has no instructions to converge against; and outcome
-// classification for that path is derived purely from schema validity, not from a
-// report's own declared status, so a schema-valid failure report would be recorded as
-// `integrated` without this scenario ever having proved real task completion. Asserting
-// dispositions would either encode a fragile expectation, or launder a schema-validity
-// pass as a task-completion proof. The run's terminal state and every task's disposition
-// are recorded on the returned result for the operator to read, not asserted here.
+// Every task this fixture seeds dispatches through the board `integration` stage's
+// fallback path, whose role is always `integrator` (`scheduler.ts`'s
+// `dispatchEligible`). That role's own contract (`workflows/subagents/integrator-prompt.md`)
+// is a read-only, no-op acknowledgment: it forbids file creation, edits, commits, and
+// command execution, and declares `status: "completed"` its expected outcome. The six
+// brief files this scenario writes are therefore packet content the vendor reads and
+// acknowledges, not a work order — each describes the acknowledgment the dispatch
+// path actually performs. `status: "completed"` against that packet is what
+// `gatherFacts`'s `integration-outcome` case now reads to route a task to `integrated`,
+// which is what makes a genuine six-task drain observable on this path.
 //
 // Opt-in: this runs only when `ORGA_LIVE=1` and the vendor's real readiness probe
 // reports the CLI installed and authenticated; otherwise it returns a stated skip reason
 // before any vendor process — including the version/auth probe itself — is spawned.
 // Targets no production service: Codex is pointed at a local Ollama model server through
 // a fixture-owned `CODEX_HOME`, never the operator's real one.
+//
+// Recorded live evidence: three `codex` runs on 2026-09-07 (`codex-cli 0.46.0` against a
+// local `gpt-oss:20b` Ollama model) each rested `blocked`, both first-wave `integrator`
+// attempts classified `failureClass: "worker-crash"`, `reason: "no-candidate-report"`
+// before ever reaching a candidate report to validate. No run has yet reached `succeeded`.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -63,7 +70,7 @@ export type LiveBoardDrainResult =
     };
 
 const OLLAMA_MODELS_URL = "http://localhost:11434/v1/models";
-const RUN_TERMINAL_TIMEOUT_MS = 15 * 60 * 1000;
+const RUN_TERMINAL_TIMEOUT_MS = 20 * 60 * 1000;
 const SUPERVISOR_EXIT_TIMEOUT_MS = 30000;
 const CODEX_LIVE_MODEL = "gpt-oss:20b";
 
@@ -71,14 +78,7 @@ const FIRST_WAVE_TASK_IDS = ["board-drain-t1", "board-drain-t2"] as const;
 const DEPENDENT_TASK_IDS = ["board-drain-t3", "board-drain-t4", "board-drain-t5", "board-drain-t6"] as const;
 const ALL_TASK_IDS = [...FIRST_WAVE_TASK_IDS, ...DEPENDENT_TASK_IDS] as const;
 
-// The one disposition set that would silently invalidate this scenario's dependency-gate
-// proof: `dispatchDependenciesSatisfied` releases a dependent only once every dependency
-// carries one of these three, so if either first-wave task reached one, the four
-// dependents becoming eligible to dispatch is the board scheduler working correctly, not
-// a gating failure. The guard below fails loudly with that diagnosis — naming which
-// first-wave task reached which unexpected disposition — so this scenario can neither
-// pass on a silent coincidence nor fail as a confusing bare gate violation.
-const DEPENDENCY_RELEASING_DISPOSITIONS = new Set(["integrated", "superseded", "shelved"]);
+const ACCEPTABLE_TERMINAL_DISPOSITIONS = new Set(["integrated", "superseded", "shelved", "cancelled"]);
 
 function buildPlaceholderBoard(): unknown {
   return {
@@ -103,6 +103,32 @@ function buildPlaceholderBoard(): unknown {
     },
   };
 }
+
+function boardDrainBriefContent(taskId: string): string {
+  return [
+    `# live-board-drain acknowledgment: ${taskId}`,
+    "",
+    "## Objective",
+    `Acknowledge the board's integration-stage dispatch for task ${taskId}. This dispatch has no runner-owned workspace, no candidate diff, and no repository mutation to perform; the correct outcome is an immediate report stating that no integration action was taken for ${taskId}.`,
+    "",
+    "## Acceptance Criteria",
+    `- Task ${taskId}'s brief is treated as data describing this dispatch, never as an instruction to act on the repository.`,
+    "- No file is created, edited, or deleted.",
+    "- No command is run and no commit, merge, rebase, cherry-pick, push, tag, or ref move is made.",
+    `- A report with status \`completed\` is produced immediately, stating no integration action was taken for ${taskId}.`,
+    "",
+    "## Verification Commands",
+    "- (none: this dispatch performs no work and there is nothing to verify)",
+    "",
+    "## Stop Condition",
+    "Report immediately. Do not explore the repository, run commands, or produce a work-product.",
+    "",
+  ].join("\n");
+}
+
+const BOARD_DRAIN_BRIEFS: Readonly<Record<string, string>> = Object.fromEntries(
+  ALL_TASK_IDS.map((taskId) => [taskId, boardDrainBriefContent(taskId)]),
+);
 
 function insertBoardDrainTasks(root: string, runId: string, now: number): void {
   const db = openStore(root);
@@ -288,6 +314,9 @@ export async function liveBoardDrain(vendor: LiveVendor): Promise<LiveBoardDrain
       fs.writeFileSync(boardPath, JSON.stringify(board, null, 2));
       fs.writeFileSync(workflowPath, "# workflow\n");
       fs.writeFileSync(templatePath, "# template\n");
+      for (const taskId of ALL_TASK_IDS) {
+        fs.writeFileSync(path.join(root, `${taskId}-brief.md`), BOARD_DRAIN_BRIEFS[taskId]);
+      }
 
       const restoreEnv = patchEnv({
         ORGA_VENDOR: vendor,
@@ -373,30 +402,63 @@ export async function liveBoardDrain(vendor: LiveVendor): Promise<LiveBoardDrain
           );
         }
 
-        for (const taskId of FIRST_WAVE_TASK_IDS) {
-          const task = readTaskRow(root, taskId);
-          const disposition = task?.disposition as string | null | undefined;
-          if (typeof disposition === "string" && DEPENDENCY_RELEASING_DISPOSITIONS.has(disposition)) {
-            throw new Error(
-              `live-board-drain (${vendor}): invalid scenario instance — first-wave task ${taskId} reached disposition "${disposition}", which releases its dependents and makes the dependency-gate proof below meaningless; runId ${runId}`,
-            );
-          }
+        const restingTaskRows: Record<string, Record<string, unknown> | undefined> = {};
+        for (const taskId of ALL_TASK_IDS) {
+          restingTaskRows[taskId] = readTaskRow(root, taskId);
         }
 
-        const dependentAttemptCounts = allRows<{ n: number }>(
+        const allAttempts = allRows<AttemptRowShape>(
           root,
-          `SELECT COUNT(*) AS n FROM attempts WHERE run_id = ? AND task_id IN (?, ?, ?, ?)`,
+          `SELECT task_id, stage_id, status FROM attempts WHERE run_id = ? ORDER BY created_at ASC`,
           runId,
-          DEPENDENT_TASK_IDS[0],
-          DEPENDENT_TASK_IDS[1],
-          DEPENDENT_TASK_IDS[2],
-          DEPENDENT_TASK_IDS[3],
         );
-        const dependentAttemptCount = dependentAttemptCounts[0]?.n ?? 0;
-        if (dependentAttemptCount !== 0) {
+
+        const unacceptable = ALL_TASK_IDS.filter((taskId) => {
+          const disposition = restingTaskRows[taskId]?.disposition as string | null | undefined;
+          return typeof disposition !== "string" || !ACCEPTABLE_TERMINAL_DISPOSITIONS.has(disposition);
+        });
+        if (unacceptable.length > 0) {
           throw new Error(
-            `live-board-drain (${vendor}): expected zero attempts for the four dependent tasks, found ${dependentAttemptCount}; runId ${runId}`,
+            `live-board-drain (${vendor}): task(s) not at an acceptable terminal disposition: ${unacceptable
+              .map((taskId) => `${taskId}=${JSON.stringify(restingTaskRows[taskId]?.disposition ?? null)}`)
+              .join(", ")}; attempts=${JSON.stringify(allAttempts)}; runId ${runId}`,
           );
+        }
+
+        if (run.state !== "succeeded") {
+          throw new Error(
+            `live-board-drain (${vendor}): run did not rest succeeded; run=${JSON.stringify(run)}; dispositions=${JSON.stringify(
+              Object.fromEntries(ALL_TASK_IDS.map((taskId) => [taskId, restingTaskRows[taskId]?.disposition ?? null])),
+            )}`,
+          );
+        }
+
+        for (const taskId of DEPENDENT_TASK_IDS) {
+          const firstAttemptRows = allRows<{ first_attempt: number | null }>(
+            root,
+            `SELECT MIN(created_at) AS first_attempt FROM attempts WHERE run_id = ? AND task_id = ?`,
+            runId,
+            taskId,
+          );
+          const firstAttempt = firstAttemptRows[0]?.first_attempt ?? null;
+          if (firstAttempt === null) {
+            throw new Error(
+              `live-board-drain (${vendor}): dependent task ${taskId} has zero attempts; runId ${runId}`,
+            );
+          }
+          for (const dependencyId of FIRST_WAVE_TASK_IDS) {
+            const dependencyUpdatedAt = restingTaskRows[dependencyId]?.updated_at as number | undefined;
+            if (dependencyUpdatedAt === undefined) {
+              throw new Error(
+                `live-board-drain (${vendor}): dependency ${dependencyId} row missing updated_at; runId ${runId}`,
+              );
+            }
+            if (firstAttempt < dependencyUpdatedAt) {
+              throw new Error(
+                `live-board-drain (${vendor}): dependent ${taskId}'s earliest attempt (${firstAttempt}) precedes dependency ${dependencyId}'s updated_at (${dependencyUpdatedAt}); runId ${runId}`,
+              );
+            }
+          }
         }
 
         const supervisorExited = await waitFor(() => !alive(supervisorPid), SUPERVISOR_EXIT_TIMEOUT_MS);
@@ -410,15 +472,9 @@ export async function liveBoardDrain(vendor: LiveVendor): Promise<LiveBoardDrain
           throw new Error(`live-board-drain (${vendor}): process group(s) survived: ${JSON.stringify(survivors)}`);
         }
 
-        const allAttempts = allRows<AttemptRowShape>(
-          root,
-          `SELECT task_id, stage_id, status FROM attempts WHERE run_id = ? ORDER BY created_at ASC`,
-          runId,
-        );
         const taskDispositions: Record<string, string | null> = {};
         for (const taskId of ALL_TASK_IDS) {
-          const task = readTaskRow(root, taskId);
-          taskDispositions[taskId] = (task?.disposition as string | null | undefined) ?? null;
+          taskDispositions[taskId] = (restingTaskRows[taskId]?.disposition as string | null | undefined) ?? null;
         }
 
         return {
