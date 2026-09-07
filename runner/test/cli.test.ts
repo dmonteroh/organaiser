@@ -306,6 +306,154 @@ function seedRunAtState(root: string, runId: string, state: string, now: number)
   }
 }
 
+// ── run questions ────────────────────────────────────────────────────────
+
+interface QuestionSeed {
+  id: string;
+  runId: string;
+  taskId: string | null;
+  owner: string;
+  blockingScope: string;
+  prompt: string;
+  status: string;
+  createdAt: number;
+  payload: string | null;
+}
+
+function seedQuestion(root: string, seed: QuestionSeed): void {
+  const db = openStore(root);
+  try {
+    withTransaction(db, () => {
+      db.prepare(
+        `INSERT INTO questions (id, run_id, task_id, owner, blocking_scope, prompt, safe_default, answer, status, created_at, answered_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?)`,
+      ).run(seed.id, seed.runId, seed.taskId, seed.owner, seed.blockingScope, seed.prompt, seed.status, seed.createdAt, seed.payload);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+test("run questions --json emits open rows ordered by created_at, with payload parsed back to the verbatim question", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q1";
+    seedRunAtState(dir, runId, "waiting-operator", 1000);
+    const question = { id: "oq-1", taskId: "t1", owner: "operator", question: "which way?", context: "c", impact: "i", blocks: [] };
+    seedQuestion(dir, {
+      id: `${runId}#oq-1#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "which way?",
+      status: "open",
+      createdAt: 2000,
+      payload: JSON.stringify(question),
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-0#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "earlier one",
+      status: "open",
+      createdAt: 1000,
+      payload: null,
+    });
+    seedQuestion(dir, {
+      id: `${runId}#oq-2#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "already answered",
+      status: "answered",
+      createdAt: 500,
+      payload: null,
+    });
+
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "questions", runId, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.equal(io.outLines.length, 1);
+    const parsed = JSON.parse(io.outLines[0] as string) as {
+      runId: string;
+      questions: Array<{ rowId: string; taskId: string | null; blockingScope: string; status: string; question: unknown }>;
+    };
+    assert.equal(parsed.runId, runId);
+    assert.equal(parsed.questions.length, 2);
+    assert.equal(parsed.questions[0]!.rowId, `${runId}#oq-0#t1`);
+    assert.equal(parsed.questions[0]!.question, null);
+    assert.equal(parsed.questions[1]!.rowId, `${runId}#oq-1#t1`);
+    assert.equal(parsed.questions[1]!.taskId, "t1");
+    assert.equal(parsed.questions[1]!.blockingScope, "task");
+    assert.equal(parsed.questions[1]!.status, "open");
+    assert.deepEqual(parsed.questions[1]!.question, question);
+  });
+});
+
+test("run questions --json with no open questions emits an empty array and exits 0", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q2";
+    seedRunAtState(dir, runId, "running", 1000);
+
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "questions", runId, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.deepEqual(JSON.parse(io.outLines[0] as string), { runId, questions: [] });
+  });
+});
+
+test("run questions without --json prints one human line per row, or a single no-open-questions line", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-q3";
+    seedRunAtState(dir, runId, "waiting-operator", 1000);
+    seedQuestion(dir, {
+      id: `${runId}#oq-1#t1`,
+      runId,
+      taskId: "t1",
+      owner: "operator",
+      blockingScope: "task",
+      prompt: "which way?",
+      status: "open",
+      createdAt: 2000,
+      payload: null,
+    });
+
+    const withRowsIo = ioAt(dir);
+    const withRowsCode = await main(["node", "orga", "run", "questions", runId], withRowsIo);
+    assert.equal(withRowsCode, EXIT_CODES.OK);
+    assert.equal(withRowsIo.outLines.length, 1);
+    assert.throws(() => JSON.parse(withRowsIo.outLines[0] as string));
+    assert.equal(withRowsIo.outLines[0], `- ${runId}#oq-1#t1 [task] owner=operator: which way?`);
+
+    const emptyRunId = "run-q3-empty";
+    seedRunAtState(dir, emptyRunId, "running", 1000);
+    const emptyIo = ioAt(dir);
+    const emptyCode = await main(["node", "orga", "run", "questions", emptyRunId], emptyIo);
+    assert.equal(emptyCode, EXIT_CODES.OK);
+    assert.deepEqual(emptyIo.outLines, ["no open questions"]);
+  });
+});
+
+test("run questions exits 3 for an unknown run id and 2 for a missing run id", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+
+    const unknownIo = ioAt(dir);
+    const unknownCode = await main(["node", "orga", "run", "questions", "does-not-exist"], unknownIo);
+    assert.equal(unknownCode, EXIT_CODES.NOT_FOUND);
+
+    const missingIo = ioAt(dir);
+    const missingCode = await main(["node", "orga", "run", "questions"], missingIo);
+    assert.equal(missingCode, EXIT_CODES.INVALID_ARGS);
+  });
+});
+
 // Exit codes 0/2/3/14 are driven through real `orga` invocations below. The
 // five state-derived codes (10/11/12/13, plus 0's `succeeded` case) are
 // exercised through `run wait` against a directly-seeded `runs` row rather

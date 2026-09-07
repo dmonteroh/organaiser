@@ -301,8 +301,12 @@ function writeStreamFile(streamsDir: string, stageId: string, scenario: string, 
   fs.writeFileSync(filePath, `${ops.map((op) => JSON.stringify(op)).join("\n")}\n`, "utf8");
 }
 
-function implementerReport(stageId: string, status: string): Record<string, unknown> {
-  return {
+function implementerReport(
+  stageId: string,
+  status: string,
+  questions?: readonly unknown[],
+): Record<string, unknown> {
+  const report: Record<string, unknown> = {
     protocolVersion: "1",
     workflowId: "dev-workflow",
     workflowVersion: "2.0.0",
@@ -314,6 +318,8 @@ function implementerReport(stageId: string, status: string): Record<string, unkn
     status,
     summary: `implementer reported ${status}`,
   };
+  if (questions !== undefined) report.questions = questions;
+  return report;
 }
 
 function reviewerReport(stageId: string, roleId: string, verdict: string): Record<string, unknown> {
@@ -598,6 +604,53 @@ test("questions at an agent stage reaches waiting-operator", async () => {
 
     assert.equal(outcome.outcome, "waiting-operator");
     assertOneHotGates(outcome.gateRounds, "questionsLoop");
+  });
+});
+
+test("a status: questions report's questions[] is persisted to the questions table on the waiting-operator edge", async () => {
+  await withEnv(async (env) => {
+    withTransaction(env.db, () => {
+      env.db
+        .prepare(
+          `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(TASK_ID, RUN_ID, TASK_ID, "Task 1", "brief.md", "task-board", null, "[]", 0, "implementing", null, 1000, 1000);
+    });
+
+    const openQuestion = {
+      id: "oq-1",
+      taskId: TASK_ID,
+      owner: "operator",
+      question: "which direction?",
+      context: "some context",
+      impact: "some impact",
+      safeDefault: { summary: "go with A" },
+      blocks: [],
+    };
+
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeStreamFile(env.streamsDir, "implement", "with-question", [
+      { op: "output", text: "working" },
+      { op: "report", report: implementerReport("implement", "questions", [openQuestion]) },
+      { op: "exit", code: 0 },
+    ]);
+    queue("implement", "with-question");
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(outcome.outcome, "waiting-operator");
+
+    const rows = env.db
+      .prepare(`SELECT * FROM questions WHERE run_id = ?`)
+      .all(RUN_ID) as Array<{ id: string; task_id: string | null; owner: string; prompt: string; status: string; payload: string | null }>;
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.id, `${RUN_ID}#oq-1#${TASK_ID}`);
+    assert.equal(row.task_id, TASK_ID);
+    assert.equal(row.owner, "operator");
+    assert.equal(row.prompt, "which direction?");
+    assert.equal(row.status, "open");
+    assert.deepEqual(JSON.parse(row.payload as string), openQuestion);
   });
 });
 

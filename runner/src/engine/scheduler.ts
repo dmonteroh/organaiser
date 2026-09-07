@@ -40,6 +40,7 @@ import {
   type DispatchConditions,
 } from "./dispatch.ts";
 import { getPredicate } from "./predicate-registry.ts";
+import { hasOpenBlockingQuestion } from "./operator-questions.ts";
 import {
   PREDICATE_RETURN_UNIONS,
   TERMINAL_DISPOSITION_VALUES,
@@ -311,13 +312,6 @@ function dependencyDispositionsFor(db: DatabaseSync, task: TaskRow): string[] {
       | undefined;
     return row?.disposition ?? "";
   });
-}
-
-function hasOpenBlockingQuestion(db: DatabaseSync, task: TaskRow): boolean {
-  const row = db
-    .prepare(`SELECT COUNT(*) AS n FROM questions WHERE run_id = ? AND task_id = ? AND status = 'open'`)
-    .get(task.run_id, task.id) as { n: number };
-  return row.n > 0;
 }
 
 // `brief_path` presence is checked at the row level only: `TickContext`
