@@ -42,6 +42,7 @@ import { renderAnswersTemplate } from "./answers-template.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
+import { buildEvalCatalog, formatEvalCatalogTable, loadRegistry, PROFILE_IDS } from "../../evals/eval-vocabulary.ts";
 
 const SUPERVISOR_ENTRY_PATH = fileURLToPath(new URL("../engine/supervisor.ts", import.meta.url));
 const DEFAULT_TEMPLATE_PATH = fileURLToPath(
@@ -579,6 +580,26 @@ function cmdBoardRender(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
+// `--json` emits exactly one JSON value on stdout:
+//   {"suites": [{"suite": "<suite>", "profiles": {"fake": {"tier": "deterministic", "ids": [...]},
+//     "claude": {"tier": "live"|"live-exempt", "ids": [...], "liveExemptReason"?: "..."},
+//     "codex": {"tier": "live"|"live-exempt", "ids": [...], "liveExemptReason"?: "..."}}}, ...],
+//    "profiles": ["fake", "claude", "codex"]}
+// Requires no project root, store, or vendor-profile resolution — it is a pure read of the
+// code-shipped `registry.json` (goals spec section 25.1: `eval list [--json]`, no other flags).
+function cmdEvalList(parsed: ParsedArgs, io: Io): ExitCode {
+  const json = flagBool(parsed.flags, "json");
+  const catalog = buildEvalCatalog(loadRegistry());
+
+  if (json) {
+    io.stdout(JSON.stringify({ suites: catalog, profiles: PROFILE_IDS }));
+  } else {
+    for (const line of formatEvalCatalogTable(catalog)) io.stdout(line);
+  }
+
+  return EXIT_CODES.OK;
+}
+
 function cmdRunReplay(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run replay requires <run-id>");
@@ -1005,6 +1026,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "run replay": cmdRunReplay,
   "run questions": cmdRunQuestions,
   "run answer": cmdRunAnswer,
+  "eval list": cmdEvalList,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);
