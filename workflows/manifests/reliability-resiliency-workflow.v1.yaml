@@ -15,6 +15,7 @@ spec:
     neutral: []
   caps:
     revisionRounds: 2
+    finalizeAttempts: 2
   stages:
     - id: investigate
       kind: agent
@@ -88,4 +89,10 @@ spec:
       predicate: assessment-complete
       transitions:
         "true": ready
+        "false": finalize-cap-check
+    - id: finalize-cap-check
+      kind: runner
+      predicate: finalize-cap-reached
+      transitions:
+        "true": waiting-operator
         "false": investigate
