@@ -50,7 +50,9 @@
         "worker-final-is-data",
         "board-not-drained",
         "duplicate-dispatch",
-        "secret-redaction"
+        "secret-redaction",
+        "idle-timeout",
+        "productive-no-commit"
       ],
       "liveExemptReason": "the live tier invokes the installed authenticated CLIs (06-eval-suite.md:9); a scripted fake CLI cannot be a live subject"
     },
