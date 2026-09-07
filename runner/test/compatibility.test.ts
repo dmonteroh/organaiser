@@ -46,6 +46,26 @@ test("compatibility: a lastSuccessByVendor entry whose backing observation's dat
   assert.ok(errors.some((error) => error.kind === "last-success-unbacked"));
 });
 
+test("compatibility: a lastSuccessByVendor entry whose backing observation's cliVersion does not match the pinned vendor cliVersion yields a last-success-unbacked error", () => {
+  const data = baseCompatibility();
+  const scenario = data.scenarios["live-single-task"];
+  scenario.observations.push({
+    vendor: "codex",
+    date: "2026-09-05",
+    cliVersion: "0.45.0",
+    model: "gpt-oss:20b",
+    outcome: "succeeded",
+    restingRunState: "succeeded",
+    detail: "seeded for test purposes",
+    evidenceRef: "runner/evals/fixtures/14-live-single-task.ts#L20-L26",
+  });
+  scenario.lastSuccessByVendor.codex = "2026-09-05";
+
+  const errors = validateCompatibility(data);
+
+  assert.ok(errors.some((error) => error.kind === "last-success-unbacked"));
+});
+
 test("compatibility: a succeeded observation with cliVersion: null yields an observation-succeeded-missing-cli-version-or-model error", () => {
   const data = baseCompatibility();
   data.scenarios["live-single-task"].observations.push({

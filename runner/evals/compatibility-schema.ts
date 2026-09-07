@@ -103,6 +103,8 @@ export function validateCompatibility(data: unknown): CompatibilityError[] {
 
   const errors: CompatibilityError[] = [];
   const scenarios = (data as { scenarios: Record<string, RawScenario> }).scenarios;
+  const vendors =
+    (data as { vendors?: Record<string, { cliVersion?: unknown }> }).vendors ?? {};
 
   for (const [scenarioId, rawScenario] of Object.entries(scenarios)) {
     if (!LIVE_SCENARIO_IDS.has(scenarioId)) {
@@ -189,8 +191,8 @@ export function validateCompatibility(data: unknown): CompatibilityError[] {
         (observation) =>
           observation.vendor === vendor &&
           observation.date === date &&
-          isNonEmptyString(observation.cliVersion) &&
-          observation.outcome === "succeeded",
+          observation.outcome === "succeeded" &&
+          observation.cliVersion === vendors[vendor]?.cliVersion,
       );
       if (!backed) {
         errors.push({
