@@ -654,6 +654,48 @@ test("a status: questions report's questions[] is persisted to the questions tab
   });
 });
 
+test("three consecutive questions verdicts at implement exhaust questionsLoop and persist nothing", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+
+    queueImplementerScenario(env.streamsDir, "implement", "round-1", "questions");
+    queue("implement", "round-1");
+    const round1 = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(round1.outcome, "waiting-operator");
+    assert.equal(round1.gateRounds.questionsLoop, 1);
+
+    queueImplementerScenario(env.streamsDir, "implement", "round-2", "questions");
+    queue("implement", "round-2");
+    const round2 = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(round2.outcome, "waiting-operator");
+    assert.equal(round2.gateRounds.questionsLoop, 2);
+
+    const finalQuestion = {
+      id: "oq-final",
+      taskId: TASK_ID,
+      owner: "operator",
+      question: "final question?",
+      context: "some context",
+      impact: "some impact",
+      safeDefault: { summary: "go with A" },
+      blocks: [],
+    };
+    writeStreamFile(env.streamsDir, "implement", "round-3", [
+      { op: "output", text: "working" },
+      { op: "report", report: implementerReport("implement", "questions", [finalQuestion]) },
+      { op: "exit", code: 0 },
+    ]);
+    queue("implement", "round-3");
+    const round3 = await runDevelopmentStages(baseInput(env, adapter));
+
+    assert.equal(round3.outcome, "parked");
+    assert.equal(round3.gateRounds.questionsLoop, 3);
+
+    const row = env.db.prepare(`SELECT COUNT(*) AS n FROM questions WHERE run_id = ?`).get(RUN_ID) as { n: number };
+    assert.equal(row.n, 0);
+  });
+});
+
 // ── Gate-to-edge mapping, one edge at a time ──────────────────────────────
 
 test("review-spec fail -> fix-spec counts only specReviewGate", async () => {
