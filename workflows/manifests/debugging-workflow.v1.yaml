@@ -1,0 +1,71 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: debugging-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../debugging-workflow.md
+  entryStage: investigate
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - blocked
+    neutral: []
+  caps:
+    followUpRounds: 2
+  stages:
+    - id: investigate
+      kind: agent
+      role: investigator
+      prompt: ../subagents/investigator-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: check-instrumentation
+        questions: blocked
+        failed: blocked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: check-instrumentation
+      kind: runner
+      predicate: instrumentation-resolved
+      transitions:
+        "true": check-reproduction
+        "false": investigate
+    - id: check-reproduction
+      kind: runner
+      predicate: reproduction-or-causal-chain-present
+      transitions:
+        "true": verify
+        "false": blocked
+    - id: verify
+      kind: agent
+      role: verifier
+      prompt: ../subagents/verifier-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: fast-review
+      verdicts:
+        - confirmed
+        - alternative-hypothesis
+        - insufficient-evidence
+      transitions:
+        confirmed: debugging-self-check
+        alternative-hypothesis: investigate
+        insufficient-evidence: investigate
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: debugging-self-check
+      kind: runner
+      predicate: fix-task-recorded
+      transitions:
+        "true": ready
+        "false": blocked
