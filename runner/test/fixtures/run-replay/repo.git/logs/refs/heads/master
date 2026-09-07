@@ -1,0 +1,3 @@
+0000000000000000000000000000000000000000 e55b6998013e1089dc3f7a64ce865823e2d497e3 Test User <test@example.com> 1788804604 +0300	commit (initial): seed spec T-agree
+e55b6998013e1089dc3f7a64ce865823e2d497e3 5e8f327bc02fc68368a5e84bf4e0219ba2f46688 Test User <test@example.com> 1788804604 +0300	commit: implement T-agree
+5e8f327bc02fc68368a5e84bf4e0219ba2f46688 69861944e61d72815cc9f10ba7d2e75a907f33a5 Test User <test@example.com> 1788804604 +0300	commit: seed spec T-diverged
