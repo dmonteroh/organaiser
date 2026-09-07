@@ -21,7 +21,7 @@ export const DEFAULT_SECRET_ENV_NAMES: readonly string[] = [
 ];
 
 export const DEFAULT_TOKEN_PATTERNS: readonly string[] = [
-  "sk-[A-Za-z0-9_-]+",
+  "(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{10,}",
   "Bearer\\s+[A-Za-z0-9._-]+",
   "ghp_[A-Za-z0-9]+",
 ];

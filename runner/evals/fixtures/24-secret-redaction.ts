@@ -12,11 +12,6 @@
 // threads a `renderRoot` through `createSchedulerTick`). Every file found
 // anywhere under the completed run tree, with no per-file exclusions, must
 // carry no trace of the raw secret.
-//
-// The task id deliberately avoids this suite's common `task-<x>` convention:
-// that shape contains the literal substring "sk-", which the built-in
-// `sk-[A-Za-z0-9_-]+` token pattern (lifted verbatim from `captures.ts`)
-// matches and redacts on its own, corrupting an unrelated field.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -45,8 +40,8 @@ import { renderBoard } from "../../src/board/render.ts";
 const TICK_INTERVAL_MS = 100;
 const SECRET = "ORGA-FIXTURE-SECRET-7f3c9a1e";
 const SECRET_PATTERN = "ORGA-FIXTURE-SECRET-[0-9a-f]+";
-const TASK_ID = "unit-a";
-const CLAIMED_FILE = "unit-a.txt";
+const TASK_ID = "task-a";
+const CLAIMED_FILE = "task-a.txt";
 
 function appendRedactionBlock(dir: string): void {
   const orgaYamlPath = path.join(dir, "orga.yaml");
@@ -127,7 +122,7 @@ export async function secretRedaction(): Promise<void> {
 
       writeStream(streamsDir, "implement", TASK_ID, [
         outputLine(`working, internal note: ${SECRET}`),
-        writeFileLine(CLAIMED_FILE, "unit-a content\n"),
+        writeFileLine(CLAIMED_FILE, "task-a content\n"),
         reportLine({
           taskId: TASK_ID,
           stageId: "implement",

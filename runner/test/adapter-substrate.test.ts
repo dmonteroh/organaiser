@@ -362,6 +362,17 @@ test("redact: a memoized redactor applied twice to the same input produces the s
   });
 });
 
+test("redact: the sk- token pattern leaves ordinary task-id-shaped text untouched but still catches a real key", async () => {
+  await withTempWorkspace(async (dir) => {
+    const redactor = redactorForRoot(dir, {});
+    const input = "task-a and task-b claimed files while key=sk-ThisLooksLikeARealApiKey123456 leaked";
+    const sanitized = redactor(input);
+    assert.ok(sanitized.includes("task-a"), "task-a must not be mangled by the sk- pattern");
+    assert.ok(sanitized.includes("task-b"), "task-b must not be mangled by the sk- pattern");
+    assert.ok(!sanitized.includes("sk-ThisLooksLikeARealApiKey123456"), "a genuine sk- token must still be redacted");
+  });
+});
+
 // --- vendor-adapter.ts: type-level seam ------------------------------------
 
 // A stub spec instantiated purely to prove `VendorAdapterSpec`'s four members compile
