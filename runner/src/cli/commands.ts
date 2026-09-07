@@ -182,7 +182,11 @@ function emit(io: Io, json: boolean, value: unknown, humanLine: string): void {
 
 function cmdInit(parsed: ParsedArgs, io: Io): ExitCode {
   const root = resolveRoot(io);
-  const result = initProject(root);
+  const checksumRaw = flagString(parsed.flags, "runner-checksum");
+  if (checksumRaw !== undefined && !/^[0-9a-f]{64}$/.test(checksumRaw)) {
+    throw new UsageError(`invalid --runner-checksum: expected 64 lowercase hex characters, got ${checksumRaw}`);
+  }
+  const result = initProject(root, checksumRaw ?? "");
   emit(io, flagBool(parsed.flags, "json"), result, `initialized ${result.root} (created=${result.created})`);
   return EXIT_CODES.OK;
 }
@@ -977,6 +981,7 @@ const VALUE_FLAGS = new Set([
   "output",
   "file",
   "task",
+  "runner-checksum",
 ]);
 
 type CommandBody = (parsed: ParsedArgs, io: Io) => ExitCode | Promise<ExitCode>;

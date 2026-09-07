@@ -3,23 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assertNoSymlinkAncestry } from "./db.ts";
+import { ORGAW_TEMPLATE } from "./orgaw-template.ts";
 
 const ORGA_YAML = "orga.yaml";
 const ORGAW = "orgaw";
 const ORGA_DIR = ".orga";
 const GITIGNORE = ".gitignore";
-
-const ORGAW_TEMPLATE = `#!/bin/sh
-set -eu
-DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-VERSION=$(sed -n 's/^[[:space:]]*version:[[:space:]]*"\\{0,1\\}\\([^"[:space:]]*\\)"\\{0,1\\}[[:space:]]*$/\\1/p' "$DIR/${ORGA_YAML}" | head -n 1)
-RUNNER_BIN="$DIR/${ORGA_DIR}/runner/$VERSION/bin/orga.ts"
-if [ -f "$RUNNER_BIN" ]; then
-  exec node "$RUNNER_BIN" "$@"
-fi
-echo "orgaw: pinned runner not found at $RUNNER_BIN" >&2
-exit 1
-`;
 
 interface RunnerPackageInfo {
   version: string;
@@ -31,8 +20,12 @@ function readRunnerVersion(): string {
   return pkg.version;
 }
 
-function renderOrgaYaml(version: string): string {
-  return `runner:\n  version: "${version}"\n`;
+function renderOrgaYaml(version: string, url: string, checksum: string): string {
+  return `runner:\n  version: "${version}"\n  url: "${url}"\n  checksum: "${checksum}"\n`;
+}
+
+function defaultRunnerUrl(version: string): string {
+  return `https://github.com/dmonteroh/organaiser/releases/download/v${version}/organaiser-${version}.tgz`;
 }
 
 function filesystemRoot(p: string): string {
@@ -57,7 +50,7 @@ export interface InitProjectResult {
 // ignored in both .gitignore and .git/info/exclude. Writes nothing else
 // outside those paths. Re-running on an already-initialized project touches
 // neither orga.yaml nor orgaw, and every ignore-line append is idempotent.
-export function initProject(cwd: string): InitProjectResult {
+export function initProject(cwd: string, checksum: string = ""): InitProjectResult {
   const root = path.resolve(cwd);
   assertNoSymlinkAncestry(filesystemRoot(root), root);
 
@@ -68,7 +61,8 @@ export function initProject(cwd: string): InitProjectResult {
   const alreadyInitialized = fs.existsSync(orgaYamlPath);
 
   if (!alreadyInitialized) {
-    fs.writeFileSync(orgaYamlPath, renderOrgaYaml(readRunnerVersion()), { mode: 0o644 });
+    const version = readRunnerVersion();
+    fs.writeFileSync(orgaYamlPath, renderOrgaYaml(version, defaultRunnerUrl(version), checksum), { mode: 0o644 });
     fs.chmodSync(orgaYamlPath, 0o644);
   }
 

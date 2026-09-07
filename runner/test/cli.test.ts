@@ -104,6 +104,26 @@ test("orga init creates the project scaffold and exits 0", async () => {
   });
 });
 
+test("orga init --runner-checksum writes the value verbatim into orga.yaml", async () => {
+  await withTempWorkspace(async (dir) => {
+    const io = ioAt(dir);
+    const checksum = "a".repeat(64);
+    const code = await main(["node", "orga", "init", "--runner-checksum", checksum], io);
+    assert.equal(code, EXIT_CODES.OK);
+    const yaml = fs.readFileSync(path.join(dir, "orga.yaml"), "utf8");
+    assert.match(yaml, new RegExp(`checksum: "${checksum}"`));
+  });
+});
+
+test("orga init rejects a malformed --runner-checksum with 2", async () => {
+  await withTempWorkspace(async (dir) => {
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "init", "--runner-checksum", "not-a-valid-checksum"], io);
+    assert.equal(code, EXIT_CODES.INVALID_ARGS);
+    assert.ok(io.errLines.some((line) => line.includes("64 lowercase hex")));
+  });
+});
+
 test("orga --version still works", async () => {
   await withTempWorkspace(async (dir) => {
     const io = ioAt(dir);
