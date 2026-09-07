@@ -1,7 +1,7 @@
-// `DETERMINISTIC_FIXTURE_IDS` transcribes `tmp/new-workflow-version/06-eval-suite.md`
-// section 3 (lines 23-66); `LIVE_SCENARIO_IDS` transcribes its section 5 (line 74).
-// A new fixture or live scenario is added to the matching set in the same
-// change that adds the fixture.
+// `DETERMINISTIC_FIXTURE_IDS` and `LIVE_SCENARIO_IDS` are the canonical
+// deterministic-fixture and live-scenario id lists. A new fixture or live
+// scenario id is added to the matching set in the same change that adds the
+// fixture or scenario.
 
 export class EvalRegistryError extends Error {
   constructor(message: string) {

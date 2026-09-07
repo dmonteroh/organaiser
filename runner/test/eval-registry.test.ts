@@ -79,6 +79,31 @@ test("eval-registry: a unit with neither a live entry nor a liveExemptReason yie
   assert.equal(errors[0]?.unit, "store");
 });
 
+test("eval-registry: a unit with no deterministic entries yields exactly one deterministic-missing error", () => {
+  const registry = baseRegistry();
+  const store = registry.units.store as { deterministic: string[] };
+  store.deterministic = [];
+
+  const errors = validateRegistry(registry, readAvailableTestIds());
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.kind, "deterministic-missing");
+  assert.equal(errors[0]?.unit, "store");
+});
+
+test("eval-registry: a unit carrying both a live entry and a liveExemptReason yields exactly one live-missing error", () => {
+  const registry = baseRegistry();
+  const store = registry.units.store as { live?: string[]; liveExemptReason?: string };
+  store.live = ["live-single-task"];
+  store.liveExemptReason = "covered elsewhere";
+
+  const errors = validateRegistry(registry, readAvailableTestIds());
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.kind, "live-missing");
+  assert.equal(errors[0]?.unit, "store");
+});
+
 test("eval-registry: an extra units.evaluator key yields exactly one unit-unknown error", () => {
   const registry = baseRegistry();
   registry.units.evaluator = {
