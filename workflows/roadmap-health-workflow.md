@@ -2,9 +2,11 @@
 id: roadmap-health-workflow
 name: Roadmap Health Check Workflow
 triggers: [roadmap-review, milestone-check, progress-assessment, course-correction]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/roadmap-health-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # Roadmap Health Check Workflow Contract
@@ -82,11 +84,13 @@ The progress-assessor evaluates the roadmap on these axes:
    - Rejected recommendations with rationale
 9. Mark task `ready`.
 
-### Post-all-tasks
+### Health check reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple health checks: synthesize into an overall project health summary. If two health checks produce contradictory recommendations for the same item, escalate both to the operator; the affected tasks stay `ready` until the operator resolves the contradiction.
 2. Verify all recommended actions have been routed to the appropriate workflow or recorded for the operator.
-3. Mark all `ready` tasks `integrated`.
+3. Report each health check's final classification and routing to the board workflow; board state changes are proposals, not direct edits made by this workflow.
 
 ### Rules
 
