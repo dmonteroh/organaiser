@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import { openStore, withTransaction } from "../../src/store/db.ts";
 
@@ -95,15 +96,233 @@ export async function withFixtureWorkspace<T>(fn: (dir: string) => Promise<T>): 
   const root = process.env.ORGA_TEST_WORKSPACE ?? os.tmpdir();
   fs.mkdirSync(root, { recursive: true });
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(root, "orga-fixture-")));
+  recordCaptureWorkspace(dir);
   try {
     return await fn(dir);
   } finally {
+    try {
+      captureBeforeTeardown(dir, captureContext.getStore()?.runId);
+    } catch {
+      // capture is best-effort and must never mask the fixture's own outcome
+    }
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {
       // best-effort
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Eval capture-context side channel (P9f-b).
+//
+// A purely additive `AsyncLocalStorage`-backed side channel that lets a caller
+// *outside* the awaited fixture call (the eval cell-runner, `evals/cell-runner.ts`)
+// observe facts a fixture's own `(): Promise<void>` signature never exposes: the
+// workspace root `withFixtureWorkspace` creates and deletes internally, and the run id
+// `startFixtureRun`/`startGitFixtureRun` obtain from `startRun`. None of the ~40
+// existing fixtures, and nothing in `test/fixtures.test.ts`, ever opens a context via
+// `captureContext.run(...)`, so `recordCaptureWorkspace`/`recordCaptureRunId`/
+// `captureBeforeTeardown` are no-ops for every existing call site: `getStore()` returns
+// `undefined` and each function returns immediately. This is the one change to this
+// file P9f-b's brief calls for; see that task's Implementation Constraint C2.
+export interface CaptureBoardSnapshot {
+  run: Record<string, unknown> | undefined;
+  tasks: Record<string, unknown>[];
+}
+
+export interface CaptureGitBoardSnapshot {
+  gitHead: string | null;
+  gitStatus: string | null;
+  board: CaptureBoardSnapshot | null;
+  recordedPgids: number[];
+  events: Record<string, unknown>[];
+}
+
+export interface CaptureStreamFile {
+  name: string;
+  text: string;
+}
+
+export interface CaptureContextStore {
+  workspaceDir?: string;
+  runId?: string;
+  before?: CaptureGitBoardSnapshot;
+  after?: CaptureGitBoardSnapshot;
+  /**
+   * `git diff <before.gitHead>`, computed inside `captureBeforeTeardown` while `dir`
+   * still exists (before the adjacent `fs.rmSync` in `withFixtureWorkspace`'s
+   * `finally`) — see that function's own comment for why this cannot be deferred to
+   * `evals/cell-runner.ts`. `undefined` until `captureBeforeTeardown` runs; `null`
+   * thereafter when there was no "before" head or the `git diff` invocation itself
+   * failed.
+   */
+  gitDiff?: string | null;
+  streamFiles?: CaptureStreamFile[];
+  workerReports?: unknown[];
+}
+
+/**
+ * Exported so `evals/cell-runner.ts` can open a context with
+ * `captureContext.run({}, () => fixtureFn())` around a Single/Sequence invocation and
+ * read back the populated store once the call settles. Left un-opened (the default,
+ * every existing call site's state) for Parametrized-factory/Whole-test-file/Live cells,
+ * whose capture scope is negative per that task's C3/C9 — the three hook functions below
+ * simply do nothing in that case, not because the engine special-cases them, but because
+ * `getStore()` finds nothing to record into.
+ */
+export const captureContext = new AsyncLocalStorage<CaptureContextStore>();
+
+function tryGitCapture(dir: string, args: readonly string[]): string | null {
+  try {
+    return execFileSync("git", args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// Must run while `dir` still exists — see `CaptureContextStore.gitDiff`'s doc comment.
+// A prior version of this computation lived in `evals/cell-runner.ts`, run against
+// `ctx.workspaceDir` *after* `runSingleInvocation`/`runSequenceInvocation` returned;
+// by then `withFixtureWorkspace`'s `finally` block (this same function's caller,
+// `captureBeforeTeardown`, plus the adjacent `fs.rmSync`) had already deleted `dir`, so
+// `git diff` always ran against a nonexistent cwd, threw ENOENT, and was silently
+// swallowed by the `catch` below — `git.diff` on every `CapturedCellRecord` was `null`,
+// even for fixtures (e.g. `secret-redaction`) that make real commits. Moving the call
+// here, before `fs.rmSync`, is the fix.
+function gitDiffSince(dir: string, headBefore: string | null): string | null {
+  if (headBefore === null) return null;
+  try {
+    return execFileSync("git", ["diff", headBefore], { cwd: dir, encoding: "utf8" });
+  } catch {
+    return null;
+  }
+}
+
+function snapshotGitAndBoard(dir: string, runId: string | undefined): CaptureGitBoardSnapshot {
+  const isGitRepo = fs.existsSync(path.join(dir, ".git"));
+  const gitHead = isGitRepo ? tryGitCapture(dir, ["rev-parse", "HEAD"]) : null;
+  const gitStatus = isGitRepo ? tryGitCapture(dir, ["status", "--porcelain"]) : null;
+
+  let board: CaptureBoardSnapshot | null = null;
+  let recordedPgids: number[] = [];
+  let events: Record<string, unknown>[] = [];
+  if (runId !== undefined) {
+    try {
+      const run = readRunRow(dir, runId);
+      const tasks = allRows<Record<string, unknown>>(
+        dir,
+        "SELECT * FROM tasks WHERE run_id = ? ORDER BY id ASC",
+        runId,
+      );
+      board = { run, tasks };
+    } catch {
+      board = null;
+    }
+    try {
+      recordedPgids = recordedPgidsForRun(dir, runId);
+    } catch {
+      recordedPgids = [];
+    }
+    try {
+      events = allRows<Record<string, unknown>>(
+        dir,
+        "SELECT * FROM events WHERE run_id = ? ORDER BY seq ASC",
+        runId,
+      );
+    } catch {
+      events = [];
+    }
+  }
+
+  return { gitHead, gitStatus, board, recordedPgids, events };
+}
+
+function collectStreamFiles(dir: string): CaptureStreamFile[] {
+  const streamsDir = path.join(dir, "streams");
+  if (!fs.existsSync(streamsDir)) return [];
+  const files: CaptureStreamFile[] = [];
+  for (const name of fs.readdirSync(streamsDir)) {
+    if (!name.endsWith(".jsonl")) continue;
+    try {
+      files.push({ name, text: fs.readFileSync(path.join(streamsDir, name), "utf8") });
+    } catch {
+      // best-effort: an unreadable stream file is dropped, not fatal
+    }
+  }
+  return files;
+}
+
+// The scripted wire format `reportLine` (below) writes is the only place a fixture's
+// "worker report" content exists anywhere durably reachable post hoc — production
+// itself never persists a validated report to disk or a store column (`attempts` has a
+// `report_ref` column, but nothing in `src/engine/scheduler.ts` ever writes it). Reading
+// it back out of the same scripted files this fixture suite already writes is not new
+// capture logic; it is the fixture's own known input replayed back.
+function extractWorkerReports(files: readonly CaptureStreamFile[]): unknown[] {
+  const reports: unknown[] = [];
+  for (const file of files) {
+    for (const line of file.text.split("\n")) {
+      if (line.trim().length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (
+        parsed !== null &&
+        typeof parsed === "object" &&
+        (parsed as { op?: unknown }).op === "report" &&
+        "report" in (parsed as Record<string, unknown>)
+      ) {
+        reports.push((parsed as { report: unknown }).report);
+      }
+    }
+  }
+  return reports;
+}
+
+/** Called inside `withFixtureWorkspace` immediately after `mkdtempSync`/`realpathSync`. */
+export function recordCaptureWorkspace(dir: string): void {
+  const store = captureContext.getStore();
+  if (!store) return;
+  store.workspaceDir = dir;
+}
+
+/**
+ * Called inside `startFixtureRun` immediately after `startRun` returns.
+ * `startGitFixtureRun` needs no separate call: it delegates to `startFixtureRun`, which
+ * already fires this hook (see that function below).
+ */
+export function recordCaptureRunId(runId: string): void {
+  const store = captureContext.getStore();
+  if (!store) return;
+  store.runId = runId;
+  // The earliest point at which a meaningful "before" snapshot exists: the run row is
+  // committed and the board/workflow/template files are on disk, but no task has been
+  // seeded or dispatched yet (`startFixtureRun` never inserts `tasks` rows itself).
+  if (store.workspaceDir !== undefined && store.before === undefined) {
+    store.before = snapshotGitAndBoard(store.workspaceDir, runId);
+  }
+}
+
+/**
+ * Called inside `withFixtureWorkspace`'s `finally`, immediately before the existing
+ * `fs.rmSync` — the one point at which the workspace directory is guaranteed to still
+ * exist and the run id (if any) is already known via the store `recordCaptureRunId`
+ * populated. Snapshots git/board "after" state, the `git diff` since the "before" head
+ * (see `CaptureContextStore.gitDiff`), and the fixture's own scripted stream files (the
+ * sanctioned source for vendor stdout and worker-report evidence per that task's C2/C3)
+ * while all three are still readable/computable.
+ */
+export function captureBeforeTeardown(dir: string, runId: string | undefined): void {
+  const store = captureContext.getStore();
+  if (!store) return;
+  store.after = snapshotGitAndBoard(dir, runId ?? store.runId);
+  store.gitDiff = gitDiffSince(dir, store.before?.gitHead ?? null);
+  store.streamFiles = collectStreamFiles(dir);
+  store.workerReports = extractWorkerReports(store.streamFiles);
 }
 
 export interface FixtureTaskSpec {
@@ -165,6 +384,7 @@ export function startFixtureRun(dir: string, tasks: readonly FixtureTaskSpec[]):
   const board = boardWithTasks(tasks);
   const result = startRun({ root: dir, boardPath, board, workflowPath, templatePath });
   if (result.supervisorPid === null) throw new Error("startFixtureRun: spawn defaults to true, but no pid came back");
+  recordCaptureRunId(result.runId);
   try {
     process.kill(-result.supervisorPid, "SIGKILL");
   } catch {
