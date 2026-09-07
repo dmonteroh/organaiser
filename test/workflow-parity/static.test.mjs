@@ -161,19 +161,26 @@ test("every Template: path resolves and role headings are unique within each wor
       `${file} has duplicate role headings paired with a Template line: ${headings.join(", ")}`,
     );
     if (frontmatterByFile.get(file).runnerMode === "supported") {
-      for (const heading of headings) {
-        supportedHeadingEntries.push({ file, heading });
+      for (const role of roles) {
+        supportedHeadingEntries.push({ file, heading: role.heading, template: role.template });
       }
     }
   }
-  const supportedHeadings = supportedHeadingEntries.map((entry) => entry.heading);
-  assert.equal(
-    new Set(supportedHeadings).size,
-    supportedHeadings.length,
-    `role headings collide across the runnerMode: supported workflows: ${supportedHeadingEntries
-      .map((entry) => `${entry.file}:${entry.heading}`)
-      .join(", ")}`,
-  );
+  const entriesByHeading = new Map();
+  for (const entry of supportedHeadingEntries) {
+    if (!entriesByHeading.has(entry.heading)) entriesByHeading.set(entry.heading, []);
+    entriesByHeading.get(entry.heading).push(entry);
+  }
+  for (const [heading, entries] of entriesByHeading) {
+    const templates = new Set(entries.map((entry) => entry.template));
+    assert.equal(
+      templates.size,
+      1,
+      `role heading "${heading}" repeats across the runnerMode: supported workflows with differing Template paths: ${entries
+        .map((entry) => `${entry.file}:${entry.template}`)
+        .join(", ")}`,
+    );
+  }
 });
 
 test("workflows/conventions.md Workflow ids register matches the ids parsed from workflow frontmatter", () => {
@@ -412,6 +419,47 @@ function readRoleIdRegister(conventionsText) {
   return ids;
 }
 
+function readVerdictRegister(conventionsText) {
+  const lines = conventionsText.split("\n");
+  const start = lines.findIndex((line) => line.trim() === "### Verdict enums");
+  const end = lines.findIndex(
+    (line, index) => index > start && /^#{1,6}\s/.test(line),
+  );
+  const section = lines.slice(start + 1, end === -1 ? lines.length : end);
+  const register = new Map();
+  for (const line of section) {
+    const headMatch = line.match(/^- `([^`]+)`: (.*)$/);
+    if (!headMatch) continue;
+    const role = headMatch[1];
+    let rest = headMatch[2];
+    const values = [];
+    while (true) {
+      const valueMatch = rest.match(/^`([^`]+)`(, |\.)/);
+      if (!valueMatch) break;
+      values.push(valueMatch[1]);
+      rest = rest.slice(valueMatch[0].length);
+      if (valueMatch[2] === ".") break;
+    }
+    if (values.length === 1 && values[0] === "verdicts: none") {
+      register.set(role, "none");
+    } else {
+      register.set(role, values);
+    }
+  }
+  return register;
+}
+
+function verdictDefsKey(role) {
+  const parts = role.split("-");
+  return (
+    parts
+      .map((part, index) =>
+        index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1),
+      )
+      .join("") + "Verdict"
+  );
+}
+
 function extractVerdictRuleSection(text) {
   const lines = text.split("\n");
   const headingStart = lines.findIndex((line) => /^#{1,6}\s+Verdict Rule/.test(line));
@@ -453,16 +501,37 @@ function appearsInVerdictSection(value, section) {
   return section.includes(value);
 }
 
-const ROLE_VERDICT_DEFS = {
-  analyst: "analystVerdict",
-  architect: "architectVerdict",
-  "problem-definer": "problemDefinerVerdict",
-  "spec-challenger": "specChallengerVerdict",
-  "spec-reviewer": "specReviewerVerdict",
-  "code-quality-reviewer": "codeQualityReviewerVerdict",
-};
+function verdictRegisterCoversSchemaEnum(registerValues, schemaValues) {
+  const remaining = [...schemaValues];
+  for (const registerValue of registerValues) {
+    const paramIdx = registerValue.indexOf(": ");
+    if (paramIdx !== -1) {
+      const prefix = registerValue.slice(0, paramIdx + 2);
+      const matches = remaining.filter((value) => value.startsWith(prefix));
+      if (matches.length === 0) return false;
+      for (const match of matches) {
+        remaining.splice(remaining.indexOf(match), 1);
+      }
+    } else {
+      const index = remaining.indexOf(registerValue);
+      if (index === -1) return false;
+      remaining.splice(index, 1);
+    }
+  }
+  return remaining.length === 0;
+}
 
 const PENDING_POLICY_TARGETS = {};
+
+const RUNNER_ONLY_MANIFESTS = ["integration.v1.yaml"];
+
+const expectedManifestFiles = new Set(RUNNER_ONLY_MANIFESTS);
+for (const file of workflowFiles) {
+  const fields = frontmatterByFile.get(file);
+  if (fields.runnerMode === "supported") {
+    expectedManifestFiles.add(fields.runnerManifest.replace(/^manifests\//, ""));
+  }
+}
 
 const manifestFiles = fs
   .readdirSync(manifestsDir)
@@ -473,12 +542,21 @@ const manifestsByFile = new Map(
   manifestFiles.map((file) => [file, readManifest(path.join(manifestsDir, file))]),
 );
 
-test("all five manifests parse under the restricted dialect and declare the required top-level shape", () => {
-  assert.equal(
-    manifestFiles.length,
-    5,
-    `expected 5 manifest files under workflows/manifests/, found ${manifestFiles.length}: ${manifestFiles.join(", ")}`,
+test("manifest files under workflows/manifests/ equal the union of runnerMode: supported workflows' runnerManifest plus RUNNER_ONLY_MANIFESTS, and every declared runnerManifest resolves to a file that exists, and each manifest declares the required top-level shape", () => {
+  assert.deepEqual(
+    manifestFiles,
+    [...expectedManifestFiles].sort(),
+    `workflows/manifests/ must contain exactly the expected manifest set (runnerMode: supported workflows' runnerManifest values plus RUNNER_ONLY_MANIFESTS): ${[...expectedManifestFiles].sort().join(", ")}`,
   );
+  for (const file of workflowFiles) {
+    const fields = frontmatterByFile.get(file);
+    if (fields.runnerMode !== "supported") continue;
+    const bareName = fields.runnerManifest.replace(/^manifests\//, "");
+    assert.ok(
+      manifestFiles.includes(bareName),
+      `${file} declares runnerManifest "${fields.runnerManifest}", which does not resolve to a file under workflows/manifests/`,
+    );
+  }
   for (const file of manifestFiles) {
     const manifest = manifestsByFile.get(file);
     assert.ok(manifest.apiVersion, `${file} is missing apiVersion`);
@@ -558,11 +636,13 @@ test("every manifest's entryStage names a declared stage, and every stage transi
   }
 });
 
-test("agent-stage verdicts equal the role's schema $defs enum (implementer equals the status enum), every verdict appears in the role template's Verdict Rule section, and every transition key is a declared verdict", () => {
+test("agent-stage verdicts equal the role's schema $defs enum (a role with verdicts: none in the conventions.md Verdict enums register equals the status enum), every verdict appears in the role template's Verdict Rule section, and every transition key is a declared verdict", () => {
   const resultSchema = JSON.parse(
     fs.readFileSync(path.join(schemasDir, "stage-result.schema.json"), "utf8"),
   );
   const statusEnum = resultSchema.properties.status.enum;
+  const conventionsText = fs.readFileSync(conventionsPath, "utf8");
+  const verdictRegister = readVerdictRegister(conventionsText);
 
   const verdictSectionCache = new Map();
   const getVerdictSection = (role) => {
@@ -583,19 +663,28 @@ test("agent-stage verdicts equal the role's schema $defs enum (implementer equal
     const manifest = manifestsByFile.get(file);
     for (const stage of manifest.spec.stages) {
       if (stage.kind !== "agent") continue;
-      if (stage.role === "implementer") {
+      const verdictEntry = verdictRegister.get(stage.role);
+      assert.ok(
+        verdictEntry !== undefined,
+        `${file} stage "${stage.id}" has role "${stage.role}", which has no entry in conventions.md's Verdict enums register`,
+      );
+      if (verdictEntry === "none") {
         assert.deepEqual(
           stage.verdicts,
           statusEnum,
-          `${file} stage "${stage.id}" (role implementer) verdicts do not equal the stage-result schema's status enum`,
+          `${file} stage "${stage.id}" (role ${stage.role}, "verdicts: none" in the conventions.md Verdict enums register) verdicts do not equal the stage-result schema's status enum`,
         );
       } else {
-        const defsKey = ROLE_VERDICT_DEFS[stage.role];
+        const defsKey = verdictDefsKey(stage.role);
         assert.ok(
-          defsKey,
-          `${file} stage "${stage.id}" has role "${stage.role}", which has no known stage-result schema verdict enum`,
+          resultSchema.$defs[defsKey],
+          `${file} stage "${stage.id}" has role "${stage.role}", whose derived $defs key "${defsKey}" is not in stage-result.schema.json's $defs`,
         );
         const schemaEnum = resultSchema.$defs[defsKey].enum;
+        assert.ok(
+          verdictRegisterCoversSchemaEnum(verdictEntry, schemaEnum),
+          `${file} stage "${stage.id}": conventions.md's Verdict enums register entry for role "${stage.role}" (${verdictEntry.join(", ")}) does not cover $defs.${defsKey}.enum (${schemaEnum.join(", ")})`,
+        );
         assert.deepEqual(
           stage.verdicts,
           schemaEnum,

@@ -60,6 +60,10 @@ Seven role ids, one per runnable template:
 
 Role ids are scoped to these seven runnable templates. `decision-workflow.md` uses the bare id `architect` for an orchestrator-side role with no `Template:` line; this is outside the register's uniqueness scope while `decision-workflow` has no manifest, and any later manifest for it must qualify the id.
 
+A role heading may repeat across `runnerMode: supported` workflows when every occurrence names the identical `Template:` path; that is role reuse, not a collision. A repeated heading whose occurrences name differing `Template:` paths is a defect.
+
+A role may hold a Role ids register entry while its owning workflow is `runnerMode: unsupported`; such a role requires no golden packet and no manifest stage until its owning workflow becomes `runnerMode: supported`.
+
 The `integrator` role is deliberately outside this register. `runner/src/engine/scheduler.ts:770` synthesizes the string `"integrator"` for the board's fallback `integration` dispatch, and its template is `subagents/integrator-prompt.md`. No manifest stage declares the role, so it has no owning workflow `Roles` entry, no golden packet, and no manifest stage for the golden-packet parity suite to resolve. Registering it would fail `test/workflow-parity/golden.test.mjs`. Its `Runner Protocol` section is copied from `code-quality-reviewer-prompt.md` with a reworded role-identifier line, so it is also outside the `Runner Protocol` parity family below.
 
 ### Verdict enums
