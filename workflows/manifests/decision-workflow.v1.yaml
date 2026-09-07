@@ -1,0 +1,164 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: decision-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../decision-workflow.md
+  entryStage: researcher-investigate
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    evidenceRounds: 1
+    decisionLoops: 2
+  stages:
+    - id: researcher-investigate
+      kind: agent
+      role: researcher
+      prompt: ../subagents/researcher-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: evaluator-evaluate
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: evaluator-evaluate
+      kind: agent
+      role: evaluator
+      prompt: ../subagents/evaluator-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - sufficient
+        - insufficient evidence
+      transitions:
+        sufficient: architect-select
+        insufficient evidence: researcher-followup
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: researcher-followup
+      kind: agent
+      role: researcher
+      prompt: ../subagents/researcher-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: evaluator-reevaluate
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: evaluator-reevaluate
+      kind: agent
+      role: evaluator
+      prompt: ../subagents/evaluator-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - sufficient
+        - insufficient evidence
+      transitions:
+        sufficient: architect-select
+        insufficient evidence: architect-select
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: architect-select
+      kind: agent
+      role: decision-architect
+      prompt: ../subagents/decision-architect-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: devils-advocate-challenge
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: devils-advocate-challenge
+      kind: agent
+      role: devils-advocate
+      prompt: ../subagents/devils-advocate-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - pass
+        - concerns-raised
+      transitions:
+        pass: architect-produce-adr
+        concerns-raised: architect-respond
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: architect-respond
+      kind: agent
+      role: decision-architect
+      prompt: ../subagents/decision-architect-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: route-option-change
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: route-option-change
+      kind: runner
+      predicate: preferred-option-route
+      transitions:
+        changed-under-cap: devils-advocate-challenge
+        changed-cap-reached: waiting-operator
+        unchanged: architect-produce-adr
+    - id: architect-produce-adr
+      kind: agent
+      role: decision-architect
+      prompt: ../subagents/decision-architect-prompt.md
+      authority: task-document
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: ready
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1

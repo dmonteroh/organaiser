@@ -2,9 +2,11 @@
 id: decision-workflow
 name: ADR / Decision Workflow
 triggers: [decision, architecture-decision, option-evaluation, technology-selection]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/decision-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # ADR / Decision Workflow Contract
@@ -15,9 +17,17 @@ This workflow produces a decision artifact (ADR), not code. It may reference the
 
 ## Roles
 
-### architect (orchestrator)
+### decision-architect
 
-The orchestrator acts as the architect. It defines the decision question and drivers, dispatches the subagents, reviews the tradeoff matrix, selects the preferred option with a written rationale, responds to devil's advocate concerns, and produces the ADR. Subagents inform; the architect decides. Escalate to the operator only where the Sequence says so.
+- Template: `subagents/decision-architect-prompt.md`
+- Mode: task-document authority. Reviews the tradeoff matrix, selects the preferred option with a written rationale, responds to devil's advocate concerns, and produces the ADR.
+- Gate type: none (producer role; `status` carries the outcome, per `conventions.md:106`)
+- Constraints:
+  - Must reject each alternative with a stated reason, not merely name a winner
+  - Must accept or rebut every critical/important devil's-advocate concern; minor concerns are recorded, not adjudicated
+  - Must produce the ADR in MADR format via the adr-madr-system skill and index it
+  - Escalates to the operator only where the Sequence says so (a product or business tradeoff it cannot weigh from evidence)
+- In manual mode, the orchestrator may embody this role directly rather than dispatching a subagent. In runner mode, the runner dispatches this subagent at each of its three Sequence-step positions (5, 7, 9).
 
 ### researcher
 
@@ -79,7 +89,7 @@ Workflows may add domain-specific drivers. The evaluator must cover at least the
 3. Dispatch `evaluator` per its template with the research findings, the candidate options, and the weighted decision drivers.
 4. If the evaluator returns `insufficient` evidence:
    - Re-dispatch `researcher` in follow-up mode with the evaluator's re-research items as the gap list, merge the returned delta into the findings, then re-dispatch `evaluator` as a re-evaluation pass with the merged findings and its prior matrix.
-   - Maximum evidence rounds: 1 (a round is one researcher follow-up plus one evaluator re-evaluation). If evidence is still `insufficient` after the round, proceed with the `unknown` ratings standing; the architect must name each remaining gap in the rationale or escalate the decision to the operator.
+   - Maximum evidence rounds: 1 (manifest authority: manifests/decision-workflow.v1.yaml's caps.evidenceRounds) (a round is one researcher follow-up plus one evaluator re-evaluation). If evidence is still `insufficient` after the round, proceed with the `unknown` ratings standing; the architect must name each remaining gap in the rationale or escalate the decision to the operator.
 5. Architect reviews the tradeoff matrix and selects a preferred option with a written rationale, including reasons for rejecting each alternative.
 6. Dispatch `devils-advocate` per its template against the preferred option, passing the rationale, the tradeoff matrix, the research findings, and the rejected options. On a repeat pass, also pass all prior devil's advocate reports.
 7. If devils-advocate returns `concerns-raised`:
@@ -91,18 +101,20 @@ Workflows may add domain-specific drivers. The evaluator must cover at least the
 9. Produce the ADR artifact using the adr-madr-system skill format and index it in the ADR README. The ADR records the drivers, considered options, decision outcome, concern responses, and remaining risks.
 10. Mark task `ready`.
 
-### Post-all-tasks
+### Decision queue reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple decisions were made: check for contradictions between decisions. If found, surface to the operator with both ADRs; the affected tasks stay `ready` (not `integrated`) until the operator resolves which decision stands or one ADR is superseded.
 2. Verify no decision undermines a prior accepted ADR without explicitly superseding it. If one does, add the supersedes relation per the adr-madr-system skill; if the conflict is substantive rather than formal, escalate to the operator as in step 1.
-3. Mark all `ready` tasks `integrated`.
+3. Report each decision's final state to the board workflow.
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - The evaluator must never recommend. Recommendations without adversarial review create confirmation bias.
 - The devils-advocate must argue with evidence. Rhetorical objections without citations are invalid.
-- Maximum decision loops (step 7 back to step 6): 2. If the preferred option changes twice, escalate the full decision context (matrix, rationale history, all devil's advocate reports) to the operator. The operator's choice becomes the decision; record their rationale and the disposition of open concerns in the ADR and resume at step 9 without a further devil's advocate pass.
+- Maximum decision loops (step 7 back to step 6): 2 (manifest authority: manifests/decision-workflow.v1.yaml's caps.decisionLoops). If the preferred option changes twice, escalate the full decision context (matrix, rationale history, all devil's advocate reports) to the operator. The operator's choice becomes the decision; record their rationale and the disposition of open concerns in the ADR and resume at step 9 without a further devil's advocate pass.
 - The architect makes the decision, not the evaluator or the devils-advocate. Roles inform; the architect decides.
 - The ADR is immutable once accepted. Future changes supersede, not edit.
 
@@ -168,7 +180,7 @@ If check 1 fails, re-dispatch the researcher in follow-up mode on the under-rese
 
 ## Skill Dependencies
 
-- **adr-madr-system**: ADR document formatting, indexing, and supersedes semantics. Used at step 9 and in post-all-tasks supersede checks.
+- **adr-madr-system**: ADR document formatting, indexing, and supersedes semantics. Used at step 9 and in the decision queue reconciliation's supersede checks.
 - **brainstorming**: When the decision question itself is unclear or candidate options need discovery before evaluation.
 
 These are references, not injected context. Roles load them as needed.
