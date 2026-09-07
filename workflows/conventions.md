@@ -57,12 +57,35 @@ Seven role ids, one per runnable template:
 - `architect`, template `subagents/architect-prompt.md`, owned by `task-refinement-workflow`.
 - `problem-definer`, template `subagents/problem-definer-prompt.md`, owned by `product-spec-workflow`.
 - `spec-challenger`, template `subagents/spec-challenger-prompt.md`, owned by `product-spec-workflow`.
+- `investigator`, template `subagents/investigator-prompt.md`, owned by `debugging-workflow`.
+- `verifier`, template `subagents/verifier-prompt.md`, owned by `debugging-workflow`.
+- `decision-architect`, template `subagents/decision-architect-prompt.md`, owned by `decision-workflow`.
+- `evaluator`, template `subagents/evaluator-prompt.md`, owned by `decision-workflow`.
+- `devils-advocate`, template `subagents/devils-advocate-prompt.md`, owned by `decision-workflow`.
+- `ui-surveyor`, template `subagents/ui-surveyor-prompt.md`, owned by `design-handoff-workflow`.
+- `handoff-challenger`, template `subagents/handoff-challenger-prompt.md`, owned by `design-handoff-workflow`.
+- `design-delta-analyst`, template `subagents/design-delta-analyst-prompt.md`, owned by `design-intake-workflow`.
+- `intake-challenger`, template `subagents/intake-challenger-prompt.md`, owned by `design-intake-workflow`.
+- `runtime-explorer`, template `subagents/runtime-explorer-prompt.md`, owned by `design-intake-workflow`.
+- `coverage-mapper`, template `subagents/coverage-mapper-prompt.md`, owned by `gap-analysis-workflow`.
+- `gap-challenger`, template `subagents/gap-challenger-prompt.md`, owned by `gap-analysis-workflow`.
+- `reliability-investigator`, template `subagents/reliability-investigator-prompt.md`, owned by `reliability-resiliency-workflow`.
+- `failure-mapper`, template `subagents/failure-mapper-prompt.md`, owned by `reliability-resiliency-workflow`.
+- `resiliency-challenger`, template `subagents/resiliency-challenger-prompt.md`, owned by `reliability-resiliency-workflow`.
+- `researcher`, template `subagents/researcher-prompt.md`, owned by `research-workflow`.
+- `cross-checker`, template `subagents/cross-checker-prompt.md`, owned by `research-workflow`.
+- `progress-assessor`, template `subagents/progress-assessor-prompt.md`, owned by `roadmap-health-workflow`.
+- `assumption-auditor`, template `subagents/assumption-auditor-prompt.md`, owned by `roadmap-health-workflow`.
+- `explorer`, template `subagents/explorer-prompt.md`, owned by `spike-workflow`.
+- `spike-reviewer`, template `subagents/spike-reviewer-prompt.md`, owned by `spike-workflow`.
 
-Role ids are scoped to these seven runnable templates. `decision-workflow.md` uses the bare id `architect` for an orchestrator-side role with no `Template:` line; this is outside the register's uniqueness scope while `decision-workflow` has no manifest, and any later manifest for it must qualify the id.
+`researcher` is owned by `research-workflow` and reused by `decision-workflow` (`decision-workflow.md:24`); `runtime-explorer` is owned by `design-intake-workflow` and reused by `design-handoff-workflow` (`design-handoff-workflow.md:45`). Both occurrences name the identical `Template:` path in each pair of workflow files, satisfying the role-reuse rule above even though none of the four workflows involved is yet `runnerMode: supported`.
+
+`decision-workflow.md`'s orchestrator-side role, previously an unqualified bare id outside this register's scope, is registered above as `decision-architect`; any later manifest for `decision-workflow` uses that id, not the bare `architect` id.
 
 A role heading may repeat across `runnerMode: supported` workflows when every occurrence names the identical `Template:` path; that is role reuse, not a collision. A repeated heading whose occurrences name differing `Template:` paths is a defect.
 
-A role may hold a Role ids register entry while its owning workflow is `runnerMode: unsupported`; such a role requires no golden packet and no manifest stage until its owning workflow becomes `runnerMode: supported`.
+A role may hold a Role ids register entry while its owning workflow is `runnerMode: unsupported`; such a role requires no golden packet and no manifest stage until its owning workflow becomes `runnerMode: supported`. The same deferral covers the registered role's `Template:` path: it need not resolve to an existing file until its owning workflow becomes `runnerMode: supported`. `decision-architect` is the current instance: its template `subagents/decision-architect-prompt.md` does not yet exist, and authoring it is out of scope here.
 
 The `integrator` role is deliberately outside this register. `runner/src/engine/scheduler.ts:770` synthesizes the string `"integrator"` for the board's fallback `integration` dispatch, and its template is `subagents/integrator-prompt.md`. No manifest stage declares the role, so it has no owning workflow `Roles` entry, no golden packet, and no manifest stage for the golden-packet parity suite to resolve. Registering it would fail `test/workflow-parity/golden.test.mjs`. Its `Runner Protocol` section is copied from `code-quality-reviewer-prompt.md` with a reworded role-identifier line, so it is also outside the `Runner Protocol` parity family below.
 
@@ -78,8 +101,33 @@ Each role's verdict values, copied verbatim from its template's `Verdict Rule`:
 - `code-quality-reviewer`: `pass`, `fail-with-severity: <level>`, `needs-info`.
 - `implementer`: `verdicts: none`.
 - `integrator`: `verdicts: none`. Its outcome is the flat `status` enum. See the Role ids note.
+- `investigator`: `verdicts: none`.
+- `verifier`: `confirmed`, `alternative-hypothesis`, `insufficient-evidence`.
+- `decision-architect`: `verdicts: none`.
+- `evaluator`: `sufficient`, `insufficient evidence`.
+- `devils-advocate`: `pass`, `concerns-raised`.
+- `ui-surveyor`: `verdicts: none`.
+- `handoff-challenger`: `package-ready`, `gaps-found`, `needs-info`.
+- `design-delta-analyst`: `verdicts: none`.
+- `intake-challenger`: `delta-sound`, `gaps-found`, `needs-info`.
+- `runtime-explorer`: `verdicts: none`.
+- `coverage-mapper`: `verdicts: none`.
+- `gap-challenger`: `coverage-sufficient`, `gaps-found`, `needs-info`.
+- `reliability-investigator`: `verdicts: none`.
+- `failure-mapper`: `verdicts: none`.
+- `resiliency-challenger`: `assessment-holds`, `gaps-found`, `needs-info`.
+- `researcher`: `verdicts: none`.
+- `cross-checker`: `pass`, `fail-with-gaps`.
+- `progress-assessor`: `verdicts: none`.
+- `assumption-auditor`: `plan-sound`, `corrections-needed`, `needs-info`.
+- `explorer`: `verdicts: none`.
+- `spike-reviewer`: `question-answered`, `inconclusive`, `needs-more-exploration`.
 
 `implementer` is a producer role with no verdict enum. Its outcome is decided by the runner-owned verification barrier and the two review gates, and its `status` field is owned by the stage-result schema authored in P2.
+
+### Manifest filenames and contract versions
+
+When one of the nine `runnerMode: unsupported` workflows gains a manifest, the manifest filename convention is `<workflow-frontmatter-id>.v1.yaml` and the target `contractVersion` is `2.0.0`. This is forward-looking documentation only: none of the nine gains a manifest by this note, and the existing five manifest filenames (`development.v1.yaml`, `integration.v1.yaml`, `product-spec.v1.yaml`, `task-board.v1.yaml`, `task-refinement.v1.yaml`) are not renamed to match — `development.v1.yaml` and `product-spec.v1.yaml` already shorten their workflow's frontmatter id, and `integration.v1.yaml` has no owning workflow at all.
 
 ## Deliberate Parity: Keep and Verify
 
@@ -108,7 +156,7 @@ A parity family is a block of contract text that exists in more than one file an
 | Outcome parity | manifest transition with terminal outcome |
 | Stage parity | none, authority `manifest (P2)` (see note below) |
 | Ownership | retry cap; skip predicate; artifact schema; question schema; runner versus worker authority (see note below) |
-| Runner Protocol | `implementer`, `spec-reviewer`, `code-quality-reviewer`, `analyst`, `architect`, `problem-definer`, `spec-challenger` |
+| Runner Protocol | every role in the role-id register whose owning workflow is `runnerMode: supported` |
 
 Stage parity note: P1 registers no stage ids. Two known non-1:1 mapping cases are recorded here as evidence, not as members, and are not written into any workflow file. First, the proposed stage ids `architect-light`, `architect-full`, and `architect-split` (P2 proposals) all map to the single `architect` entry in `task-refinement-workflow.md`'s Roles section and to a single Sequence dispatch step, so three stages correspond to one manual step. Second, the proposed stage ids `gather-context` and `orchestrator-route` (P2 proposals) have no correspondingly named step in `product-spec-workflow.md`'s current Sequence, because both are runner-side stages.
 
