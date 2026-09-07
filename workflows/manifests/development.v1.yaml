@@ -31,10 +31,12 @@ spec:
         - completed
         - questions
         - failed
+        - worker-timeout
       transitions:
         completed: collect-implementation-artifacts
         questions: waiting-operator
         failed: parked
+        worker-timeout: parked
       retry:
         malformedResult: 1
         processFailure: 1
@@ -61,10 +63,12 @@ spec:
         - pass
         - fail
         - needs-info
+        - worker-timeout
       transitions:
         pass: review-quality
         fail: fix-spec
         needs-info: waiting-operator
+        worker-timeout: parked
       retry:
         malformedResult: 1
         processFailure: 1
@@ -79,10 +83,12 @@ spec:
         - completed
         - questions
         - failed
+        - worker-timeout
       transitions:
         completed: collect-implementation-artifacts
         questions: waiting-operator
         failed: parked
+        worker-timeout: parked
       retry:
         malformedResult: 1
         processFailure: 1
@@ -98,11 +104,13 @@ spec:
         - needs-info
         - "fail-with-severity: critical"
         - "fail-with-severity: important"
+        - worker-timeout
       transitions:
         pass: record-minors
         needs-info: waiting-operator
         "fail-with-severity: critical": fix-quality
         "fail-with-severity: important": fix-quality
+        worker-timeout: parked
       retry:
         malformedResult: 1
         processFailure: 1
@@ -117,10 +125,12 @@ spec:
         - completed
         - questions
         - failed
+        - worker-timeout
       transitions:
         completed: collect-implementation-artifacts
         questions: waiting-operator
         failed: parked
+        worker-timeout: parked
       retry:
         malformedResult: 1
         processFailure: 1
