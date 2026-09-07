@@ -1406,3 +1406,31 @@ test("the scheduler dispatches an unrelated eligible task on the next tick after
     assert.notEqual(getTask(db, "task-a").stage_id, "implementation", "task-a has moved off the stage it parked at");
   });
 });
+
+for (const [status, expectedDisposition] of [
+  ["failed", "parked"],
+  ["completed", "integrated"],
+] as const) {
+  test(`gatherFacts's integration-outcome fallback derives attemptOk from report.status: a "${status}" report resolves to disposition "${expectedDisposition}"`, async () => {
+    await withRunDb(async ({ dir, db, runId, clock }) => {
+      insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
+
+      const streamsDir = path.join(dir, "dev-streams");
+      writeDevStream(streamsDir, "integration", "well-formed", devImplementerReport("integration", status));
+
+      const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir, scenarioFor: () => "well-formed" });
+
+      const runtime = createSchedulerRuntime();
+      await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
+      await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
+
+      reapWorkers(buildCtx(db, runId, clock), runtime);
+      await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
+
+      advanceTransitions(buildCtx(db, runId, clock), runtime);
+      advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+      assert.equal(getTask(db, "task-a").disposition, expectedDisposition);
+    });
+  });
+}

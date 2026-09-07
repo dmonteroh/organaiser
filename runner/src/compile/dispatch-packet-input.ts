@@ -1,10 +1,10 @@
 // Builds the `DevelopmentStageInput.packet` closure (`workflow-stages.ts:230`)
-// that `dispatchEligible`'s `"implementation"` branch (`scheduler.ts`) passes
-// into `runDevelopmentStages`. Only the `implementer` role (the `implement`,
-// `fix-spec`, and `fix-quality` stages) receives a real, compiled packet;
-// every other role receives the exact placeholder string `runAgentStage`'s
-// own default already produces, so a reviewer- or integrator-role attempt is
-// unaffected by this module.
+// that `dispatchEligible`'s `"implementation"` and `"integration"` branches
+// (`scheduler.ts`) pass into `runDevelopmentStages` and the fallback
+// `dispatchAttempt` call respectively. The `implementer` role (the
+// `implement`, `fix-spec`, and `fix-quality` stages) and the `integrator`
+// role each receive a real, compiled packet; every other role receives the
+// exact placeholder string `runAgentStage`'s own default already produces.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -16,6 +16,10 @@ import { nextAttemptRound } from "../engine/dispatch.ts";
 
 const DEFAULT_IMPLEMENTER_TEMPLATE_PATH = fileURLToPath(
   new URL("../../../workflows/subagents/implementer-prompt.md", import.meta.url),
+);
+
+const DEFAULT_INTEGRATOR_TEMPLATE_PATH = fileURLToPath(
+  new URL("../../../workflows/subagents/integrator-prompt.md", import.meta.url),
 );
 
 const RESULT_CONTRACT_NOTES = [
@@ -66,13 +70,57 @@ export function buildDispatchPacketInput(
   opts: DispatchPacketOptions,
 ): (stageId: string, role: string) => string {
   return (stageId, role) => {
-    if (role !== "implementer") return `packet for task ${task.id} at stage ${stageId}`;
-
-    if (!task.briefPath) {
-      throw new Error(`task ${task.id} has no brief_path; cannot build a real implementer packet`);
+    if (role !== "implementer" && role !== "integrator") {
+      return `packet for task ${task.id} at stage ${stageId}`;
     }
 
-    const briefContent = fs.readFileSync(path.resolve(opts.projectRoot, task.briefPath), "utf8");
+    if (role === "implementer") {
+      if (!task.briefPath) {
+        throw new Error(`task ${task.id} has no brief_path; cannot build a real implementer packet`);
+      }
+
+      const briefContent = fs.readFileSync(path.resolve(opts.projectRoot, task.briefPath), "utf8");
+      const round = nextAttemptRound(opts.db, opts.runId, task.id, stageId);
+
+      const packetInput: PacketInput = {
+        protocolVersion: "1",
+        runId: opts.runId,
+        taskId: task.id,
+        attemptId: `${task.id}:${stageId}:${round}`,
+        workflowId: "dev-workflow",
+        workflowVersion: "0.0.0",
+        stageId,
+        roleId: role,
+        objective: task.title,
+        workingDirectory: opts.projectRoot,
+        authorityTier: "standard",
+        toolPolicy: "default",
+        commandLayerPolicy: "default",
+        deliverableSchema: "stage-result.schema.json",
+        roleFilePath: DEFAULT_IMPLEMENTER_TEMPLATE_PATH,
+        stageInputs: [{ name: "task-brief", content: briefContent }],
+        readFirst: [],
+        allowedPaths: [],
+        forbiddenPaths: [],
+        fileClaims: [],
+        nonFileClaims: [],
+        acceptanceCriteria: extractBulletSection(briefContent, "Acceptance Criteria").join("\n"),
+        verificationCommands: extractBulletSection(briefContent, "Verification Commands").join("\n"),
+        blockingRules: [],
+        resultContractNotes: RESULT_CONTRACT_NOTES,
+      };
+
+      return compilePacket(packetInput);
+    }
+
+    let briefContent = "";
+    try {
+      if (task.briefPath) {
+        briefContent = fs.readFileSync(path.resolve(opts.projectRoot, task.briefPath), "utf8");
+      }
+    } catch {
+      briefContent = "";
+    }
     const round = nextAttemptRound(opts.db, opts.runId, task.id, stageId);
 
     const packetInput: PacketInput = {
@@ -86,11 +134,11 @@ export function buildDispatchPacketInput(
       roleId: role,
       objective: task.title,
       workingDirectory: opts.projectRoot,
-      authorityTier: "standard",
+      authorityTier: "read-only",
       toolPolicy: "default",
       commandLayerPolicy: "default",
       deliverableSchema: "stage-result.schema.json",
-      roleFilePath: DEFAULT_IMPLEMENTER_TEMPLATE_PATH,
+      roleFilePath: DEFAULT_INTEGRATOR_TEMPLATE_PATH,
       stageInputs: [{ name: "task-brief", content: briefContent }],
       readFirst: [],
       allowedPaths: [],

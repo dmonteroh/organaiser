@@ -129,3 +129,51 @@ test("buildDispatchPacketInput's implementer branch throws a descriptive error w
     }
   });
 });
+
+test("buildDispatchPacketInput's integrator branch renders a real packet from the task's brief file", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      fs.writeFileSync(path.join(dir, "brief.md"), SAMPLE_BRIEF);
+      const packetFn = buildDispatchPacketInput(
+        { id: "task-a", title: "Sample task title", briefPath: "brief.md" },
+        { db, runId: "run-a", projectRoot: dir },
+      );
+
+      const packet = packetFn("integration", "integrator");
+
+      assert.match(packet, /- role: integrator/);
+      assert.match(packet, /- authorityTier: read-only/);
+      assert.match(packet, /- Role file: .*integrator-prompt\.md/);
+      assert.match(packet, /First criterion/);
+      assert.match(packet, /Second criterion/);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("buildDispatchPacketInput's integrator branch degrades to an empty brief instead of throwing", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      const nullBriefPacketFn = buildDispatchPacketInput(
+        { id: "task-a", title: "Sample task title", briefPath: null },
+        { db, runId: "run-a", projectRoot: dir },
+      );
+      const nullBriefPacket = nullBriefPacketFn("integration", "integrator");
+      assert.match(nullBriefPacket, /### Input: task-brief \(untrusted\)/);
+
+      const missingFilePacketFn = buildDispatchPacketInput(
+        { id: "task-b", title: "Sample task title", briefPath: "does-not-exist.md" },
+        { db, runId: "run-a", projectRoot: dir },
+      );
+      const missingFilePacket = missingFilePacketFn("integration", "integrator");
+      assert.match(missingFilePacket, /### Input: task-brief \(untrusted\)/);
+    } finally {
+      db.close();
+    }
+  });
+});
