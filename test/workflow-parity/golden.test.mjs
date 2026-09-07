@@ -292,7 +292,13 @@ const SECTION_HEADINGS = ["## Packet Header", "## Instructions", "## Inputs", "#
 
 function locateSections(text, filePath) {
   const lines = text.split("\n");
-  const indices = SECTION_HEADINGS.map((heading) => lines.indexOf(heading));
+  const indices = [];
+  let searchFrom = 0;
+  for (const heading of SECTION_HEADINGS) {
+    const idx = lines.indexOf(heading, searchFrom);
+    indices.push(idx);
+    if (idx !== -1) searchFrom = idx + 1;
+  }
   SECTION_HEADINGS.forEach((heading, i) => {
     assert.notEqual(indices[i], -1, `${filePath}: missing required section heading "${heading}"`);
   });
