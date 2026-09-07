@@ -16,6 +16,14 @@
 // reason before any vendor process — including the version/auth probe itself — is
 // spawned. Targets no production service: Codex is pointed at a local Ollama model
 // server through a fixture-owned `CODEX_HOME`, never the operator's real one.
+//
+// Recorded live evidence: one `codex` run and two `claude` runs on 2026-09-05, all resting
+// `blocked`. The `codex` run (`codex-cli 0.46.0` against a local `gpt-oss:20b` Ollama model)
+// classified `failureClass: "worker-crash"`, `reason: "no-candidate-report"`,
+// `tool-failures=5`, ~134s. Each `claude` run classified `failureClass: "worker-crash"`,
+// `reason: "no-candidate-report"`, `exit_code: 1`; ~2.9-3.5s is aggregate across the two
+// runs, and no CLI version or model was captured in the surviving evidence. No run has yet
+// reached `succeeded`.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
