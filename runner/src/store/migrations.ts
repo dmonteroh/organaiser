@@ -218,6 +218,10 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE tasks ADD COLUMN stale_at INTEGER;
     `,
   },
+  {
+    version: 4,
+    up: `ALTER TABLE questions ADD COLUMN payload TEXT;`,
+  },
 ];
 
 export function appliedMigrationVersions(db: DatabaseSync): Set<number> {

@@ -27,6 +27,8 @@ import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts";
 import { validateBoard } from "../board/validate.ts";
 import { renderBoard } from "../board/render.ts";
+import { listOpenQuestions } from "../engine/operator-questions.ts";
+import type { QuestionRow } from "../store/types.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
@@ -514,6 +516,51 @@ function cmdBoardRender(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
+function formatQuestionLine(row: QuestionRow): string {
+  return `- ${row.id} [${row.blocking_scope}] owner=${row.owner}: ${row.prompt}`;
+}
+
+// `--json` emits exactly one JSON value on stdout:
+//   {"runId": "<run-id>", "questions": [{"rowId": "...", "taskId": "<task row id>" | null,
+//     "blockingScope": "task" | "run", "status": "open", "question": <verbatim open-question object, or null>}]}
+// `question` is the row's `payload` column parsed back to an object; a row seeded before
+// migration 4 (no `payload`) emits `question: null`.
+function cmdRunQuestions(parsed: ParsedArgs, io: Io): ExitCode {
+  const runId = parsed.positionals[0];
+  if (!runId) throw new UsageError("run questions requires <run-id>");
+  const root = resolveRoot(io);
+  readRun(root, runId);
+
+  const db = openStore(root);
+  let rows: QuestionRow[];
+  try {
+    rows = listOpenQuestions(db, runId);
+  } finally {
+    db.close();
+  }
+
+  if (flagBool(parsed.flags, "json")) {
+    io.stdout(
+      JSON.stringify({
+        runId,
+        questions: rows.map((row) => ({
+          rowId: row.id,
+          taskId: row.task_id,
+          blockingScope: row.blocking_scope,
+          status: row.status,
+          question: row.payload !== null ? (JSON.parse(row.payload) as unknown) : null,
+        })),
+      }),
+    );
+  } else if (rows.length === 0) {
+    io.stdout("no open questions");
+  } else {
+    for (const row of rows) io.stdout(formatQuestionLine(row));
+  }
+
+  return EXIT_CODES.OK;
+}
+
 // ── Dispatch table ───────────────────────────────────────────────────────────
 
 const VALUE_FLAGS = new Set(["board", "workflow", "template", "until", "timeout", "vendor", "input", "output"]);
@@ -536,6 +583,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "board import-markdown": cmdBoardImportMarkdown,
   "board validate": cmdBoardValidate,
   "board render": cmdBoardRender,
+  "run questions": cmdRunQuestions,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);

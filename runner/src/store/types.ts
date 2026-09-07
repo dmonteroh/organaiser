@@ -164,6 +164,7 @@ export interface QuestionRow {
   status: QuestionStatus;
   created_at: number;
   answered_at: number | null;
+  payload: string | null;
 }
 
 export interface IntegrationRow {

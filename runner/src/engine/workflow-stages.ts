@@ -27,6 +27,7 @@ import {
 import { runVerificationBarrier, taskChecksPass, type BarrierResult } from "./barrier.ts";
 import { partitionFindings } from "./review-stages.ts";
 import { appendMinorFindings } from "./minor-findings.ts";
+import { persistOperatorQuestions } from "./operator-questions.ts";
 import { loadConfig } from "../cli/config.ts";
 import { observedPaths, validateClaims } from "../git/claims.ts";
 import type { WorkspaceHandle } from "../git/workspace.ts";
@@ -729,6 +730,15 @@ export async function runDevelopmentStages(input: DevelopmentStageInput): Promis
 
     if (resolvedGate && gateRounds[resolvedGate]! >= DEVELOPMENT_CAPS[resolvedGate]!) {
       return { outcome: "parked", stages, gateRounds };
+    }
+
+    if (target === "waiting-operator") {
+      const reportedQuestions = ctx.lastAgentReport?.questions;
+      persistOperatorQuestions(
+        input.db,
+        { runId: input.runId, questions: Array.isArray(reportedQuestions) ? reportedQuestions : [] },
+        input.now(),
+      );
     }
 
     if (TERMINAL_OUTCOME_IDS.has(target)) {
