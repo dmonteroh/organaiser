@@ -1,0 +1,66 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: spike-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../spike-workflow.md
+  entryStage: explore
+  terminalOutcomes:
+    success:
+      - ready-to-decide
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    explorationPasses: 2
+  stages:
+    - id: explore
+      kind: agent
+      role: explorer
+      prompt: ../subagents/explorer-prompt.md
+      authority: workspace-write
+      freshSession: true
+      capabilityClass: balanced-implementation
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: confirm-scope
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: confirm-scope
+      kind: runner
+      predicate: scope-box-respected
+      transitions:
+        "true": review-spike
+        "false": waiting-operator
+    - id: review-spike
+      kind: agent
+      role: spike-reviewer
+      prompt: ../subagents/spike-reviewer-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: fast-review
+      verdicts:
+        - question-answered
+        - inconclusive
+        - needs-more-exploration
+      transitions:
+        question-answered: ready-to-decide
+        inconclusive: exploration-cap-check
+        needs-more-exploration: waiting-operator
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: exploration-cap-check
+      kind: runner
+      predicate: exploration-cap-reached
+      transitions:
+        "true": ready-to-decide
+        "false": explore

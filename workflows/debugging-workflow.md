@@ -2,9 +2,11 @@
 id: debugging-workflow
 name: Debugging / Root-Cause Workflow
 triggers: [debugging, incident, root-cause-analysis, bug-investigation]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/debugging-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # Debugging / Root-Cause Workflow Contract
@@ -74,18 +76,20 @@ Every root cause claim must meet these evidence requirements:
      - Regression test requirement (the fix must include a test that reproduces the bug and passes after the fix)
 9. Mark investigation task `ready`
 
-### Post-all-tasks
+### Investigation queue reconciliation
 
-1. If multiple bugs investigated: check for shared root causes across investigations
-2. If shared root cause found: consolidate into a single fix task, close the per-investigation fix tasks it supersedes, and carry every regression test requirement from the superseded tasks into the consolidated task
-3. Mark all `ready` tasks `integrated` (tasks escalated to the operator stay `blocked` until resolved)
+This step never claims the board is complete.
+
+1. If multiple bugs investigated: check for shared root causes across investigations.
+2. If shared root cause found: consolidate into a single fix task, close the per-investigation fix tasks it supersedes, and carry every regression test requirement from the superseded tasks into the consolidated task.
+3. Report each investigation's final state to the board workflow: tasks marked `ready` proceed under the board's own integration reconciliation; tasks escalated to the operator stay `blocked` until resolved.
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - The investigator must NEVER apply a fix. Diagnosis and repair are separate concerns. Mixing them causes incomplete root cause analysis.
 - Reproduction comes before investigation. If you can't reproduce it, document that. Don't skip ahead to guessing.
-- Maximum follow-up rounds: 2. A follow-up round is one investigator re-dispatch triggered by a non-`confirmed` verdict (steps 6-7). If the root cause is still not confirmed after 2 rounds, stop dispatching, mark the task `blocked`, and escalate to the operator with all evidence and any competing hypotheses.
+- Maximum follow-up rounds: 2 (manifest authority: `manifests/debugging-workflow.v1.yaml` caps). A follow-up round is one investigator re-dispatch triggered by a non-`confirmed` verdict (steps 6-7). If the root cause is still not confirmed after 2 rounds, stop dispatching, mark the task `blocked`, and escalate to the operator with all evidence and any competing hypotheses.
 - The fix task created at step 8 runs under dev-workflow, not this workflow. This workflow produces the diagnosis; dev-workflow produces the fix.
 
 ## Anti-Rationalization Rules

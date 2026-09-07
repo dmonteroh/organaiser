@@ -2,9 +2,11 @@
 id: spike-workflow
 name: Spike / Prototype Workflow
 triggers: [spike, prototype, proof-of-concept, exploration, time-boxed-experiment]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/spike-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # Spike / Prototype Workflow Contract
@@ -76,17 +78,19 @@ Every spike must define these up front before exploration begins:
 9. Resolve spike artifacts: propose which scratch code to keep as reference and which to delete, then delete only after explicit operator approval. Never delete spike code unilaterally.
 10. Mark task `ready`
 
-### Post-all-tasks
+### Spike queue reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple spikes: check for contradictory findings across spikes. If a contradiction is found, surface it to the operator with both spike records; the affected tasks stay `ready` (not `integrated`) until the operator resolves which finding stands or spawns a decision-workflow task.
 2. Confirm every spike artifact is resolved: each scratch directory is either retained as marked reference or deleted with operator approval. Do not delete without approval.
-3. Mark all remaining `ready` tasks `integrated`
+3. Report each spike's final state (`ready`) to the board workflow. `task-board-workflow` owns advancing a `ready` task toward `integrated`; this workflow does not mark tasks `integrated` itself.
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - The decision gate (step 7) is mandatory. Every spike ends with adopt, adapt, or abandon. "Let's keep exploring" is not a valid outcome. Either extend the time box explicitly or decide.
-- Maximum exploration passes: 2, unless the operator explicitly extends the time box at step 6; each extension authorizes exactly one additional pass. If the cap is reached and the question is still unanswered, proceed to the decision gate with partial findings; the usual outcome is abandon, with a research-workflow follow-up task if the question still matters.
+- Maximum exploration passes: 2 (manifest authority: `manifests/spike-workflow.v1.yaml`'s `caps.explorationPasses`), unless the operator explicitly extends the time box at step 6; each extension authorizes exactly one additional pass. If the cap is reached and the question is still unanswered, proceed to the decision gate with partial findings; the usual outcome is abandon, with a research-workflow follow-up task if the question still matters.
 - Spike code must NEVER be promoted to production directly. "Adopt" means "create a new task to build it properly," not "merge the spike."
 - The spike-reviewer does NOT review code quality. Spike code is throwaway. Reviewing its quality wastes the time the spike was designed to save.
 - Spike code is never deleted without explicit operator approval. The orchestrator proposes what to delete; the operator decides. Until approved, retain the code and label it as throwaway.

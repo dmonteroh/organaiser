@@ -2,9 +2,11 @@
 id: design-intake-workflow
 name: Design Intake Workflow
 triggers: [design-intake, design-deliverables, design-to-tasks, mockup-intake]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
+runnerManifest: manifests/design-intake-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 ---
 
 # Design Intake Workflow Contract
@@ -116,11 +118,12 @@ After the gate clears, the orchestrator drafts raw task briefs from confirmed de
    - The follow-up exchange, if one happened
 10. Mark task `ready`.
 
-### Post-all-tasks
+### Intake queue reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple deliverable sets were intaken: check for overlapping screens with conflicting classifications or conflicting tasks. Conflicts go to the operator before routing.
 2. Verify every routed item reached its named workflow or is recorded for the operator.
-3. Mark all `ready` tasks `integrated`.
 
 ### Rules
 
@@ -129,7 +132,7 @@ After the gate clears, the orchestrator drafts raw task briefs from confirmed de
 - The markdown rationale is intent; the HTML is evidence. When they conflict, the conflict is an `ambiguous` row, not a coin flip.
 - Behavior never becomes a raw task directly. `changed-behavior` rows, and `new` or `removed` rows that carry behavior or data, route through product-spec-workflow. This workflow does not specify product intent.
 - Ambiguous and silently-dropped elements never become tasks. They resolve through the follow-up prompt or the operator first.
-- Maximum revision rounds: 2. A round is one analyst Follow-Up Pass plus one challenger Re-Check Pass. Orchestrator relabels, needs-info resolutions, pre-challenge corrections, and the follow-up round do not count against the cap.
+- Maximum revision rounds: 2 (manifest authority: `manifests/design-intake-workflow.v1.yaml` caps). A round is one analyst Follow-Up Pass plus one challenger Re-Check Pass. Orchestrator relabels, needs-info resolutions, pre-challenge corrections, and the follow-up round do not count against the cap.
 - Every raw task brief cites deliverable evidence: file plus section, not "the design".
 - The runtime-explorer is optional and additive. No gate or completion requirement may depend on it, and it answers current-behavior questions only: the live app shows what is, not what the design meant. Designer-intent ambiguities always route to the design agent or the operator. Live observations carry `live-app` evidence labels; a live-app versus source-code discrepancy is an operator finding, never silently resolved.
 - This workflow does not judge design quality. The design's merit is the operator's call; the workflow's job is faithful classification and routing.
