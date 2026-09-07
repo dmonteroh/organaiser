@@ -67,6 +67,8 @@ import {
 } from "../evals/fixtures/21-task-split.ts";
 import { upstreamChangeRoutesTransitiveDownstreamToEarliestStage } from "../evals/fixtures/22-artifact-staleness.ts";
 import { secretRedaction } from "../evals/fixtures/24-secret-redaction.ts";
+import { idleTimeout } from "../evals/fixtures/25-idle-timeout.ts";
+import { productiveNoCommit } from "../evals/fixtures/26-productive-no-commit.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -126,6 +128,8 @@ test("task-split: a successful split inserts all children and supersedes the par
 test("task-split: a failing split leaves zero child rows and the parent's disposition unchanged", { timeout: FIXTURE_TIMEOUT_MS }, interruptedSplitInsertsNoChildrenAndLeavesParentUnchanged);
 test("artifact-staleness: an upstream artifact change routes transitively-dependent downstream tasks back to their earliest affected stage", { timeout: FIXTURE_TIMEOUT_MS }, upstreamChangeRoutesTransitiveDownstreamToEarliestStage);
 test("secret-redaction: a known secret seeded into a run never reaches any file under the completed run tree", { timeout: FIXTURE_TIMEOUT_MS }, secretRedaction);
+test("idle-timeout: a silent worker is actually terminated with the real interrupted/signalled/timed-out bookkeeping", { timeout: FIXTURE_TIMEOUT_MS }, idleTimeout);
+test("productive-no-commit: a chatty-but-uncommitted worker is never mistaken for a stalled one", { timeout: FIXTURE_TIMEOUT_MS }, productiveNoCommit);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it
