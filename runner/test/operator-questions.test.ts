@@ -4,7 +4,13 @@ import test from "node:test";
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
-import { hasOpenBlockingQuestion, listOpenQuestions, persistOperatorQuestions } from "../src/engine/operator-questions.ts";
+import {
+  buildResumeContext,
+  hasOpenBlockingQuestion,
+  listOpenQuestions,
+  persistOperatorQuestions,
+  unblockAnsweredTasks,
+} from "../src/engine/operator-questions.ts";
 import type { QuestionRow, TaskRow } from "../src/store/types.ts";
 
 const RUN_ID = "run-1";
@@ -21,6 +27,9 @@ interface TaskSeed {
   id: string;
   taskKey: string;
   now: number;
+  disposition?: string | null;
+  state?: string;
+  priority?: number;
 }
 
 function insertTask(db: ReturnType<typeof openStore>, seed: TaskSeed): TaskRow {
@@ -28,9 +37,85 @@ function insertTask(db: ReturnType<typeof openStore>, seed: TaskSeed): TaskRow {
     db.prepare(
       `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(seed.id, RUN_ID, seed.taskKey, `Task ${seed.id}`, "brief.md", "task-board", null, "[]", 0, "implementing", null, seed.now, seed.now);
+    ).run(
+      seed.id,
+      RUN_ID,
+      seed.taskKey,
+      `Task ${seed.id}`,
+      "brief.md",
+      "task-board",
+      null,
+      "[]",
+      seed.priority ?? 0,
+      seed.state ?? "implementing",
+      seed.disposition ?? null,
+      seed.now,
+      seed.now,
+    );
   });
   return db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(seed.id) as unknown as TaskRow;
+}
+
+interface AttemptSeed {
+  id: string;
+  taskId: string;
+  stageId: string;
+  createdAt: number;
+  round?: number;
+}
+
+function insertAttempt(db: ReturnType<typeof openStore>, seed: AttemptSeed): void {
+  withTransaction(db, () => {
+    db.prepare(
+      `INSERT INTO attempts
+         (id, run_id, task_id, stage_id, role, round, input_version, vendor, model, config_json, mutating, status, interrupt_reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+    ).run(
+      seed.id,
+      RUN_ID,
+      seed.taskId,
+      seed.stageId,
+      "implementer",
+      seed.round ?? 1,
+      "input-version",
+      "fake",
+      "fake",
+      "{}",
+      1,
+      "completed",
+      seed.createdAt,
+    );
+  });
+}
+
+interface QuestionSeed {
+  id: string;
+  taskId: string;
+  status: "open" | "answered";
+  prompt: string;
+  payloadId?: string;
+  answer?: string | null;
+  createdAt: number;
+  answeredAt?: number | null;
+}
+
+function insertQuestion(db: ReturnType<typeof openStore>, seed: QuestionSeed): void {
+  withTransaction(db, () => {
+    db.prepare(
+      `INSERT INTO questions (id, run_id, task_id, owner, blocking_scope, prompt, safe_default, answer, status, created_at, answered_at, payload)
+       VALUES (?, ?, ?, 'operator', 'task', ?, NULL, ?, ?, ?, ?, ?)`,
+    ).run(
+      seed.id,
+      RUN_ID,
+      seed.taskId,
+      seed.prompt,
+      seed.answer ?? null,
+      seed.status,
+      seed.createdAt,
+      seed.answeredAt ?? null,
+      seed.payloadId === undefined ? null : JSON.stringify({ id: seed.payloadId }),
+    );
+  });
 }
 
 function questionsRowsFor(db: ReturnType<typeof openStore>, runId: string): QuestionRow[] {
@@ -252,6 +337,318 @@ test("hasOpenBlockingQuestion is true for exactly {taskId} union blocks and fals
       assert.equal(hasOpenBlockingQuestion(db, taskA), true);
       assert.equal(hasOpenBlockingQuestion(db, taskB), true);
       assert.equal(hasOpenBlockingQuestion(db, taskUnrelated), false);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("unblockAnsweredTasks un-terminals a waiting-operator task whose latest attempt sits at a development stage, appends task.unblocked, and orders questionIds by created_at ASC then id ASC", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, RUN_ID, 1_000_000);
+      insertTask(db, { id: "task-a", taskKey: "task-a", now: 1_000_000, disposition: "waiting-operator", state: "waiting-operator" });
+      insertAttempt(db, { id: "attempt-1", taskId: "task-a", stageId: "review-spec", createdAt: 1_000_000 });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-b#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "second",
+        payloadId: "q-b",
+        answer: "answer b",
+        createdAt: 2_000_000,
+        answeredAt: 2_500_000,
+      });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-a#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "first",
+        payloadId: "q-a",
+        answer: "answer a",
+        createdAt: 1_500_000,
+        answeredAt: 2_400_000,
+      });
+
+      const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
+
+      assert.deepEqual(result.skipped, []);
+      assert.equal(result.unblocked.length, 1);
+      assert.equal(result.unblocked[0]!.taskId, "task-a");
+      assert.deepEqual(result.unblocked[0]!.questionIds, ["q-a", "q-b"]);
+
+      const task = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get("task-a") as unknown as TaskRow;
+      assert.equal(task.disposition, null);
+      assert.equal(task.stage_id, "implementation");
+      assert.equal(task.state, "implementing");
+      assert.equal(task.updated_at, 3_000_000);
+
+      const events = db
+        .prepare(`SELECT type, task_id, payload FROM events WHERE run_id = ? AND type = 'task.unblocked'`)
+        .all(RUN_ID) as Array<{ type: string; task_id: string | null; payload: string }>;
+      assert.equal(events.length, 1);
+      assert.equal(events[0]!.task_id, "task-a");
+      assert.deepEqual(JSON.parse(events[0]!.payload), {
+        previousState: "waiting-operator",
+        nextState: "implementing",
+        reasonCode: "operator-answer",
+        questionIds: ["q-a", "q-b"],
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("unblockAnsweredTasks skips a candidate whose latest attempt's stage_id is outside DEVELOPMENT_STAGE_IDS, without writing the tasks row, and appends task.unblock-skipped", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, RUN_ID, 1_000_000);
+      insertTask(db, { id: "task-a", taskKey: "task-a", now: 1_000_000, disposition: "waiting-operator", state: "waiting-operator" });
+      insertAttempt(db, { id: "attempt-1", taskId: "task-a", stageId: "cross-task-review", createdAt: 1_000_000 });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-a#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "first",
+        payloadId: "q-a",
+        answer: "answer a",
+        createdAt: 1_500_000,
+        answeredAt: 2_000_000,
+      });
+
+      const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
+
+      assert.deepEqual(result.unblocked, []);
+      assert.equal(result.skipped.length, 1);
+      assert.deepEqual(result.skipped[0], { taskId: "task-a", latestAttemptStageId: "cross-task-review" });
+
+      const task = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get("task-a") as unknown as TaskRow;
+      assert.equal(task.disposition, "waiting-operator");
+      assert.equal(task.updated_at, 1_000_000);
+
+      const events = db
+        .prepare(`SELECT type, task_id, payload FROM events WHERE run_id = ? AND type = 'task.unblock-skipped'`)
+        .all(RUN_ID) as Array<{ type: string; task_id: string | null; payload: string }>;
+      assert.equal(events.length, 1);
+      assert.equal(events[0]!.task_id, "task-a");
+      assert.deepEqual(JSON.parse(events[0]!.payload), {
+        reasonCode: "guard-stage-not-development",
+        latestAttemptStageId: "cross-task-review",
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("unblockAnsweredTasks skips a candidate with no attempts row at all", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, RUN_ID, 1_000_000);
+      insertTask(db, { id: "task-a", taskKey: "task-a", now: 1_000_000, disposition: "waiting-operator", state: "waiting-operator" });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-a#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "first",
+        payloadId: "q-a",
+        answer: "answer a",
+        createdAt: 1_500_000,
+        answeredAt: 2_000_000,
+      });
+
+      const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
+
+      assert.deepEqual(result.unblocked, []);
+      assert.deepEqual(result.skipped, [{ taskId: "task-a", latestAttemptStageId: null }]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("unblockAnsweredTasks selects the latest attempts row by rowid when two rows share created_at", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, RUN_ID, 1_000_000);
+      insertTask(db, { id: "task-a", taskKey: "task-a", now: 1_000_000, disposition: "waiting-operator", state: "waiting-operator" });
+      insertAttempt(db, { id: "attempt-earlier-rowid", taskId: "task-a", stageId: "implement", createdAt: 1_000_000 });
+      insertAttempt(db, { id: "attempt-later-rowid", taskId: "task-a", stageId: "cross-task-review", createdAt: 1_000_000 });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-a#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "first",
+        payloadId: "q-a",
+        answer: "answer a",
+        createdAt: 1_500_000,
+        answeredAt: 2_000_000,
+      });
+
+      const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
+
+      assert.deepEqual(result.unblocked, []);
+      assert.deepEqual(result.skipped, [{ taskId: "task-a", latestAttemptStageId: "cross-task-review" }]);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("unblockAnsweredTasks excludes a candidate with an open question row, visits candidates in priority ASC then created_at ASC order, and does not roll back a guard-skipped candidate's siblings", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, RUN_ID, 1_000_000);
+      insertTask(db, {
+        id: "task-still-open",
+        taskKey: "task-still-open",
+        now: 1_000_000,
+        priority: 0,
+        disposition: "waiting-operator",
+        state: "waiting-operator",
+      });
+      insertAttempt(db, { id: "attempt-still-open", taskId: "task-still-open", stageId: "implement", createdAt: 1_000_000 });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-open#task-still-open`,
+        taskId: "task-still-open",
+        status: "open",
+        prompt: "still open",
+        payloadId: "q-open",
+        createdAt: 1_000_000,
+      });
+
+      insertTask(db, {
+        id: "task-skip",
+        taskKey: "task-skip",
+        now: 1_000_000,
+        priority: 1,
+        disposition: "waiting-operator",
+        state: "waiting-operator",
+      });
+      insertAttempt(db, { id: "attempt-skip", taskId: "task-skip", stageId: "cross-task-review", createdAt: 1_000_000 });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-skip#task-skip`,
+        taskId: "task-skip",
+        status: "answered",
+        prompt: "skip me",
+        payloadId: "q-skip",
+        answer: "a",
+        createdAt: 1_000_000,
+        answeredAt: 1_500_000,
+      });
+
+      insertTask(db, {
+        id: "task-unblock",
+        taskKey: "task-unblock",
+        now: 1_000_000,
+        priority: 2,
+        disposition: "waiting-operator",
+        state: "waiting-operator",
+      });
+      insertAttempt(db, { id: "attempt-unblock", taskId: "task-unblock", stageId: "implement", createdAt: 1_000_000 });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-unblock#task-unblock`,
+        taskId: "task-unblock",
+        status: "answered",
+        prompt: "unblock me",
+        payloadId: "q-unblock",
+        answer: "a",
+        createdAt: 1_000_000,
+        answeredAt: 1_500_000,
+      });
+
+      const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
+
+      assert.deepEqual(
+        result.skipped.map((entry) => entry.taskId),
+        ["task-skip"],
+      );
+      assert.deepEqual(
+        result.unblocked.map((entry) => entry.taskId),
+        ["task-unblock"],
+      );
+
+      assert.equal(
+        (db.prepare(`SELECT disposition FROM tasks WHERE id = ?`).get("task-still-open") as { disposition: string | null })
+          .disposition,
+        "waiting-operator",
+      );
+      assert.equal(
+        (db.prepare(`SELECT disposition FROM tasks WHERE id = ?`).get("task-skip") as { disposition: string | null })
+          .disposition,
+        "waiting-operator",
+      );
+      assert.equal(
+        (db.prepare(`SELECT disposition FROM tasks WHERE id = ?`).get("task-unblock") as { disposition: string | null })
+          .disposition,
+        null,
+      );
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("buildResumeContext returns null for a task with zero answered rows and its full ordered shape for one with answered rows", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, RUN_ID, 1_000_000);
+      insertTask(db, { id: "task-a", taskKey: "task-a", now: 1_000_000 });
+
+      assert.equal(buildResumeContext(db, RUN_ID, "task-a"), null);
+
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-open#task-a`,
+        taskId: "task-a",
+        status: "open",
+        prompt: "still open",
+        payloadId: "q-open",
+        createdAt: 1_000_000,
+      });
+      assert.equal(buildResumeContext(db, RUN_ID, "task-a"), null, "an open row alone still yields null");
+
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-b#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "second question",
+        payloadId: "q-b",
+        answer: "second answer",
+        createdAt: 2_000_000,
+        answeredAt: 2_500_000,
+      });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-a#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "first question",
+        payloadId: "q-a",
+        answer: "first answer",
+        createdAt: 1_500_000,
+        answeredAt: 2_400_000,
+      });
+
+      const context = buildResumeContext(db, RUN_ID, "task-a");
+      assert.deepEqual(context, {
+        operatorAnswers: [
+          { questionId: "q-a", question: "first question", answer: "first answer", answeredAt: 2_400_000 },
+          { questionId: "q-b", question: "second question", answer: "second answer", answeredAt: 2_500_000 },
+        ],
+      });
+      assert.deepEqual(Object.keys(context!.operatorAnswers[0]!), ["questionId", "question", "answer", "answeredAt"]);
     } finally {
       db.close();
     }

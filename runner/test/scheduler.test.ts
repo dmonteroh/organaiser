@@ -28,6 +28,7 @@ import {
 import { createWorkspace, DEFAULT_WORKTREE_ROOT, DEFAULT_BRANCH_PREFIX } from "../src/git/workspace.ts";
 import { FakeAdapter, type TerminateFn } from "../src/adapters/fake.ts";
 import type { AttemptDescriptor, ProcessAdapter } from "../src/adapters/adapter.ts";
+import { unblockAnsweredTasks } from "../src/engine/operator-questions.ts";
 import type { ResolvedVendorProfile } from "../src/cli/profiles.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 import { parseArgs, runTestSupervisor } from "../evals/fixtures/test-supervisor.ts";
@@ -1346,6 +1347,121 @@ test("both dispatch paths coexist in one run: an implementation task's developme
     assert.ok(taskBAttempt, "task-b was dispatched through the untouched integration path");
     assert.equal(taskBAttempt?.stage_id, "integration");
     assert.equal(taskBAttempt?.role, "integrator");
+  });
+});
+
+test("an answered waiting-operator task is unblocked and its resumed implement attempt carries the answer as prior-report, with questionsLoop resumed rather than restarted", async () => {
+  await withRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "implementation", priority: 0, briefPath: path.join(dir, "brief.md"), now: clock.now() });
+    fs.writeFileSync(path.join(dir, "brief.md"), "# Task A\n\n## Acceptance Criteria\n- does the thing\n", "utf8");
+
+    const streamsDir = path.join(dir, "dev-streams");
+    const openQuestion = {
+      id: "oq-1",
+      taskId: "task-a",
+      owner: "operator",
+      question: "which direction?",
+      context: "some context",
+      impact: "some impact",
+      safeDefault: { summary: "go with A" },
+      blocks: [],
+    };
+    writeDevStream(streamsDir, "implement", "with-question", {
+      ...devImplementerReport("implement", "questions"),
+      questions: [openQuestion],
+    });
+    writeDevStream(streamsDir, "implement", "resumed", devImplementerReport("implement", "completed"));
+    writeDevStream(streamsDir, "review-spec", "pass", devReviewerReport("review-spec", "spec-reviewer", "pass"));
+    writeDevStream(
+      streamsDir,
+      "review-quality",
+      "pass",
+      devReviewerReport("review-quality", "code-quality-reviewer", "pass"),
+    );
+
+    let implementCalls = 0;
+    const inner = new FakeAdapter({
+      terminate: noopTerminate,
+      streamsDir,
+      scenarioFor: (attempt: AttemptDescriptor) => {
+        if (attempt.stageId === "implement") {
+          implementCalls += 1;
+          return implementCalls === 1 ? "with-question" : "resumed";
+        }
+        if (attempt.stageId === "review-spec") return "pass";
+        if (attempt.stageId === "review-quality") return "pass";
+        return "completed";
+      },
+    });
+    const capturedImplementPackets: string[] = [];
+    const adapter: ProcessAdapter = {
+      probe: (configuration) => inner.probe(configuration),
+      start: async (attempt, packet, surface) => {
+        if (attempt.stageId === "implement") capturedImplementPackets.push(packet);
+        return inner.start(attempt, packet, surface);
+      },
+      observe: (handle) => inner.observe(handle),
+      cancel: (handle, gracePeriodMs) => inner.cancel(handle, gracePeriodMs),
+      collect: (handle) => inner.collect(handle),
+      classify: (artifacts) => inner.classify(artifacts),
+    };
+
+    const runtime = createSchedulerRuntime();
+
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
+    const firstOutcome = runtime.developmentOutcomeByTaskId.get("task-a");
+    assert.ok(firstOutcome, "first dispatch must record a development outcome");
+    assert.equal(firstOutcome!.outcome, "waiting-operator");
+    assert.equal(firstOutcome!.gateRounds.questionsLoop, 1);
+
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+    assert.equal(getTask(db, "task-a").disposition, "waiting-operator");
+    assert.equal(getTask(db, "task-a").stage_id, null);
+
+    const questionRow = db
+      .prepare(`SELECT * FROM questions WHERE run_id = ? AND task_id = ?`)
+      .get(runId, "task-a") as { id: string; status: string };
+    assert.equal(questionRow.status, "open");
+
+    withTransaction(db, () => {
+      db.prepare(`UPDATE questions SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?`).run(
+        "use approach A",
+        clock.now(),
+        questionRow.id,
+      );
+    });
+
+    const unblockResult = unblockAnsweredTasks(db, { runId, now: clock.now() });
+    assert.deepEqual(unblockResult.skipped, []);
+    assert.equal(unblockResult.unblocked.length, 1);
+    assert.equal(unblockResult.unblocked[0]!.taskId, "task-a");
+    assert.deepEqual(unblockResult.unblocked[0]!.questionIds, ["oq-1"]);
+
+    const reopenedTask = getTask(db, "task-a");
+    assert.equal(reopenedTask.disposition, null);
+    assert.equal(reopenedTask.stage_id, "implementation");
+    assert.equal(reopenedTask.state, "implementing");
+
+    await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
+    const secondOutcome = runtime.developmentOutcomeByTaskId.get("task-a");
+    assert.ok(secondOutcome, "resumed dispatch must record a development outcome");
+    assert.equal(secondOutcome!.outcome, "integrating");
+    assert.equal(
+      secondOutcome!.gateRounds.questionsLoop,
+      1,
+      "the resumed attempt did not hit the waiting-operator edge again, so the finalized round stays at 1",
+    );
+
+    assert.equal(capturedImplementPackets.length, 2);
+    assert.match(capturedImplementPackets[1]!, /<<<UNTRUSTED prior-report/);
+    assert.match(capturedImplementPackets[1]!, /use approach A/);
+
+    const questionsLoopRounds = db
+      .prepare(`SELECT round FROM gates WHERE run_id = ? AND task_id = ? AND gate_type = 'questionsLoop' ORDER BY round ASC`)
+      .all(runId, "task-a") as Array<{ round: number }>;
+    assert.deepEqual(questionsLoopRounds.map((row) => row.round), [1]);
   });
 });
 

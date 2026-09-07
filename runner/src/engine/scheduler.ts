@@ -40,7 +40,7 @@ import {
   type DispatchConditions,
 } from "./dispatch.ts";
 import { getPredicate } from "./predicate-registry.ts";
-import { hasOpenBlockingQuestion } from "./operator-questions.ts";
+import { buildResumeContext, hasOpenBlockingQuestion } from "./operator-questions.ts";
 import {
   PREDICATE_RETURN_UNIONS,
   TERMINAL_DISPOSITION_VALUES,
@@ -898,6 +898,8 @@ export async function dispatchEligible(
       );
       fs.mkdirSync(taskEvidenceDir, { recursive: true });
 
+      const resumeContext = buildResumeContext(ctx.db, ctx.runId, task.id);
+
       const developmentOutcome = await runDevelopmentStages({
         db: ctx.db,
         adapter,
@@ -917,6 +919,7 @@ export async function dispatchEligible(
           { db: ctx.db, runId: ctx.runId, projectRoot: workspace?.projectRoot ?? process.cwd() },
         ),
         ...(workspaceHandle ? { workspace: workspaceHandle } : {}),
+        ...(resumeContext ? { resumeContext } : {}),
       });
       runtime.developmentOutcomeByTaskId.set(task.id, developmentOutcome);
       runtime.scratch.dispatchedThisTick = true;
