@@ -88,6 +88,7 @@ export interface TaskRow {
   priority: number;
   state: TaskState;
   disposition: string | null;
+  stale_at: number | null;
   created_at: number;
   updated_at: number;
 }

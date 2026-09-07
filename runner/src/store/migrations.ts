@@ -199,6 +199,25 @@ export const MIGRATIONS: Migration[] = [
         ON minor_finding_appends (run_id, task_id, attempt_id);
     `,
   },
+  {
+    version: 3,
+    up: `
+      CREATE TABLE artifact_dependencies (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        stage_id TEXT NOT NULL,
+        artifact_path TEXT NOT NULL,
+        depends_on_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX artifact_dependencies_depends_on
+        ON artifact_dependencies (run_id, depends_on_path);
+
+      ALTER TABLE tasks ADD COLUMN stale_at INTEGER;
+    `,
+  },
 ];
 
 export function appliedMigrationVersions(db: DatabaseSync): Set<number> {

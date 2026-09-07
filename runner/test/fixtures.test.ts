@@ -61,6 +61,11 @@ import {
   claimOverlapSerializes,
   disjointClaimsParallelize,
 } from "../evals/fixtures/20-board-parallelism.ts";
+import {
+  successfulSplitInsertsChildrenAndSupersedesParent,
+  interruptedSplitInsertsNoChildrenAndLeavesParentUnchanged,
+} from "../evals/fixtures/21-task-split.ts";
+import { upstreamChangeRoutesTransitiveDownstreamToEarliestStage } from "../evals/fixtures/22-artifact-staleness.ts";
 
 const FIXTURE_TIMEOUT_MS = 30000;
 
@@ -116,6 +121,9 @@ test("board-parallelism: an open blocking question stops only its own task, not 
 test("board-parallelism: a task with a non-null disposition is never a dispatch candidate", { timeout: FIXTURE_TIMEOUT_MS }, terminalTaskNeverDispatches);
 test("board-parallelism: two tasks with overlapping claims never hold live attempts simultaneously", { timeout: FIXTURE_TIMEOUT_MS }, claimOverlapSerializes);
 test("board-parallelism: two tasks with disjoint claims both hold live attempts in the same tick", { timeout: FIXTURE_TIMEOUT_MS }, disjointClaimsParallelize);
+test("task-split: a successful split inserts all children and supersedes the parent in one commit", { timeout: FIXTURE_TIMEOUT_MS }, successfulSplitInsertsChildrenAndSupersedesParent);
+test("task-split: a failing split leaves zero child rows and the parent's disposition unchanged", { timeout: FIXTURE_TIMEOUT_MS }, interruptedSplitInsertsNoChildrenAndLeavesParentUnchanged);
+test("artifact-staleness: an upstream artifact change routes transitively-dependent downstream tasks back to their earliest affected stage", { timeout: FIXTURE_TIMEOUT_MS }, upstreamChangeRoutesTransitiveDownstreamToEarliestStage);
 
 // Suite-level teardown: zero surviving descendants of this test process.
 // Every fixture above is individually responsible for killing everything it

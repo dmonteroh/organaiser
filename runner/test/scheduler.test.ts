@@ -455,6 +455,31 @@ test("advanceTransitions records an invariant violation instead of writing a tas
   });
 });
 
+test("advanceTransitions consumes a seeded refinementOutcomeByTaskId entry, routes to that outcome's own STAGE_DEFINITIONS target, and deletes the entry", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "task-refinement", now: clock.now() });
+
+    const runtime = createSchedulerRuntime();
+    runtime.refinementOutcomeByTaskId.set("task-a", "superseded");
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+    assert.equal(getTask(db, "task-a").stage_id, "reconcile-outcome");
+    assert.equal(runtime.refinementOutcomeByTaskId.has("task-a"), false);
+  });
+});
+
+test("advanceTransitions falls back to the skipped target when no refinementOutcomeByTaskId entry is seeded", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "task-refinement", now: clock.now() });
+
+    const runtime = createSchedulerRuntime();
+    advanceTransitions(buildCtx(db, runId, clock), runtime);
+
+    assert.equal(getTask(db, "task-a").stage_id, "implementation");
+    assert.equal(runtime.refinementOutcomeByTaskId.has("task-a"), false);
+  });
+});
+
 test("classifyTick: active when a worker is live, regardless of other counts", () => {
   const outcome = classifyTick({
     totalTaskCount: 1,
