@@ -113,6 +113,7 @@ function fakeDispatchProfile(maxWorkerSlots: number): DispatchProfile {
     authenticationOutcome: "authenticated",
     isKnownBadVersion: false,
     concurrency: { maxWorkerSlots, vendorSlots: { codex: maxWorkerSlots, claude: maxWorkerSlots } },
+    terminationGraceMs: 10000,
   };
 }
 
@@ -342,7 +343,7 @@ test("createSchedulerTick calls the six named steps in goals spec section 11's o
   await withRunDb(async ({ db, runId, clock }) => {
     const callOrder: string[] = [];
     const steps: SchedulerSteps = {
-      reapWorkers: (ctx, runtime) => {
+      reapWorkers: async (ctx, runtime) => {
         callOrder.push("reapWorkers");
         return DEFAULT_SCHEDULER_STEPS.reapWorkers(ctx, runtime);
       },
@@ -1087,7 +1088,7 @@ test("normalizeResults: a mutating attempt whose observed diff exceeds its claim
     const diffBefore = runGit(workspacePath, ["diff"]);
     const statusBefore = runGit(workspacePath, ["status", "--porcelain"]);
 
-    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
     assert.equal(runtime.liveAttemptByTaskId.size, 0);
@@ -1151,7 +1152,7 @@ test("normalizeResults: a genuine git failure inside observedPaths still fails t
     // mock.
     fs.rmSync(workspacePath, { recursive: true, force: true });
 
-    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
     assert.equal(runtime.liveAttemptByTaskId.size, 0);
@@ -1193,7 +1194,7 @@ test("a task whose out-of-claim rejection left an active worktrees row is not re
     fs.writeFileSync(path.join(workspacePath, "unclaimed.txt"), "surprise\n", "utf8");
     await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
 
-    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
     assert.equal(runtime.liveAttemptByTaskId.size, 0);
 
@@ -1540,7 +1541,7 @@ for (const [status, expectedDisposition] of [
       await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
       await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
 
-      reapWorkers(buildCtx(db, runId, clock), runtime);
+      await reapWorkers(buildCtx(db, runId, clock), runtime);
       await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
       advanceTransitions(buildCtx(db, runId, clock), runtime);
