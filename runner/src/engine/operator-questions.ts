@@ -90,6 +90,12 @@ export function listOpenQuestions(db: DatabaseSync, runId: string): QuestionRow[
     .all(runId) as unknown as QuestionRow[];
 }
 
+export function listQuestionsForRun(db: DatabaseSync, runId: string): QuestionRow[] {
+  return db
+    .prepare(`SELECT * FROM questions WHERE run_id = ? ORDER BY created_at ASC, id ASC`)
+    .all(runId) as unknown as QuestionRow[];
+}
+
 export function hasOpenBlockingQuestion(db: DatabaseSync, task: TaskRow): boolean {
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM questions WHERE run_id = ? AND task_id = ? AND status = 'open'`)
