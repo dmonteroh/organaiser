@@ -292,7 +292,23 @@ const SECTION_HEADINGS = ["## Packet Header", "## Instructions", "## Inputs", "#
 
 function locateSections(text, filePath) {
   const lines = text.split("\n");
-  const indices = SECTION_HEADINGS.map((heading) => lines.indexOf(heading));
+  const packetHeaderIdx = lines.indexOf("## Packet Header");
+  const instructionsIdx = lines.indexOf("## Instructions", packetHeaderIdx + 1);
+  const resultContractIdx = lines.indexOf("## Result Contract");
+  // A role template's own Instructions body can legitimately contain its own
+  // "## Inputs" heading (verified: this is the only one of the four sentinels
+  // any template ever echoes). The real outer boundary is therefore the LAST
+  // "## Inputs" line before "## Result Contract", not the first one overall.
+  let inputsIdx = -1;
+  if (resultContractIdx !== -1) {
+    for (let i = resultContractIdx - 1; i > instructionsIdx; i--) {
+      if (lines[i] === "## Inputs") {
+        inputsIdx = i;
+        break;
+      }
+    }
+  }
+  const indices = [packetHeaderIdx, instructionsIdx, inputsIdx, resultContractIdx];
   SECTION_HEADINGS.forEach((heading, i) => {
     assert.notEqual(indices[i], -1, `${filePath}: missing required section heading "${heading}"`);
   });
