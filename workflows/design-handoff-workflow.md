@@ -2,9 +2,11 @@
 id: design-handoff-workflow
 name: Design Handoff Workflow
 triggers: [design-handoff, redesign-brief, ui-handoff, design-prompt]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
+runnerManifest: manifests/design-handoff-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 ---
 
 # Design Handoff Workflow Contract
@@ -114,11 +116,12 @@ This return format is what design-intake-workflow parses. A deliverable that fol
 8. When the challenger returns `package-ready`, or the cap-exhaustion acceptance is recorded: if Runtime Access is declared, dispatch `runtime-explorer` with one capture assignment per shot-list entry and hand the operator the produced image files for review; shots reported `unreachable` fall back to manual capture. Then deliver the package to the operator with transport instructions: capture or verify each shot on the shot-list, paste the prompt into the design agent, attach the images, send. Record where the package file lives.
 9. Mark task `ready`.
 
-### Post-all-tasks
+### Handoff queue reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple packages were produced: verify their scopes do not overlap with contradictory constraints (the same screen in two packages with different must-not-change lists). Conflicts go to the operator before any package is sent.
 2. Note in the summary that the design agent's returned deliverables enter design-intake-workflow; the handoff package should be kept as intake input.
-3. Mark all `ready` tasks `integrated`.
 
 ### Rules
 
@@ -126,7 +129,7 @@ This return format is what design-intake-workflow parses. A deliverable that fol
 - The ui-surveyor must read actual UI source. Describing screens from file names, component names, or memory is not a survey.
 - The handoff prompt must be self-contained. The design agent has no repository access, and a screenshot can fail to convey: every load-bearing fact lives in text. Screenshots illustrate; text specifies.
 - The package must never ask the design agent to read code, files, or repositories, and must not depend on internal jargon the prompt does not define.
-- Maximum revision rounds: 2. A round is one surveyor Follow-Up Pass plus one challenger Re-Check Pass. Orchestrator assembly fixes, needs-info resolutions, and pre-challenge corrections do not count against the cap.
+- Maximum revision rounds: 2 (manifest authority: `manifests/design-handoff-workflow.v1.yaml` caps). A round is one surveyor Follow-Up Pass plus one challenger Re-Check Pass. Orchestrator assembly fixes, needs-info resolutions, and pre-challenge corrections do not count against the cap.
 - Screenshot capture is manual by default: the shot-list tells the operator exactly what to capture. When Runtime Access is declared, the runtime-explorer may capture the shot-list instead, with the operator reviewing the images before transport. Either way, the prompt must stand alone even if a shot is skipped.
 - The runtime-explorer is optional and additive. No gate, section, or completion requirement may depend on it: without Runtime Access, unknown states route to the operator and screenshots stay manual, with no loss of contract. Survey facts observed live carry `live-app` evidence labels; a live-app versus source-code discrepancy is an operator finding, never silently resolved.
 - The Return Format section is mandatory. A handoff prompt without it is not package-ready, because the deliverable shape is the contract that makes intake work.
