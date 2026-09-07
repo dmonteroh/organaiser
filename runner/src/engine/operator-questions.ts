@@ -121,7 +121,7 @@ export function hasOpenBlockingQuestion(db: DatabaseSync, task: TaskRow): boolea
   return row.n > 0;
 }
 
-function rawQuestionId(row: QuestionRow): string {
+export function rawQuestionId(row: QuestionRow): string {
   if (row.payload !== null) {
     try {
       const parsed = JSON.parse(row.payload) as unknown;

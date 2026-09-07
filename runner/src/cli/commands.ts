@@ -27,7 +27,7 @@ import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts";
 import { validateBoard } from "../board/validate.ts";
 import { renderBoard } from "../board/render.ts";
-import { listOpenQuestions, unblockAnsweredTasks } from "../engine/operator-questions.ts";
+import { listOpenQuestions, rawQuestionId, unblockAnsweredTasks } from "../engine/operator-questions.ts";
 import { answerQuestions, UnknownQuestionKeyError } from "../engine/answer-questions.ts";
 import { isSupervisorLive } from "../store/lease.ts";
 import type { QuestionRow } from "../store/types.ts";
@@ -261,7 +261,34 @@ function cmdRunStatus(parsed: ParsedArgs, io: Io): ExitCode {
   if (!runId) throw new UsageError("run status requires <run-id>");
   const root = resolveRoot(io);
   const run = readRun(root, runId);
-  emit(io, flagBool(parsed.flags, "json"), run, `run ${run.id}: state=${run.state} desired=${run.desired_state}`);
+
+  const db = openStore(root);
+  let rows: QuestionRow[];
+  try {
+    rows = listOpenQuestions(db, runId);
+  } finally {
+    db.close();
+  }
+  const groups = groupQuestionsByRawId(rows);
+
+  const value = {
+    ...run,
+    pendingQuestionCount: groups.length,
+    pendingQuestions: groups.map((group) => ({
+      questionId: group.questionId,
+      taskIds: group.taskIds,
+      blocksRun: group.blocksRun,
+      status: group.status,
+      question: group.question,
+    })),
+  };
+
+  emit(
+    io,
+    flagBool(parsed.flags, "json"),
+    value,
+    `run ${run.id}: state=${run.state} desired=${run.desired_state} pending-questions=${groups.length}`,
+  );
   return EXIT_CODES.OK;
 }
 
@@ -541,8 +568,99 @@ function cmdBoardRender(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
-function formatQuestionLine(row: QuestionRow): string {
-  return `- ${row.id} [${row.blocking_scope}] owner=${row.owner}: ${row.prompt}`;
+interface QuestionGroup {
+  questionId: string;
+  taskIds: string[];
+  blocksRun: boolean;
+  status: string;
+  prompt: string;
+  safeDefault: string | null;
+  question: unknown | null;
+}
+
+function groupQuestionsByRawId(rows: QuestionRow[]): QuestionGroup[] {
+  const membersByRawId = new Map<string, QuestionRow[]>();
+  for (const row of rows) {
+    const key = rawQuestionId(row);
+    const members = membersByRawId.get(key);
+    if (members) members.push(row);
+    else membersByRawId.set(key, [row]);
+  }
+
+  const ordered: Array<{ group: QuestionGroup; representative: QuestionRow }> = [];
+  for (const [questionId, members] of membersByRawId) {
+    const representative = members.reduce((best, row) =>
+      row.created_at < best.created_at || (row.created_at === best.created_at && row.id < best.id) ? row : best,
+    );
+    const taskIds = Array.from(
+      new Set(members.filter((row): row is QuestionRow & { task_id: string } => row.task_id !== null).map((row) => row.task_id)),
+    ).sort();
+    const blocksRun = members.some((row) => row.blocking_scope === "run");
+
+    ordered.push({
+      group: {
+        questionId,
+        taskIds,
+        blocksRun,
+        status: representative.status,
+        prompt: representative.prompt,
+        safeDefault: representative.safe_default,
+        question: representative.payload !== null ? (JSON.parse(representative.payload) as unknown) : null,
+      },
+      representative,
+    });
+  }
+
+  ordered.sort((a, b) => {
+    if (a.representative.created_at !== b.representative.created_at) {
+      return a.representative.created_at - b.representative.created_at;
+    }
+    return a.representative.id < b.representative.id ? -1 : a.representative.id > b.representative.id ? 1 : 0;
+  });
+
+  return ordered.map((entry) => entry.group);
+}
+
+function collapseNewlines(text: string): string {
+  return text.replace(/\r?\n/g, " ");
+}
+
+function blockedTasksCell(group: QuestionGroup): string {
+  const taskPart = group.taskIds.join(", ");
+  if (!group.blocksRun) return taskPart;
+  return taskPart.length > 0 ? `(run), ${taskPart}` : "(run)";
+}
+
+function formatQuestionTable(groups: QuestionGroup[]): string[] {
+  interface TableRow {
+    id: string;
+    question: string;
+    defaultValue: string;
+    blockedTasks: string;
+  }
+
+  const header: TableRow = { id: "id", question: "question", defaultValue: "default", blockedTasks: "blocked tasks" };
+  const dataRows: TableRow[] = groups.map((group) => ({
+    id: group.questionId,
+    question: collapseNewlines(group.prompt),
+    defaultValue: collapseNewlines(group.safeDefault ?? "(none)"),
+    blockedTasks: blockedTasksCell(group),
+  }));
+  const allRows = [header, ...dataRows];
+
+  const idWidth = Math.max(...allRows.map((row) => row.id.length));
+  const questionWidth = Math.max(...allRows.map((row) => row.question.length));
+  const defaultWidth = Math.max(...allRows.map((row) => row.defaultValue.length));
+  const blockedTasksWidth = Math.max(...allRows.map((row) => row.blockedTasks.length));
+
+  return allRows.map((row) =>
+    [
+      row.id.padEnd(idWidth),
+      row.question.padEnd(questionWidth),
+      row.defaultValue.padEnd(defaultWidth),
+      row.blockedTasks.padEnd(blockedTasksWidth),
+    ].join("  "),
+  );
 }
 
 // `--json` emits exactly one JSON value on stdout:
@@ -580,7 +698,7 @@ function cmdRunQuestions(parsed: ParsedArgs, io: Io): ExitCode {
   } else if (rows.length === 0) {
     io.stdout("no open questions");
   } else {
-    for (const row of rows) io.stdout(formatQuestionLine(row));
+    for (const line of formatQuestionTable(groupQuestionsByRawId(rows))) io.stdout(line);
   }
 
   return EXIT_CODES.OK;
