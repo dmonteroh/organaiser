@@ -1,0 +1,87 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: gap-analysis-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../gap-analysis-workflow.md
+  entryStage: define-target
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    revisionRounds: 2
+    needsInfoResolutions: 2
+  stages:
+    - id: define-target
+      kind: runner
+      predicate: target-defined
+      transitions:
+        "true": map-coverage
+        "false": waiting-operator
+    - id: map-coverage
+      kind: agent
+      role: coverage-mapper
+      prompt: ../subagents/coverage-mapper-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: review-map
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: review-map
+      kind: runner
+      predicate: decomposition-sound
+      transitions:
+        "true": challenge-coverage
+        "false": map-coverage
+    - id: challenge-coverage
+      kind: agent
+      role: gap-challenger
+      prompt: ../subagents/gap-challenger-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - coverage-sufficient
+        - gaps-found
+        - needs-info
+      transitions:
+        coverage-sufficient: finalize
+        gaps-found: route-gaps
+        needs-info: route-needs-info
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: route-needs-info
+      kind: runner
+      predicate: needs-info-owner
+      transitions:
+        orchestrator-context: challenge-coverage
+        operator: waiting-operator
+        cap-reached: waiting-operator
+    - id: route-gaps
+      kind: runner
+      predicate: gap-resolution
+      transitions:
+        missing-capabilities: map-coverage
+        relabel-only: finalize
+        cap-reached: waiting-operator
+    - id: finalize
+      kind: runner
+      predicate: gap-analysis-complete
+      transitions:
+        "true": ready
+        "false": waiting-operator
