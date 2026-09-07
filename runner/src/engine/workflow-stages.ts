@@ -28,8 +28,15 @@ import { runVerificationBarrier, taskChecksPass, type BarrierResult } from "./ba
 import { partitionFindings } from "./review-stages.ts";
 import { appendMinorFindings } from "./minor-findings.ts";
 import { persistOperatorQuestions } from "./operator-questions.ts";
+import {
+  STAGE_DISPATCH_LOG_ROLE,
+  appendDispatchLogRow,
+  computeAttemptRound,
+  writeReviewerReport,
+} from "./attempt-artifacts.ts";
 import { loadConfig } from "../cli/config.ts";
 import { observedPaths, validateClaims } from "../git/claims.ts";
+import { tryHeadSha } from "../git/git.ts";
 import type { WorkspaceHandle } from "../git/workspace.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
@@ -354,6 +361,7 @@ interface DriverContext {
   lastAgentAttempt: LastAgentAttempt | null;
   barrierCache: { attemptId: string; result: BarrierResult } | null;
   lastAgentReport: Record<string, unknown> | null;
+  attemptRound: number;
 }
 
 function extractVerdict(stage: DevelopmentStageDefinition, outcome: AttemptOutcome): string {
@@ -376,6 +384,7 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
   const mutating = stage.authority === "workspace-write";
   const packetFn = input.packet ?? ((stageId: string) => `packet for task ${input.taskId} at stage ${stageId}`);
   const packetText = packetFn(stage.id, stage.role ?? "", ctx.lastAgentReport);
+  const dispatchLogRole = STAGE_DISPATCH_LOG_ROLE[stage.id];
 
   let workingDirectory = input.workspace?.path ?? input.executionRoot;
   let reviewerWorkspace: ReviewerWorkspaceHandle | null = null;
@@ -390,6 +399,8 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
   }
 
   try {
+    const commitBefore = dispatchLogRole === "implementer" ? tryHeadSha(input.executionRoot) ?? "" : "";
+
     const dispatchInput: DispatchAttemptInput = {
       runId: input.runId,
       taskId: input.taskId,
@@ -438,6 +449,25 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
       ? await validateAttemptClaims(input.db, input.runId, input.taskId, input.workspace)
       : null;
 
+    const commitAfter = dispatchLogRole === "implementer" ? tryHeadSha(input.executionRoot) ?? "" : "";
+    const verdict = extractVerdict(stage, outcome);
+
+    let reportFile = "";
+    if (
+      (dispatchLogRole === "spec-reviewer" || dispatchLogRole === "quality-reviewer") &&
+      outcome.ok &&
+      outcome.report !== null
+    ) {
+      reportFile = writeReviewerReport(input.taskDir, ctx.attemptRound, dispatchLogRole, verdict);
+    }
+
+    appendDispatchLogRow(input.taskDir, ctx.attemptRound, {
+      role: dispatchLogRole,
+      commitBefore,
+      commitAfter,
+      reportFile,
+    });
+
     const normalizedAt = input.now();
     withTransaction(input.db, () => {
       input.db
@@ -470,7 +500,7 @@ async function runAgentStage(stage: DevelopmentStageDefinition, ctx: DriverConte
     });
 
     if (claimViolation) return "failed";
-    return extractVerdict(stage, outcome);
+    return verdict;
   } finally {
     if (reviewerWorkspace) await reviewerWorkspace.release();
   }
@@ -694,6 +724,7 @@ export async function runDevelopmentStages(input: DevelopmentStageInput): Promis
     lastAgentAttempt: null,
     barrierCache: null,
     lastAgentReport: input.resumeContext ?? null,
+    attemptRound: computeAttemptRound(input.taskDir),
   };
   const gateRounds: Record<string, number> = Object.fromEntries(
     Object.keys(DEVELOPMENT_CAPS).map((name) => [name, 0]),

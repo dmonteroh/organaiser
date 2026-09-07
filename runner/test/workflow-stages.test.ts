@@ -19,6 +19,8 @@ import {
 } from "../src/engine/workflow-stages.ts";
 import type { WorkspaceHandle } from "../src/git/workspace.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
+import { validateDispatchLog } from "../src/compile/artifact-validator.ts";
+import { reconstructLedger } from "../src/reports/replay.ts";
 
 // A minimal reader for `development.v1.yaml` only, following the pattern and
 // rationale at `board-predicates.test.ts`: `test/workflow-parity/static.test.mjs`
@@ -1079,5 +1081,161 @@ test("an implement attempt that writes an out-of-claim file is failed and routed
     assert.equal(violationEvents.length, 1);
     const payload = JSON.parse(violationEvents[0]!.payload) as { outOfClaim: string[] };
     assert.deepEqual(payload.outOfClaim, ["unclaimed.txt"]);
+  });
+});
+
+// ── Attempt-artifact persistence ──────────────────────────────────────────
+
+function readDispatchLogRows(attemptDir: string): string[][] {
+  const text = fs.readFileSync(path.join(attemptDir, "dispatch-log.tsv"), "utf8");
+  const lines = text.split("\n").filter((l) => l.length > 0);
+  assert.equal(lines[0], "seq\trole\treason\tcommit_before\tcommit_after\tpacket_file\treport_file");
+  return lines.slice(1).map((l) => l.split("\t"));
+}
+
+test("attempt-artifacts: a full pass-through run writes one dispatch-log row per agent dispatch with correct role mapping and reviewer report files", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "pass", "pass");
+    queue("review-spec", "pass");
+    queueReviewerScenario(env.streamsDir, "review-quality", "code-quality-reviewer", "pass", "pass");
+    queue("review-quality", "pass");
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(outcome.outcome, "integrating");
+
+    const attemptDir = path.join(env.taskDir, "attempt1-artifacts");
+    const rows = readDispatchLogRows(attemptDir);
+    assert.equal(rows.length, 3);
+    assert.deepEqual(rows.map((r) => r[0]), ["1", "2", "3"]);
+    assert.deepEqual(
+      rows.map((r) => r[1]),
+      ["implementer", "spec-reviewer", "quality-reviewer"],
+    );
+    for (const r of rows) assert.notEqual(r[1], "code-quality-reviewer");
+
+    for (const r of rows) {
+      assert.equal(r[2], "", "reason is always empty");
+      assert.equal(r[5], "", "packet_file is always empty");
+      assert.equal(r[3], "", "not a git executionRoot, so commit_before is empty");
+      assert.equal(r[4], "", "not a git executionRoot, so commit_after is empty");
+    }
+
+    assert.equal(rows[0][6], "");
+    assert.equal(rows[1][6], "spec-reviewer.report.txt");
+    assert.equal(rows[2][6], "quality-reviewer.report.txt");
+
+    assert.equal(
+      fs.readFileSync(path.join(attemptDir, "spec-reviewer.report.txt"), "utf8"),
+      "Verdict: pass\n",
+    );
+    assert.equal(
+      fs.readFileSync(path.join(attemptDir, "quality-reviewer.report.txt"), "utf8"),
+      "Verdict: pass\n",
+    );
+  });
+});
+
+test("attempt-artifacts: a review-spec gate retry within one attempt directory overwrites its report file, keeping the same report_file cell on both rows", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "fail", "fail");
+    queue("review-spec", "fail");
+    queueImplementerScenario(env.streamsDir, "fix-spec", "completed", "completed");
+    queue("fix-spec", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "pass", "pass");
+    queue("review-spec", "pass");
+    queueReviewerScenario(env.streamsDir, "review-quality", "code-quality-reviewer", "pass", "pass");
+    queue("review-quality", "pass");
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter));
+    assert.equal(outcome.outcome, "integrating");
+
+    const attemptDir = path.join(env.taskDir, "attempt1-artifacts");
+    const rows = readDispatchLogRows(attemptDir);
+    assert.equal(rows.length, 5, "implement, review-spec (fail), fix-spec, review-spec (pass), review-quality");
+
+    const specReviewerRows = rows.filter((r) => r[1] === "spec-reviewer");
+    assert.equal(specReviewerRows.length, 2);
+    assert.deepEqual(
+      specReviewerRows.map((r) => r[6]),
+      ["spec-reviewer.report.txt", "spec-reviewer.report.txt"],
+    );
+
+    assert.equal(
+      fs.readFileSync(path.join(attemptDir, "spec-reviewer.report.txt"), "utf8"),
+      "Verdict: pass\n",
+      "the second dispatch's own pass verdict overwrites the first dispatch's fail verdict",
+    );
+  });
+});
+
+test("attempt-artifacts: commit_before/commit_after populate only for implementer-role rows, only when executionRoot is a real git repository", async () => {
+  await withEnv(async (env) => {
+    const gitRoot = path.join(env.dir, "git-execution-root");
+    fs.mkdirSync(gitRoot, { recursive: true });
+    initGitWorkspace(gitRoot);
+
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "pass", "pass");
+    queue("review-spec", "pass");
+    queueReviewerScenario(env.streamsDir, "review-quality", "code-quality-reviewer", "pass", "pass");
+    queue("review-quality", "pass");
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter, { executionRoot: gitRoot }));
+    assert.equal(outcome.outcome, "integrating");
+
+    const attemptDir = path.join(env.taskDir, "attempt1-artifacts");
+    const rows = readDispatchLogRows(attemptDir);
+
+    const implementRow = rows.find((r) => r[1] === "implementer") as string[];
+    assert.match(implementRow[3], /^[0-9a-f]{40}$/);
+    assert.match(implementRow[4], /^[0-9a-f]{40}$/);
+
+    for (const r of rows.filter((r) => r[1] !== "implementer")) {
+      assert.equal(r[3], "");
+      assert.equal(r[4], "");
+    }
+  });
+});
+
+test("attempt-artifacts: a fake-adapter development run produces a task directory reconstructLedger reads with non-empty evidence, and validateDispatchLog accepts the written log", async () => {
+  await withEnv(async (env) => {
+    const gitRoot = path.join(env.dir, "git-execution-root");
+    fs.mkdirSync(gitRoot, { recursive: true });
+    initGitWorkspace(gitRoot);
+
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    queueImplementerScenario(env.streamsDir, "implement", "completed", "completed");
+    queue("implement", "completed");
+    queueReviewerScenario(env.streamsDir, "review-spec", "spec-reviewer", "pass", "pass");
+    queue("review-spec", "pass");
+    queueReviewerScenario(env.streamsDir, "review-quality", "code-quality-reviewer", "pass", "pass");
+    queue("review-quality", "pass");
+
+    const outcome = await runDevelopmentStages(baseInput(env, adapter, { executionRoot: gitRoot }));
+    assert.equal(outcome.outcome, "integrating");
+
+    const attemptDir = path.join(env.taskDir, "attempt1-artifacts");
+    const validation = validateDispatchLog(path.join(attemptDir, "dispatch-log.tsv"));
+    assert.equal(validation.ok, true, validation.reason ?? "expected ok");
+
+    const ledger = reconstructLedger(env.taskDir, {
+      taskId: TASK_ID,
+      specPath: null,
+      verificationMode: "declared",
+      integrationCommit: null,
+      runRoot: env.dir,
+    });
+
+    assert.ok(ledger.evidence.implementerCommits.length > 0, "implementerCommits should be non-empty");
+    assert.notEqual(ledger.evidence.specReviewer, null, "specReviewer evidence should be recorded");
+    assert.notEqual(ledger.evidence.qualityReviewer, null, "qualityReviewer evidence should be recorded");
   });
 });
