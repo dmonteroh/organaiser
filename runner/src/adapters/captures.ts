@@ -29,6 +29,8 @@ export interface CaptureMetadata {
   commandShape: readonly string[];
   captureDate: string;
   case: CaptureCase;
+  synthesized?: boolean;
+  synthesisReason?: string;
 }
 
 export interface Capture {
