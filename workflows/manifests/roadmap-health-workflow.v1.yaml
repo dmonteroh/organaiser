@@ -70,4 +70,4 @@ spec:
       predicate: health-report-complete
       transitions:
         "true": ready
-        "false": progress-assessment
+        "false": waiting-operator
