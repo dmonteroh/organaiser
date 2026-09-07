@@ -276,6 +276,7 @@ test("resolveRecordMinors returns \"false\" when the configured follow-ups write
             { id: "finding-1", severity: "minor", summary: "resolveRecordMinors failure check", path: "src/example.ts", line: 1 },
           ],
         },
+        attemptRound: 1,
       };
 
       const result = resolveRecordMinors(input, ctx);

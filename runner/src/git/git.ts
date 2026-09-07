@@ -36,6 +36,10 @@ export function headSha(cwd: string): string {
   return git(["rev-parse", "HEAD"], { cwd });
 }
 
+export function tryHeadSha(cwd: string): string | null {
+  return git(["rev-parse", "HEAD"], { cwd, tolerant: true });
+}
+
 export function commitsSince(
   baseline: string | null | undefined,
   cwd: string,

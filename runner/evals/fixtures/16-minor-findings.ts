@@ -129,6 +129,7 @@ async function runWorker(args: WorkerArgs): Promise<void> {
             { id: "finding-1", severity: "minor", summary: args.findingSummary, path: "src/example.ts", line: 1 },
           ],
         },
+        attemptRound: 1,
       };
       resolveRecordMinors(input, ctx);
     }
