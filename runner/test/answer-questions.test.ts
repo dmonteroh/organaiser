@@ -10,7 +10,9 @@ import { initProject } from "../src/store/init.ts";
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
 import { persistOperatorQuestions } from "../src/engine/operator-questions.ts";
-import type { Io } from "../src/cli/commands.ts";
+import { acquireLease } from "../src/store/lease.ts";
+import { DEFAULT_TICK_INTERVAL_MS } from "../src/engine/tick.ts";
+import type { Io, SpawnFn } from "../src/cli/commands.ts";
 import type { QuestionRow } from "../src/store/types.ts";
 
 function fakeIo(): Io & { outLines: string[]; errLines: string[] } {
@@ -31,6 +33,15 @@ function ioAt(dir: string): Io & { outLines: string[]; errLines: string[] } {
   const io = fakeIo();
   io.cwd = () => dir;
   return io;
+}
+
+function countingSpawnFn(fakePid: number): { spawnFn: SpawnFn; callCount: () => number } {
+  let calls = 0;
+  const spawnFn: SpawnFn = () => {
+    calls += 1;
+    return { pid: fakePid, unref() {} };
+  };
+  return { spawnFn, callCount: () => calls };
 }
 
 function insertRun(db: DatabaseSync, runId: string, now: number): void {
@@ -456,6 +467,134 @@ test("a pre-existing .v1 artifact forces the write to .v2 without overwriting .v
     assert.equal(output.answered[0]!.artifact.path, `.orga/runs/${runId}/answers/q1.v2.json`);
     assert.equal(fs.readFileSync(preexistingPath, "utf8"), "{}\n");
     assert.ok(fs.existsSync(path.join(answersDir, "q1.v2.json")));
+  });
+});
+
+function seedAnswerableRun(dir: string, runId: string): string {
+  const db = openStore(dir);
+  try {
+    insertRun(db, runId, 1_000_000);
+    persistOperatorQuestions(db, { runId, questions: [makeQuestion("q1", undefined, [runId])] }, 2_000_000);
+  } finally {
+    db.close();
+  }
+  return writeAnswersFile(dir, `${runId}-answers.yaml`, { q1: "an answer" });
+}
+
+test("run answer --json: a live supervisor lease suppresses the spawn and reports a null supervisorPid", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const answersPath = seedAnswerableRun(dir, runId);
+
+    const seedDb = openStore(dir);
+    try {
+      acquireLease(seedDb, { runId, ownerPid: process.pid, tickIntervalMs: DEFAULT_TICK_INTERVAL_MS, now: () => Date.now() });
+    } finally {
+      seedDb.close();
+    }
+
+    const { spawnFn, callCount } = countingSpawnFn(99999);
+    const io = ioAt(dir);
+    io.spawnFn = spawnFn;
+    const code = await main(["node", "orga", "run", "answer", runId, "--file", answersPath, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.equal(callCount(), 0);
+
+    const output = JSON.parse(io.outLines[0] as string) as { supervisorPid: number | null };
+    assert.equal(output.supervisorPid, null);
+  });
+});
+
+test("run answer --json: a stale supervisor lease triggers a spawn and reports the new pid", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const answersPath = seedAnswerableRun(dir, runId);
+
+    const seedDb = openStore(dir);
+    try {
+      acquireLease(seedDb, {
+        runId,
+        ownerPid: process.pid,
+        tickIntervalMs: DEFAULT_TICK_INTERVAL_MS,
+        now: () => Date.now() - (3 * DEFAULT_TICK_INTERVAL_MS + 1000),
+      });
+    } finally {
+      seedDb.close();
+    }
+
+    const { spawnFn, callCount } = countingSpawnFn(99999);
+    const io = ioAt(dir);
+    io.spawnFn = spawnFn;
+    const code = await main(["node", "orga", "run", "answer", runId, "--file", answersPath, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.equal(callCount(), 1);
+
+    const output = JSON.parse(io.outLines[0] as string) as { supervisorPid: number | null };
+    assert.equal(output.supervisorPid, 99999);
+  });
+});
+
+test("run answer --json: no supervisor lease triggers a spawn and reports the new pid", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const answersPath = seedAnswerableRun(dir, runId);
+
+    const { spawnFn, callCount } = countingSpawnFn(99999);
+    const io = ioAt(dir);
+    io.spawnFn = spawnFn;
+    const code = await main(["node", "orga", "run", "answer", runId, "--file", answersPath, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.equal(callCount(), 1);
+
+    const output = JSON.parse(io.outLines[0] as string) as { supervisorPid: number | null };
+    assert.equal(output.supervisorPid, 99999);
+  });
+});
+
+test("run answer --json --no-supervisor: never spawns and reports a null supervisorPid, for every lease state", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+
+    const leaseSeeders: Array<(seedDb: ReturnType<typeof openStore>, runId: string) => void> = [
+      (seedDb, runId) =>
+        acquireLease(seedDb, { runId, ownerPid: process.pid, tickIntervalMs: DEFAULT_TICK_INTERVAL_MS, now: () => Date.now() }),
+      (seedDb, runId) =>
+        acquireLease(seedDb, {
+          runId,
+          ownerPid: process.pid,
+          tickIntervalMs: DEFAULT_TICK_INTERVAL_MS,
+          now: () => Date.now() - (3 * DEFAULT_TICK_INTERVAL_MS + 1000),
+        }),
+      () => {},
+    ];
+
+    for (const [index, seedLease] of leaseSeeders.entries()) {
+      const runId = `run-${index}`;
+      const answersPath = seedAnswerableRun(dir, runId);
+
+      const seedDb = openStore(dir);
+      try {
+        seedLease(seedDb, runId);
+      } finally {
+        seedDb.close();
+      }
+
+      const { spawnFn, callCount } = countingSpawnFn(99999);
+      const io = ioAt(dir);
+      io.spawnFn = spawnFn;
+      const code = await main(
+        ["node", "orga", "run", "answer", runId, "--file", answersPath, "--json", "--no-supervisor"],
+        io,
+      );
+      assert.equal(code, EXIT_CODES.OK);
+      assert.equal(callCount(), 0);
+
+      const output = JSON.parse(io.outLines[0] as string) as { supervisorPid: number | null };
+      assert.equal(output.supervisorPid, null);
+    }
   });
 });
 

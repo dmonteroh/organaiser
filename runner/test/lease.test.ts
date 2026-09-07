@@ -8,6 +8,8 @@ import {
   renewLease,
   releaseLease,
   reclaimLease,
+  readActiveLease,
+  isSupervisorLive,
   LeaseUnavailableError,
   LeaseLostError,
 } from "../src/store/lease.ts";
@@ -198,6 +200,50 @@ test("two supervisor processes racing for the same run: exactly one acquires, th
       }
       assert.equal(acquired, 1);
       assert.equal(unavailable, 1);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("isSupervisorLive is true for a fresh lease acquired with the current process's pid", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      const clock = fakeClock(1000);
+      const row = acquireLease(db, { runId: "run-1", ownerPid: process.pid, tickIntervalMs: 1000, now: clock.now });
+      assert.deepEqual({ ...readActiveLease(db, "run-1") }, { ...row });
+      assert.equal(isSupervisorLive(db, { runId: "run-1", tickIntervalMs: 1000, now: clock.now }), true);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("isSupervisorLive is false once the lease's heartbeat is older than 3x the tick interval", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      const clock = fakeClock(1000);
+      acquireLease(db, { runId: "run-1", ownerPid: process.pid, tickIntervalMs: 1000, now: clock.now });
+      clock.advance(3 * 1000 + 1);
+      assert.equal(isSupervisorLive(db, { runId: "run-1", tickIntervalMs: 1000, now: clock.now }), false);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("isSupervisorLive is false when no lease row exists for the run id", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      const clock = fakeClock(1000);
+      assert.equal(readActiveLease(db, "run-1"), null);
+      assert.equal(isSupervisorLive(db, { runId: "run-1", tickIntervalMs: 1000, now: clock.now }), false);
     } finally {
       db.close();
     }
