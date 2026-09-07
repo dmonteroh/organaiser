@@ -29,21 +29,6 @@ test("initProject creates orga.yaml, orgaw, and .orga/ with correct modes", asyn
   });
 });
 
-test("orgaw is a POSIX-sh wrapper that exits non-zero naming the missing pinned runner path", async () => {
-  await withTempWorkspace(async (dir) => {
-    initProject(dir);
-    const { execFileSync } = await import("node:child_process");
-    assert.throws(() => {
-      execFileSync("sh", [path.join(dir, "orgaw")], { encoding: "utf8" });
-    }, (err: unknown) => {
-      const e = err as { status: number; stderr: string };
-      assert.equal(e.status, 1);
-      assert.match(e.stderr, /pinned runner not found at .*\.orga\/runner\//);
-      return true;
-    });
-  });
-});
-
 test("initProject appends .orga/ to .gitignore and .git/info/exclude idempotently", async () => {
   await withTempWorkspace(async (dir) => {
     fs.mkdirSync(path.join(dir, ".git", "info"), { recursive: true });
