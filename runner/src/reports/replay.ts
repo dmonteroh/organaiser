@@ -18,9 +18,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { type ArtifactRef, makeArtifactRef, resolveArtifactRef } from "../store/artifact-ref.ts";
-import { createLedger, recordEvidence, sha256, type Ledger } from "../store/evidence.ts";
+import { createLedger, readLedger, recordEvidence, sha256, type Ledger } from "../store/evidence.ts";
 import * as git from "../git/git.ts";
 import type { Facts, ReviewerFacts, VerificationFacts, VerificationMode } from "../engine/predicates.ts";
+import { deriveVerificationFact } from "../engine/disposition.ts";
+import type { BarrierAttemptRecord } from "../engine/barrier.ts";
 
 const VERDICT_REGEX_SOURCE =
   "^[ \\t]*(#{1,6}[ \\t]*)?(\\*{0,2})?(final[ \\t]+)?verdict:(\\*{0,2})?[ \\t]*";
@@ -184,7 +186,12 @@ export function reconstructLedger(
     );
   }
 
-  recordEvidence(ledger, "verification", { status: "pass", mode: verificationMode });
+  const priorLedger = readLedger(taskDir);
+  const attempts = (priorLedger?.attempts ?? []) as BarrierAttemptRecord[];
+  const derived = deriveVerificationFact(attempts, verificationMode as VerificationMode);
+  if (derived !== null) {
+    recordEvidence(ledger, "verification", derived);
+  }
   if (integrationCommit) {
     recordEvidence(ledger, "integrationCommit", integrationCommit);
   }

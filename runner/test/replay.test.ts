@@ -447,6 +447,80 @@ test("no worker commit yields an empty capture and no spurious acceptance", asyn
   });
 });
 
+// ── reconstructLedger: real verification derivation from a planted ledger.json ─
+
+test("reconstructLedger derives a real pass verification fact from a planted ledger.json", async () => {
+  await withTempWorkspace((root) => {
+    fs.writeFileSync(
+      path.join(root, "ledger.json"),
+      JSON.stringify({
+        attempts: [
+          { attemptId: "attempt1", verdict: "fail", claimsParity: null },
+          { attemptId: "attempt2", verdict: "pass", claimsParity: null },
+        ],
+      }),
+      "utf8",
+    );
+
+    const ledger = reconstructLedger(root, {
+      taskId: "TEST",
+      specPath: null,
+      verificationMode: "legacy",
+      integrationCommit: null,
+      runRoot: root,
+    });
+
+    assert.deepEqual(ledger.evidence.verification, {
+      status: "pass",
+      mode: "legacy",
+      attempt: "attempt2",
+    });
+  });
+});
+
+test("reconstructLedger derives a real fail verification fact from a planted ledger.json when no attempt passed", async () => {
+  await withTempWorkspace((root) => {
+    fs.writeFileSync(
+      path.join(root, "ledger.json"),
+      JSON.stringify({
+        attempts: [
+          { attemptId: "attempt1", verdict: "fail", claimsParity: null },
+          { attemptId: "attempt2", verdict: "fail", claimsParity: null },
+        ],
+      }),
+      "utf8",
+    );
+
+    const ledger = reconstructLedger(root, {
+      taskId: "TEST",
+      specPath: null,
+      verificationMode: "declared",
+      integrationCommit: null,
+      runRoot: root,
+    });
+
+    assert.deepEqual(ledger.evidence.verification, {
+      status: "fail",
+      mode: "declared",
+      attempt: "attempt2",
+    });
+  });
+});
+
+test("reconstructLedger records no verification evidence when no ledger.json is present", async () => {
+  await withTempWorkspace((root) => {
+    const ledger = reconstructLedger(root, {
+      taskId: "TEST",
+      specPath: null,
+      verificationMode: "legacy",
+      integrationCommit: null,
+      runRoot: root,
+    });
+
+    assert.equal(ledger.evidence.verification, null);
+  });
+});
+
 // ── frozen fixture: commit identity and cross-attempt accretion ───────────────
 
 test("typed-commit-identity-rejects-placeholder: the fixture repo carries a real, explicit commit identity", () => {
