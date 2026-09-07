@@ -2,9 +2,11 @@
 id: gap-analysis-workflow
 name: Gap Analysis Workflow
 triggers: [gap-analysis, milestone-check, mva-readiness, completeness-audit]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/gap-analysis-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # Gap Analysis Workflow Contract
@@ -92,16 +94,19 @@ Each capability gets a coverage rating. `excess` is a task classification, not a
 
 ### Post-all-tasks
 
+This step never claims the board is complete.
+
 1. If multiple targets were analyzed: check for shared gaps across targets. Consolidate each shared gap into a single routed recommendation so downstream workflows do not create duplicate tasks.
 2. Verify every recommended action was routed to its named workflow or recorded for the operator.
 3. Note in the consolidated summary that confirming actual coverage requires re-running this workflow after the routed actions complete; do not block on it.
-4. Mark all `ready` tasks `integrated`.
+4. Report each `ready` task's coverage-analysis outcome for board reconciliation; this step does not itself mark any task `integrated` — that is the board workflow's call.
 
 ### Rules
 
 - Steps are executed in order. No step may be skipped.
 - The coverage-mapper must read actual task scope. Matching task titles to capability names is not coverage analysis.
-- Maximum revision rounds: 2. A round is one coverage-mapper Revision Pass plus one gap-challenger Re-Check Pass. Orchestrator relabels, needs-info resolutions, and pre-challenge corrections do not count against the cap. If the challenger still reports new missing capabilities after 2 rounds, escalate to the operator with the full coverage map and the competing assessments; record the operator's ruling as the final rating for each contested item and resume at step 7 without a further challenger pass.
+- Maximum revision rounds: 2 (manifest authority: `manifests/gap-analysis-workflow.v1.yaml` caps). A round is one coverage-mapper Revision Pass plus one gap-challenger Re-Check Pass. Orchestrator relabels, needs-info resolutions, and pre-challenge corrections do not count against the cap. If the challenger still reports new missing capabilities after 2 rounds, escalate to the operator with the full coverage map and the competing assessments; record the operator's ruling as the final rating for each contested item and resume at step 7 without a further challenger pass.
+- Maximum needs-info resolutions per run: 2 (manifest authority: `manifests/gap-analysis-workflow.v1.yaml` caps). A resolution is one `orchestrator-context` supply-and-re-dispatch cycle for the gap-challenger. If the challenger still returns `needs-info` after 2 resolutions, escalate to the operator with the outstanding missing items and stop; do not re-dispatch the challenger further for this pass.
 - Capabilities must be defined from the user's perspective first, then decomposed into supporting and operational layers. Starting from the engineering layer misses user-facing gaps.
 - Excess tasks are findings, not failures. A task created before the target was defined may not serve this specific target; that is information, not a mistake.
 - This workflow produces recommendations. Actual task creation goes through product-spec-workflow; task removal and reordering are operator calls.
