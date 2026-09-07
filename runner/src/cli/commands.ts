@@ -37,6 +37,7 @@ import { answerQuestions, UnknownQuestionKeyError, type AnswerQuestionsResult } 
 import { isSupervisorLive } from "../store/lease.ts";
 import type { QuestionRow } from "../store/types.ts";
 import { readYamlFile, type YamlMapping } from "./yaml.ts";
+import { renderAnswersTemplate } from "./answers-template.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
@@ -676,6 +677,12 @@ function formatQuestionTable(groups: QuestionGroup[]): string[] {
 function cmdRunQuestions(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run questions requires <run-id>");
+  const templatePath = flagString(parsed.flags, "template");
+  const json = flagBool(parsed.flags, "json");
+  if (templatePath !== undefined && json) {
+    throw new UsageError("run questions: --template cannot be combined with --json");
+  }
+
   const root = resolveRoot(io);
   readRun(root, runId);
 
@@ -687,7 +694,23 @@ function cmdRunQuestions(parsed: ParsedArgs, io: Io): ExitCode {
     db.close();
   }
 
-  if (flagBool(parsed.flags, "json")) {
+  if (templatePath !== undefined) {
+    if (rows.length === 0) {
+      io.stdout("no open questions");
+      return EXIT_CODES.OK;
+    }
+    const groups = groupQuestionsByRawId(rows);
+    const template = renderAnswersTemplate(
+      groups.map((group) => ({ id: group.questionId, safeDefault: group.safeDefault })),
+    );
+    fs.writeFileSync(templatePath, template.text);
+    io.stdout(
+      `wrote answers template for run ${runId} to ${templatePath}: ${template.prefilledCount} prefilled from default, ${template.blankCount} blank`,
+    );
+    return EXIT_CODES.OK;
+  }
+
+  if (json) {
     io.stdout(
       JSON.stringify({
         runId,
