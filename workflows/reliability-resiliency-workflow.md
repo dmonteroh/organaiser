@@ -2,9 +2,11 @@
 id: reliability-resiliency-workflow
 name: Reliability / Resiliency Analysis Workflow
 triggers: [reliability-analysis, resiliency-analysis, resilience-review, failure-mode-analysis, operational-readiness]
-contractVersion: 1.0.0
+contractVersion: 2.0.0
+runnerManifest: manifests/reliability-resiliency-workflow.v1.yaml
+resultSchema: schemas/stage-result.schema.json
 manualMode: supported
-runnerMode: unsupported
+runnerMode: supported
 ---
 
 # Reliability / Resiliency Analysis Workflow Contract
@@ -136,12 +138,14 @@ The investigator assigns these levels when reporting evidence, the mapper carrie
    - Explicit unknowns and assumptions, including rejected challenges with their rationale
 10. Mark task `ready`
 
-### Post-all-tasks
+### Assessment queue reconciliation
+
+This step never claims the board is complete.
 
 1. If multiple systems or subsystems were assessed, compare shared dependencies and repeated failure patterns
 2. If two assessments disagree about the same shared dependency or control, document both ratings with their evidence and record the disagreement as a cross-cutting unknown; do not silently average or overwrite either assessment
 3. Consolidate recurring issues into cross-cutting remediation themes
-4. Mark all `ready` tasks `integrated`
+4. Report each assessment's final state to the board workflow
 
 ### Rules
 

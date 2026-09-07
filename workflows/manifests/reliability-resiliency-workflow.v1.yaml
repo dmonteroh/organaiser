@@ -1,0 +1,91 @@
+apiVersion: ai-workflows.dev/v1alpha1
+kind: Workflow
+metadata:
+  id: reliability-resiliency-workflow
+  contractVersion: 2.0.0
+spec:
+  policy: ../reliability-resiliency-workflow.md
+  entryStage: investigate
+  terminalOutcomes:
+    success:
+      - ready
+    attention:
+      - waiting-operator
+      - parked
+    neutral: []
+  caps:
+    revisionRounds: 2
+  stages:
+    - id: investigate
+      kind: agent
+      role: reliability-investigator
+      prompt: ../subagents/reliability-investigator-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: map-failures
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: map-failures
+      kind: agent
+      role: failure-mapper
+      prompt: ../subagents/failure-mapper-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - completed
+        - questions
+        - failed
+      transitions:
+        completed: challenge-assessment
+        questions: waiting-operator
+        failed: parked
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: challenge-assessment
+      kind: agent
+      role: resiliency-challenger
+      prompt: ../subagents/resiliency-challenger-prompt.md
+      authority: read-only
+      freshSession: true
+      capabilityClass: high-reasoning
+      verdicts:
+        - assessment-holds
+        - gaps-found
+        - needs-info
+      transitions:
+        assessment-holds: finalize
+        gaps-found: route-gap-resolution
+        needs-info: route-missing-info
+      retry:
+        malformedResult: 1
+        processFailure: 1
+    - id: route-gap-resolution
+      kind: runner
+      predicate: gap-resolution-route
+      transitions:
+        evidence-gap: investigate
+        analytical-gap: map-failures
+        resolved-without-redispatch: finalize
+    - id: route-missing-info
+      kind: runner
+      predicate: missing-info-route
+      transitions:
+        orchestrator-context: challenge-assessment
+        operator: waiting-operator
+    - id: finalize
+      kind: runner
+      predicate: assessment-complete
+      transitions:
+        "true": ready
+        "false": investigate
