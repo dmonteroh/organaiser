@@ -1,0 +1,17 @@
+{"op":"output","text":"working on it"}
+{"op":"sleep","ms":100}
+{"op":"output","text":"still working"}
+{"op":"sleep","ms":100}
+{"op":"output","text":"still working"}
+{"op":"sleep","ms":100}
+{"op":"output","text":"still working"}
+{"op":"sleep","ms":100}
+{"op":"output","text":"still working"}
+{"op":"sleep","ms":100}
+{"op":"output","text":"still working"}
+{"op":"sleep","ms":100}
+{"op":"output","text":"still working"}
+{"op":"sleep","ms":100}
+{"op":"output","text":"still working"}
+{"op":"report","report":{"protocolVersion":"1","workflowId":"dev-workflow","workflowVersion":"2.0.0","runId":"run_test","taskId":"task_test","attemptId":"attempt_test","stageId":"implement","roleId":"implementer","status":"completed","summary":"Implemented steadily with no commit yet."}}
+{"op":"exit","code":0}

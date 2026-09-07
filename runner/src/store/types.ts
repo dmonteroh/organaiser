@@ -41,12 +41,14 @@ export type AttemptStatus = "pending" | "running" | "completed" | "failed" | "in
 //                       clears it for retry.
 //   stale-lease:        same reconciliation path as supervisor-crash.
 //   indeterminate:      never redispatched automatically.
+//   worker-timeout:     never redispatched automatically.
 export type InterruptReason =
   | "operator-pause"
   | "operator-cancel"
   | "supervisor-crash"
   | "stale-lease"
-  | "indeterminate";
+  | "indeterminate"
+  | "worker-timeout";
 
 export type TerminationState = "exited" | "signalled" | "reclaimed";
 
