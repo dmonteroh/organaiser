@@ -1,0 +1,14 @@
+{
+  "attempts": [
+    {
+      "attemptId": "attempt1",
+      "verdict": "pass",
+      "failedCondition": null,
+      "checkResults": null,
+      "workerClaims": null,
+      "claimsParity": null,
+      "failureDetail": null,
+      "recordedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ]
+}
