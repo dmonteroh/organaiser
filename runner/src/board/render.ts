@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { openStore } from "../store/db.ts";
+import { redactorForRoot } from "../store/redact.ts";
 import type { AttemptRow, QuestionRow, TaskRow, TaskState, WorkerRow } from "../store/types.ts";
 
 type Bucket = "queued" | "active" | "attention" | "terminal";
@@ -61,11 +62,12 @@ function ensureSecureOutputDir(dir: string): void {
   fs.chmodSync(dir, 0o700);
 }
 
-function writeAtomic(outputPath: string, content: string): void {
+function writeAtomic(root: string, outputPath: string, content: string): void {
   const dir = path.dirname(outputPath);
   ensureSecureOutputDir(dir);
+  const redacted = redactorForRoot(root, process.env)(content);
   const tmpPath = path.join(dir, `.${path.basename(outputPath)}.tmp-${randomUUID()}`);
-  fs.writeFileSync(tmpPath, content, { mode: 0o600 });
+  fs.writeFileSync(tmpPath, redacted, { mode: 0o600 });
   fs.chmodSync(tmpPath, 0o600);
   fs.renameSync(tmpPath, outputPath);
   fs.chmodSync(outputPath, 0o600);
@@ -215,7 +217,7 @@ export function renderBoard(root: string, runId: string, outputPath?: string): s
     );
 
     const finalPath = outputPath ? path.resolve(outputPath) : defaultBoardPath(root, runId);
-    writeAtomic(finalPath, content);
+    writeAtomic(root, finalPath, content);
     return finalPath;
   } finally {
     db.close();

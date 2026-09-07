@@ -25,7 +25,8 @@
         "caller-exit-survival",
         "worker-final-is-data",
         "board-not-drained",
-        "duplicate-dispatch"
+        "duplicate-dispatch",
+        "secret-redaction"
       ],
       "live": ["caller-exit-survival"]
     }

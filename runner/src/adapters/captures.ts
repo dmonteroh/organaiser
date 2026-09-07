@@ -3,6 +3,8 @@
 // the repository. This module defines the format and its loader; it records no capture
 // itself.
 
+import { DEFAULT_SECRET_ENV_NAMES, DEFAULT_TOKEN_PATTERNS, createRedactor } from "../store/redact.ts";
+
 /** The ten goals spec section 29.5 case names, in the spec's own order. */
 export const CAPTURE_CASES = [
   "normal-success",
@@ -81,57 +83,20 @@ export function loadCapture(raw: string): Capture {
   };
 }
 
-/** Environment variable names whose values are redacted wherever they appear in a line. */
-const REDACTED_ENV_VAR_NAMES: readonly string[] = [
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GITHUB_TOKEN",
-  "GH_TOKEN",
-  "OPENAI_ORGANIZATION",
-];
-
-const TOKEN_PATTERNS: readonly RegExp[] = [
-  /sk-[A-Za-z0-9_-]+/g,
-  /Bearer\s+[A-Za-z0-9._-]+/g,
-  /ghp_[A-Za-z0-9]+/g,
-];
-
-function redactEnvValues(line: string, environment: NodeJS.ProcessEnv): string {
-  let redacted = line;
-  for (const name of REDACTED_ENV_VAR_NAMES) {
-    const value = environment[name];
-    if (value && value.length > 0) {
-      redacted = redacted.split(value).join("[REDACTED]");
-    }
-  }
-  return redacted;
-}
-
-function redactHomePaths(line: string, homeDirectory: string): string {
-  if (!homeDirectory) return line;
-  return line.split(homeDirectory).join("~");
-}
-
-function redactTokens(line: string): string {
-  let redacted = line;
-  for (const pattern of TOKEN_PATTERNS) {
-    redacted = redacted.replace(pattern, "[REDACTED]");
-  }
-  return redacted;
-}
-
 /**
  * Redacts one raw vendor stream line before it is written to a capture file: absolute
- * home paths, the values of `environment`'s allowlisted names, and any `sk-`, `Bearer `,
- * or `ghp_` token. Order matters: home-path and env-value redaction run first so a token
- * pattern does not partially match text a coarser rule would have removed whole.
+ * home paths, the values of the built-in allowlisted environment variable names, and
+ * any built-in `sk-`, `Bearer `, or `ghp_` token, via the shared `store/redact.ts`
+ * primitives and their built-in pattern set.
  */
 export function sanitizeCaptureLine(
   line: string,
   options: { homeDirectory: string; environment: NodeJS.ProcessEnv },
 ): string {
-  let sanitized = redactHomePaths(line, options.homeDirectory);
-  sanitized = redactEnvValues(sanitized, options.environment);
-  sanitized = redactTokens(sanitized);
-  return sanitized;
+  return createRedactor({
+    secretPatterns: DEFAULT_TOKEN_PATTERNS,
+    environmentVariableNames: DEFAULT_SECRET_ENV_NAMES,
+    homeDirectory: options.homeDirectory,
+    environment: options.environment,
+  })(line);
 }
