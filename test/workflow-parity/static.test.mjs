@@ -543,12 +543,11 @@ const manifestsByFile = new Map(
 );
 
 test("manifest files under workflows/manifests/ equal the union of runnerMode: supported workflows' runnerManifest plus RUNNER_ONLY_MANIFESTS, and every declared runnerManifest resolves to a file that exists, and each manifest declares the required top-level shape", () => {
-  for (const file of manifestFiles) {
-    assert.ok(
-      expectedManifestFiles.has(file),
-      `workflows/manifests/${file} is not in the expected manifest set (runnerMode: supported workflows' runnerManifest values plus RUNNER_ONLY_MANIFESTS): ${[...expectedManifestFiles].sort().join(", ")}`,
-    );
-  }
+  assert.deepEqual(
+    manifestFiles,
+    [...expectedManifestFiles].sort(),
+    `workflows/manifests/ must contain exactly the expected manifest set (runnerMode: supported workflows' runnerManifest values plus RUNNER_ONLY_MANIFESTS): ${[...expectedManifestFiles].sort().join(", ")}`,
+  );
   for (const file of workflowFiles) {
     const fields = frontmatterByFile.get(file);
     if (fields.runnerMode !== "supported") continue;
