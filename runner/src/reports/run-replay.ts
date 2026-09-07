@@ -50,6 +50,7 @@ import {
   recomputeDisposition,
   type RecomputedDisposition,
 } from "../engine/disposition.ts";
+import { EXIT_CODES, type ExitCode } from "../cli/exit-codes.ts";
 import { assembleReplayInputs } from "./replay-inputs.ts";
 import { buildFacts, reconstructLedger } from "./replay.ts";
 
@@ -148,4 +149,16 @@ export function buildReplayReport(
   } finally {
     db.close();
   }
+}
+
+export function runReplay(
+  root: string,
+  runId: string,
+  opts?: { taskId?: string },
+): { report: ReplayReport; exitCode: ExitCode } {
+  const report = buildReplayReport(root, runId, opts);
+  const exitCode = report.tasks.some((task) => task.status === "diverged")
+    ? EXIT_CODES.STATE_CONFLICT
+    : EXIT_CODES.OK;
+  return { report, exitCode };
 }

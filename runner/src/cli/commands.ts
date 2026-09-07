@@ -27,6 +27,7 @@ import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts";
 import { validateBoard } from "../board/validate.ts";
 import { renderBoard } from "../board/render.ts";
+import { runReplay, ReplayUnknownTaskError } from "../reports/run-replay.ts";
 import {
   listOpenQuestions,
   rawQuestionId,
@@ -574,6 +575,30 @@ function cmdBoardRender(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
+function cmdRunReplay(parsed: ParsedArgs, io: Io): ExitCode {
+  const runId = parsed.positionals[0];
+  if (!runId) throw new UsageError("run replay requires <run-id>");
+  const root = resolveRoot(io);
+  readRun(root, runId);
+  const taskId = flagString(parsed.flags, "task");
+
+  let result;
+  try {
+    result = runReplay(root, runId, taskId !== undefined ? { taskId } : undefined);
+  } catch (err) {
+    if (err instanceof ReplayUnknownTaskError) throw new UsageError(err.message);
+    throw err;
+  }
+
+  emit(
+    io,
+    flagBool(parsed.flags, "json"),
+    result.report,
+    `replay ${runId}: ${result.report.tasks.length} task(s)`,
+  );
+  return result.exitCode;
+}
+
 interface QuestionGroup {
   questionId: string;
   taskIds: string[];
@@ -951,6 +976,7 @@ const VALUE_FLAGS = new Set([
   "input",
   "output",
   "file",
+  "task",
 ]);
 
 type CommandBody = (parsed: ParsedArgs, io: Io) => ExitCode | Promise<ExitCode>;
@@ -971,6 +997,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "board import-markdown": cmdBoardImportMarkdown,
   "board validate": cmdBoardValidate,
   "board render": cmdBoardRender,
+  "run replay": cmdRunReplay,
   "run questions": cmdRunQuestions,
   "run answer": cmdRunAnswer,
 };
