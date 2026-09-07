@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { assertNoSymlinkAncestry } from "./db.ts";
+import { assertNoSymlinkAncestry, openStore } from "./db.ts";
 import { ORGAW_TEMPLATE } from "./orgaw-template.ts";
 
 const ORGA_YAML = "orga.yaml";
@@ -47,9 +47,11 @@ export interface InitProjectResult {
 }
 
 // Creates orga.yaml, orgaw, and .orga/ at `cwd`, and registers .orga/ as
-// ignored in both .gitignore and .git/info/exclude. Writes nothing else
-// outside those paths. Re-running on an already-initialized project touches
-// neither orga.yaml nor orgaw, and every ignore-line append is idempotent.
+// ignored in both .gitignore and .git/info/exclude. Also opens and closes the
+// store once, so .orga/state.sqlite exists and the directory is immediately
+// discoverable by findProjectRoot. Writes nothing else outside those paths.
+// Re-running on an already-initialized project touches neither orga.yaml nor
+// orgaw, and every ignore-line append and store-open is idempotent.
 export function initProject(cwd: string, checksum: string = ""): InitProjectResult {
   const root = path.resolve(cwd);
   assertNoSymlinkAncestry(filesystemRoot(root), root);
@@ -84,6 +86,13 @@ export function initProject(cwd: string, checksum: string = ""): InitProjectResu
     fs.mkdirSync(gitInfoDir, { recursive: true });
     appendIgnoreLineIfAbsent(path.join(gitInfoDir, "exclude"), `${ORGA_DIR}/`);
   }
+
+  // Materializes .orga/state.sqlite (via openStore's existing DatabaseSync +
+  // applyMigrations) so this directory is immediately its own discoverable
+  // root for findProjectRoot's hasAdjacentOrgaDir check. Safe to call on
+  // every run, including re-init of an already-initialized project: openStore
+  // only creates the file and chmod's it when it did not already exist.
+  openStore(root).close();
 
   return { root, created: !alreadyInitialized };
 }

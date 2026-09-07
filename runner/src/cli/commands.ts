@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 import { initProject } from "../store/init.ts";
-import { openStore } from "../store/db.ts";
+import { findProjectRoot, openStore } from "../store/db.ts";
 import { eventsJsonlPath } from "../store/events.ts";
 import type { RunRow } from "../store/types.ts";
 import { startRun, BoardValidationError } from "../engine/supervisor-spawn.ts";
@@ -129,7 +129,7 @@ function flagBool(flags: Map<string, string | boolean>, name: string): boolean {
 }
 
 function resolveRoot(io: Io): string {
-  return io.cwd();
+  return findProjectRoot(io.cwd());
 }
 
 function readConfig(io: Io): ResolvedConfig {
@@ -182,7 +182,7 @@ function emit(io: Io, json: boolean, value: unknown, humanLine: string): void {
 // ── Command bodies ──────────────────────────────────────────────────────────
 
 function cmdInit(parsed: ParsedArgs, io: Io): ExitCode {
-  const root = resolveRoot(io);
+  const root = io.cwd();
   const checksumRaw = flagString(parsed.flags, "runner-checksum");
   if (checksumRaw !== undefined && !/^[0-9a-f]{64}$/.test(checksumRaw)) {
     throw new UsageError(`invalid --runner-checksum: expected 64 lowercase hex characters, got ${checksumRaw}`);
