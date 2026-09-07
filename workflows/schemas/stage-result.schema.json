@@ -279,6 +279,186 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "verifier"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/verifierVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "evaluator"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/evaluatorVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "devils-advocate"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/devilsAdvocateVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "handoff-challenger"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/handoffChallengerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "intake-challenger"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/intakeChallengerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "gap-challenger"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/gapChallengerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "resiliency-challenger"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/resiliencyChallengerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "cross-checker"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/crossCheckerVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "assumption-auditor"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/assumptionAuditorVerdict"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["roleId"],
+        "properties": {
+          "roleId": {
+            "const": "spike-reviewer"
+          }
+        }
+      },
+      "then": {
+        "required": ["verdict"],
+        "properties": {
+          "verdict": {
+            "$ref": "#/$defs/spikeReviewerVerdict"
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -369,6 +549,46 @@
     "codeQualityReviewerVerdict": {
       "type": "string",
       "enum": ["pass", "needs-info", "fail-with-severity: critical", "fail-with-severity: important"]
+    },
+    "verifierVerdict": {
+      "type": "string",
+      "enum": ["confirmed", "alternative-hypothesis", "insufficient-evidence"]
+    },
+    "evaluatorVerdict": {
+      "type": "string",
+      "enum": ["sufficient", "insufficient evidence"]
+    },
+    "devilsAdvocateVerdict": {
+      "type": "string",
+      "enum": ["pass", "concerns-raised"]
+    },
+    "handoffChallengerVerdict": {
+      "type": "string",
+      "enum": ["package-ready", "gaps-found", "needs-info"]
+    },
+    "intakeChallengerVerdict": {
+      "type": "string",
+      "enum": ["delta-sound", "gaps-found", "needs-info"]
+    },
+    "gapChallengerVerdict": {
+      "type": "string",
+      "enum": ["coverage-sufficient", "gaps-found", "needs-info"]
+    },
+    "resiliencyChallengerVerdict": {
+      "type": "string",
+      "enum": ["assessment-holds", "gaps-found", "needs-info"]
+    },
+    "crossCheckerVerdict": {
+      "type": "string",
+      "enum": ["pass", "fail-with-gaps"]
+    },
+    "assumptionAuditorVerdict": {
+      "type": "string",
+      "enum": ["plan-sound", "corrections-needed", "needs-info"]
+    },
+    "spikeReviewerVerdict": {
+      "type": "string",
+      "enum": ["question-answered", "inconclusive", "needs-more-exploration"]
     }
   }
 }
