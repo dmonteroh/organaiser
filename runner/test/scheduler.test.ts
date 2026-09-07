@@ -113,6 +113,7 @@ function fakeDispatchProfile(maxWorkerSlots: number): DispatchProfile {
     authenticationOutcome: "authenticated",
     isKnownBadVersion: false,
     concurrency: { maxWorkerSlots, vendorSlots: { codex: maxWorkerSlots, claude: maxWorkerSlots } },
+    terminationGraceMs: 10000,
   };
 }
 
@@ -342,7 +343,7 @@ test("createSchedulerTick calls the six named steps in goals spec section 11's o
   await withRunDb(async ({ db, runId, clock }) => {
     const callOrder: string[] = [];
     const steps: SchedulerSteps = {
-      reapWorkers: (ctx, runtime) => {
+      reapWorkers: async (ctx, runtime) => {
         callOrder.push("reapWorkers");
         return DEFAULT_SCHEDULER_STEPS.reapWorkers(ctx, runtime);
       },
@@ -795,6 +796,153 @@ test("dispatchEligible does not dispatch a task a second time while its own atte
   });
 });
 
+// A real SIGTERM/SIGKILL terminator against a real process group, mirroring
+// `timeout-watchdog.test.ts`'s own `terminate` helper: `reapWorkers`'s
+// timed-out branch is only reachable once a watchdog has actually terminated
+// a real spawned process, not merely "considered terminated" by a stub that
+// could pass with a broken implementation.
+function isGroupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const realTerminate: TerminateFn = async ({ pgid }, gracePeriodMs) => {
+  try {
+    process.kill(-pgid, "SIGTERM");
+  } catch {
+    return { signalSent: null, exitCode: null, killedProcessTree: true, timedOutWaitingForExit: false };
+  }
+  const deadline = Date.now() + gracePeriodMs;
+  while (Date.now() < deadline && isGroupAlive(pgid)) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (isGroupAlive(pgid)) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+    for (let i = 0; i < 20 && isGroupAlive(pgid); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return {
+    signalSent: "SIGTERM",
+    exitCode: null,
+    killedProcessTree: !isGroupAlive(pgid),
+    timedOutWaitingForExit: isGroupAlive(pgid),
+  };
+};
+
+test("reapWorkers: a generic-route attempt whose watchdog fires is recorded interrupted/worker-timeout/signalled, emits attempt.timed-out, is withheld from reapedAttemptsByTaskId, and leaves the task redispatch-eligible next tick", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    // `stageId: "integration"` with no workspace provider is the only
+    // reachable path to the generic `dispatchAttempt` route (per the task
+    // brief's refinement log, D1): `implementation` always routes through
+    // `runDevelopmentStages`, and `integration` only takes this fallback when
+    // no real workspace-backed pipeline is available for the task.
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
+
+    const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-scheduler-worker-timeout-"));
+    try {
+      // A real spawned process that just sleeps and never emits an event, so
+      // the watchdog's own `spawnMs` timer -- not a mocked verdict -- is what
+      // fires (mirroring `timeout-watchdog.test.ts`'s "no-events" scenario).
+      fs.writeFileSync(
+        path.join(streamsDir, "integration--hangs.jsonl"),
+        `${JSON.stringify({ op: "sleep", ms: 60000 })}\n`,
+        "utf8",
+      );
+
+      const adapter = new FakeAdapter({ terminate: realTerminate, streamsDir, scenarioFor: () => "hangs" });
+      const profile = fakeDispatchProfile(1);
+      profile.profile.timeouts = { spawnMs: 150, idleMs: 5000, wallMs: 5000 };
+      profile.terminationGraceMs = 100;
+
+      const runtime = createSchedulerRuntime();
+
+      // Dispatches `taskId`'s live attempt, then polls `reapWorkers` exactly
+      // the way a real tick loop would -- repeatedly, with no manual
+      // pre-await of the watchdog promise -- until the OS-level poll
+      // observes the real, watchdog-terminated process dead and reaps it.
+      // This exercises the actual race `reapWorkers` itself resolves, not a
+      // shortcut around it.
+      async function dispatchThenReapTimeout(taskId: string): Promise<{ attemptId: string; pgid: number }> {
+        await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter, undefined, profile);
+        const live = runtime.liveAttemptByTaskId.get(taskId);
+        assert.ok(live, `expected ${taskId} to dispatch via the generic route`);
+        const attemptId = live!.attemptId;
+        const pgid = live!.handle.pgid;
+
+        const deadline = Date.now() + 5000;
+        while (runtime.liveAttemptByTaskId.has(taskId)) {
+          await reapWorkers(buildCtx(db, runId, clock), runtime);
+          if (!runtime.liveAttemptByTaskId.has(taskId)) break;
+          if (Date.now() > deadline) throw new Error(`${taskId} was never reaped within 5s`);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return { attemptId, pgid };
+      }
+
+      const first = await dispatchThenReapTimeout("task-a");
+      assert.equal(isGroupAlive(first.pgid), false, "the watchdog's real SIGTERM/SIGKILL actually killed the process group");
+
+      // Assertion 1 (AC2): the attempts row.
+      const attempt = db.prepare(`SELECT status, interrupt_reason FROM attempts WHERE id = ?`).get(first.attemptId) as {
+        status: string;
+        interrupt_reason: string | null;
+      };
+      assert.equal(attempt.status, "interrupted", "a reverted implementation that left status 'failed'/'completed' fails this");
+      assert.equal(attempt.interrupt_reason, "worker-timeout");
+
+      // Assertion 2 (AC2): the workers row -- 'signalled', never 'exited'. A
+      // reverted implementation that always writes 'exited' (today's
+      // no-timeout branch) fails this.
+      const worker = db.prepare(`SELECT termination_state FROM workers WHERE attempt_id = ?`).get(first.attemptId) as {
+        termination_state: string;
+      };
+      assert.equal(worker.termination_state, "signalled");
+
+      // Assertion 3 (AC4): the attempt.timed-out event, carrying which budget
+      // fired. Absent if the event append were dropped or misnamed.
+      const events = db
+        .prepare(`SELECT payload FROM events WHERE run_id = ? AND type = 'attempt.timed-out' AND attempt_id = ?`)
+        .all(runId, first.attemptId) as Array<{ payload: string }>;
+      assert.equal(events.length, 1, "exactly one attempt.timed-out event is appended for the timed-out attempt");
+      const payload = JSON.parse(events[0]!.payload) as { budget: string };
+      assert.equal(payload.budget, "spawn-timeout", "the payload names the budget that actually fired");
+
+      // Assertion 4 (AC3's real invariant): a timed-out attempt is withheld
+      // from `reapedAttemptsByTaskId`, so `normalizeResults` never overwrites
+      // its recorded status; and with no board transition wired for this
+      // outcome (refinement log D6), the task is simply re-eligible for
+      // dispatch on the very next tick rather than stuck. A future refactor
+      // that routed a timed-out attempt back into `reapedAttemptsByTaskId`
+      // would fail the first assertion here; one that left the task's
+      // worktree/claim state blocking redispatch would fail the second.
+      assert.equal(
+        runtime.scratch.reapedAttemptsByTaskId.has("task-a"),
+        false,
+        "a timed-out attempt must never be handed to normalizeResults",
+      );
+      assert.equal(runtime.scratch.reapedAttemptsByTaskId.size, 0);
+
+      const second = await dispatchThenReapTimeout("task-a");
+      assert.notEqual(second.attemptId, first.attemptId, "the redispatch creates a genuinely new, distinct attempt");
+      assert.equal(isGroupAlive(second.pgid), false, "the second attempt's own watchdog also actually terminated its process group");
+
+      const attemptCount = db
+        .prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ? AND task_id = ?`)
+        .get(runId, "task-a") as { n: number };
+      assert.equal(attemptCount.n, 2, "the task was genuinely redispatched (a second attempts row, round 2), not left stuck");
+    } finally {
+      fs.rmSync(streamsDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("priority filtering never bypasses eligibility: a higher-priority ineligible task is skipped for a lower-priority eligible one", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
     // task-a is highest priority but has an unmet dependency, so it is not eligible.
@@ -1087,7 +1235,7 @@ test("normalizeResults: a mutating attempt whose observed diff exceeds its claim
     const diffBefore = runGit(workspacePath, ["diff"]);
     const statusBefore = runGit(workspacePath, ["status", "--porcelain"]);
 
-    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
     assert.equal(runtime.liveAttemptByTaskId.size, 0);
@@ -1151,7 +1299,7 @@ test("normalizeResults: a genuine git failure inside observedPaths still fails t
     // mock.
     fs.rmSync(workspacePath, { recursive: true, force: true });
 
-    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
     assert.equal(runtime.liveAttemptByTaskId.size, 0);
@@ -1193,7 +1341,7 @@ test("a task whose out-of-claim rejection left an active worktrees row is not re
     fs.writeFileSync(path.join(workspacePath, "unclaimed.txt"), "surprise\n", "utf8");
     await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
 
-    reapWorkers(buildCtx(db, runId, clock), runtime);
+    await reapWorkers(buildCtx(db, runId, clock), runtime);
     await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
     assert.equal(runtime.liveAttemptByTaskId.size, 0);
 
@@ -1540,7 +1688,7 @@ for (const [status, expectedDisposition] of [
       await dispatchEligible(buildCtx(db, runId, clock), runtime, adapter);
       await waitForExit(runtime.liveAttemptByTaskId.get("task-a")!.handle.pid);
 
-      reapWorkers(buildCtx(db, runId, clock), runtime);
+      await reapWorkers(buildCtx(db, runId, clock), runtime);
       await normalizeResults(buildCtx(db, runId, clock), runtime, adapter);
 
       advanceTransitions(buildCtx(db, runId, clock), runtime);

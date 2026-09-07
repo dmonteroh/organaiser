@@ -228,6 +228,7 @@ test("a dispatched attempt's resolved vendor profile, CLI version, and workflow 
         authenticationOutcome: "authenticated",
         isKnownBadVersion: false,
         concurrency: { maxWorkerSlots: 1, vendorSlots: { codex: 1, claude: 1 } },
+        terminationGraceMs: 10000,
       };
       const ctx: TickContext = {
         db,

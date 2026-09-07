@@ -68,6 +68,7 @@ function twoSlotDispatchProfile(): DispatchProfile {
     authenticationOutcome: "authenticated",
     isKnownBadVersion: false,
     concurrency: { maxWorkerSlots: 2, vendorSlots: { codex: 2, claude: 2 } },
+    terminationGraceMs: 10000,
   };
 }
 

@@ -20,7 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-import type { AttemptOutcome, ProcessAdapter, ProcessHandle } from "../adapters/adapter.ts";
+import type { AttemptOutcome, ProcessAdapter, ProcessHandle, TimeoutBudget } from "../adapters/adapter.ts";
 import { FakeAdapter } from "../adapters/fake.ts";
 import { selectAdapter } from "../adapters/select.ts";
 import { claudeProbeSpec } from "../adapters/claude-adapter.ts";
@@ -47,6 +47,8 @@ import {
   type RefinementOutcome,
 } from "./board-predicates.ts";
 import { terminateGroups } from "./termination.ts";
+import { watchForTimeout, type WatchdogResult } from "./timeout-watchdog.ts";
+import { DEFAULT_CANCEL_GRACE_MS } from "./control-commands.ts";
 import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
 import {
@@ -160,6 +162,12 @@ const STAGE_IDS = new Set(STAGE_DEFINITIONS.map((stage) => stage.id));
 const DISPATCHABLE_STAGE_IDS = new Set(["implementation", "integration"]);
 const LEGAL_TERMINAL_DISPOSITIONS = new Set<string>(TERMINAL_DISPOSITION_VALUES);
 
+// Mirrors the same-named, same-shaped private constant already declared
+// independently in `workflow-stages.ts` and `integration-stages.ts`: used
+// only when no `dispatchProfile` is resolved (so `dispatchProfile.profile.timeouts`
+// is unavailable) at any of this file's three timeout-budget call sites.
+const DEFAULT_TIMEOUT_BUDGET: TimeoutBudget = { spawnMs: 30000, idleMs: 30000, wallMs: 300000 };
+
 // A representative store-level `TaskState` for each board stage, so
 // `tasks.state` (the broader target-architecture vocabulary) stays roughly in
 // sync with `tasks.stage_id` (this manifest's own stage vocabulary) as a task
@@ -183,6 +191,11 @@ interface LiveAttempt {
   stageId: string;
   handle: ProcessHandle;
   workspace: WorkspaceHandle | null;
+  // Armed once, immediately after dispatch, by the generic route's
+  // `watchForTimeout` call; never awaited at dispatch time. `reapWorkers`
+  // awaits it, but only once the OS-level poll independently reports the
+  // process dead.
+  watchdog: Promise<WatchdogResult>;
 }
 
 // The workspace root, worktrees root, and branch prefix a caller sources
@@ -215,6 +228,11 @@ export interface DispatchProfile {
     maxWorkerSlots: number;
     vendorSlots: Readonly<Record<RunnerId, number>>;
   };
+  // Sourced from `ResolvedConfig.timing.cancelGraceMs` in
+  // `createProductionSchedulerTick`; consulted only by the generic
+  // dispatch route's `watchForTimeout` call, falling back to
+  // `DEFAULT_CANCEL_GRACE_MS` when no dispatch profile is resolved.
+  terminationGraceMs: number;
 }
 
 interface TickScratch {
@@ -329,17 +347,48 @@ function briefArtifactDeclared(task: TaskRow): boolean {
 // directly by pid and process group rather than through `adapter.collect`,
 // which blocks until the process has already finished; polling keeps this
 // step cheap on every tick where a worker is still running.
-export function reapWorkers(ctx: TickContext, runtime: SchedulerRuntime): void {
+export async function reapWorkers(ctx: TickContext, runtime: SchedulerRuntime): Promise<void> {
   const nowMs = ctx.now();
   for (const [taskId, live] of runtime.liveAttemptByTaskId) {
     if (pidAlive(live.handle.pid) || groupAlive(live.handle.pgid)) continue;
 
-    withTransaction(ctx.db, () => {
-      ctx.db
-        .prepare(`UPDATE workers SET termination_state = 'exited', ended_at = ? WHERE attempt_id = ?`)
-        .run(nowMs, live.attemptId);
-    });
-    runtime.scratch.reapedAttemptsByTaskId.set(taskId, live);
+    const verdict = await live.watchdog;
+
+    if (verdict.outcome === "no-timeout") {
+      withTransaction(ctx.db, () => {
+        ctx.db
+          .prepare(`UPDATE workers SET termination_state = 'exited', ended_at = ? WHERE attempt_id = ?`)
+          .run(nowMs, live.attemptId);
+      });
+      runtime.scratch.reapedAttemptsByTaskId.set(taskId, live);
+    } else {
+      // The watchdog fired before the process was independently observed
+      // dead: record the attempt as timed-out directly here, rather than
+      // handing it to `normalizeResults` via `reapedAttemptsByTaskId` — that
+      // map is deliberately left untouched so `normalizeResults` never
+      // overwrites this recorded status (AC3). No task-state transition is
+      // wired for this outcome: the task is simply re-eligible for dispatch
+      // on the next tick (see refinement log D6).
+      withTransaction(ctx.db, () => {
+        ctx.db
+          .prepare(`UPDATE workers SET termination_state = 'signalled', ended_at = ? WHERE attempt_id = ?`)
+          .run(nowMs, live.attemptId);
+        ctx.db
+          .prepare(
+            `UPDATE attempts SET status = 'interrupted', interrupt_reason = 'worker-timeout', ended_at = ? WHERE id = ?`,
+          )
+          .run(nowMs, live.attemptId);
+        appendEvent(ctx.db, {
+          id: randomUUID(),
+          run_id: ctx.runId,
+          task_id: taskId,
+          attempt_id: live.attemptId,
+          type: "attempt.timed-out",
+          payload: JSON.stringify({ budget: verdict.outcome }),
+          created_at: nowMs,
+        });
+      });
+    }
     runtime.liveAttemptByTaskId.delete(taskId);
   }
 }
@@ -914,6 +963,7 @@ export async function dispatchEligible(
         vendor: dispatchProfile?.vendor ?? "fake",
         model: dispatchProfile?.profile.model ?? "fake",
         configJson,
+        timeoutBudget: dispatchProfile?.profile.timeouts ?? DEFAULT_TIMEOUT_BUDGET,
         packet: buildDispatchPacketInput(
           { id: task.id, title: task.title, briefPath: task.brief_path },
           { db: ctx.db, runId: ctx.runId, projectRoot: workspace?.projectRoot ?? process.cwd() },
@@ -954,6 +1004,7 @@ export async function dispatchEligible(
         vendor: dispatchProfile?.vendor ?? "fake",
         model: dispatchProfile?.profile.model ?? "fake",
         configJson,
+        timeoutBudget: dispatchProfile?.profile.timeouts ?? DEFAULT_TIMEOUT_BUDGET,
         packet: buildDispatchPacketInput(
           { id: task.id, title: task.title, briefPath: task.brief_path },
           { db: ctx.db, runId: ctx.runId, projectRoot: workspace.projectRoot },
@@ -979,6 +1030,8 @@ export async function dispatchEligible(
       return;
     }
 
+    const resolvedTimeoutBudget = dispatchProfile?.profile.timeouts ?? DEFAULT_TIMEOUT_BUDGET;
+
     const outcome = await dispatchAttempt(
       ctx.db,
       adapter,
@@ -993,7 +1046,7 @@ export async function dispatchEligible(
         model: dispatchProfile?.profile.model ?? "fake",
         configJson,
         mutating,
-        timeoutBudget: { spawnMs: 30000, idleMs: 30000, wallMs: 300000 },
+        timeoutBudget: resolvedTimeoutBudget,
         workingDirectory,
         environment: process.env,
         packet,
@@ -1002,12 +1055,29 @@ export async function dispatchEligible(
     );
 
     if (outcome.dispatched) {
+      // Fire-and-forget: this route dispatches and returns without awaiting
+      // the process, so the watchdog is armed here but consumed later, by
+      // `reapWorkers`, once the OS-level poll independently reports the
+      // process dead. The no-op `.catch()` is a second, independent
+      // consumer that only silences an unhandled-rejection warning during
+      // the tick-boundary window before `reapWorkers` awaits the same
+      // promise; it does not change what that later `await` observes.
+      const watchdog = watchForTimeout(
+        adapter,
+        outcome.handle,
+        resolvedTimeoutBudget,
+        { now: ctx.now },
+        dispatchProfile?.terminationGraceMs ?? DEFAULT_CANCEL_GRACE_MS,
+      );
+      watchdog.catch(() => {});
+
       runtime.liveAttemptByTaskId.set(task.id, {
         attemptId: outcome.attemptId,
         taskId: task.id,
         stageId,
         handle: outcome.handle,
         workspace: workspaceHandle,
+        watchdog,
       });
       runtime.scratch.dispatchedThisTick = true;
     }
@@ -1120,7 +1190,7 @@ export function classifyTick(summary: BoardSummary): TickOutcome {
 }
 
 export interface SchedulerSteps {
-  reapWorkers: (ctx: TickContext, runtime: SchedulerRuntime) => void;
+  reapWorkers: (ctx: TickContext, runtime: SchedulerRuntime) => Promise<void>;
   normalizeResults: (ctx: TickContext, runtime: SchedulerRuntime, adapter: ProcessAdapter) => Promise<void>;
   advanceTransitions: (ctx: TickContext, runtime: SchedulerRuntime) => void;
   executeGates: (ctx: TickContext, runtime: SchedulerRuntime) => void;
@@ -1160,7 +1230,7 @@ export function createSchedulerTick(
   return async (ctx: TickContext): Promise<TickOutcome> => {
     runtime.scratch = freshScratch();
 
-    steps.reapWorkers(ctx, runtime);
+    await steps.reapWorkers(ctx, runtime);
     await steps.normalizeResults(ctx, runtime, adapter);
     steps.advanceTransitions(ctx, runtime);
     steps.executeGates(ctx, runtime);
@@ -1293,6 +1363,7 @@ export async function createProductionSchedulerTick(options: CreateProductionSch
     authenticationOutcome: capabilityReport.authenticationOutcome,
     isKnownBadVersion: isKnownBadVersion(vendor, capabilityReport.cliVersion),
     concurrency: resolvedConfig.concurrency,
+    terminationGraceMs: resolvedConfig.timing.cancelGraceMs,
   };
   const adapter = selectAdapter(vendor, profile, {
     probe: (configuration) => probeVendor(probeSpec, configuration),
