@@ -399,7 +399,12 @@ export async function liveBoardDrain(vendor: LiveVendor): Promise<LiveBoardDrain
           );
         }
 
-        await waitFor(() => !alive(supervisorPid), SUPERVISOR_EXIT_TIMEOUT_MS);
+        const supervisorExited = await waitFor(() => !alive(supervisorPid), SUPERVISOR_EXIT_TIMEOUT_MS);
+        if (!supervisorExited) {
+          throw new Error(
+            `live-board-drain (${vendor}): supervisor pid ${supervisorPid} did not exit within ${SUPERVISOR_EXIT_TIMEOUT_MS}ms; runId ${runId}`,
+          );
+        }
         const survivors = recordedPgidsForRun(root, runId).filter((pgid) => groupAlive(pgid));
         if (survivors.length > 0) {
           throw new Error(`live-board-drain (${vendor}): process group(s) survived: ${JSON.stringify(survivors)}`);
