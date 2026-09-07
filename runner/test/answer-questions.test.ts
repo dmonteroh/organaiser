@@ -74,6 +74,24 @@ function makeQuestion(id: string, taskId: string | undefined, blocks: readonly s
   };
 }
 
+function makeQuestionWithDefault(
+  id: string,
+  taskId: string | undefined,
+  blocks: readonly string[],
+  summary: string,
+): Record<string, unknown> {
+  return {
+    id,
+    owner: "operator",
+    question: `question ${id}`,
+    context: "ctx",
+    impact: "impact",
+    safeDefault: { summary },
+    taskId,
+    blocks,
+  };
+}
+
 function questionRowsFor(db: DatabaseSync, runId: string): QuestionRow[] {
   return db
     .prepare(`SELECT * FROM questions WHERE run_id = ? ORDER BY id ASC`)
@@ -618,5 +636,344 @@ test("missing <run-id> or --file exits 2", async () => {
 
     const noFile = await main(["node", "orga", "run", "answer", "run-1"], ioAt(dir));
     assert.equal(noFile, EXIT_CODES.INVALID_ARGS);
+  });
+});
+
+test("the inline form answers a fanned-out question (task row plus run row) exactly like --file", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const db = openStore(dir);
+    try {
+      insertRun(db, runId, 1_000_000);
+      insertTask(db, "task-a-row", runId, "task-a", 1_000_000);
+      persistOperatorQuestions(
+        db,
+        { runId, questions: [makeQuestion("q1", "task-a", [runId])] },
+        2_000_000,
+      );
+    } finally {
+      db.close();
+    }
+
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "answer", runId, "q1", "use option A", "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+
+    const output = JSON.parse(io.outLines[0] as string) as {
+      answered: Array<{ questionId: string; rowIds: string[] }>;
+      skippedQuestions: string[];
+    };
+    assert.equal(output.answered.length, 1);
+    assert.equal(output.answered[0]!.questionId, "q1");
+    assert.equal(output.answered[0]!.rowIds.length, 2);
+    assert.deepEqual(output.skippedQuestions, []);
+
+    const dbAfter = openStore(dir);
+    try {
+      const rows = questionRowsFor(dbAfter, runId);
+      assert.equal(rows.length, 2);
+      for (const row of rows) {
+        assert.equal(row.status, "answered");
+        assert.equal(row.answer, "use option A");
+      }
+    } finally {
+      dbAfter.close();
+    }
+  });
+});
+
+test("--file and --accept-defaults given together exits 2", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const io = ioAt(dir);
+    const code = await main(
+      ["node", "orga", "run", "answer", "run-1", "--file", "x.yaml", "--accept-defaults"],
+      io,
+    );
+    assert.equal(code, EXIT_CODES.INVALID_ARGS);
+  });
+});
+
+test("one, three, or four positionals with neither --file nor --accept-defaults each exit 2", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const io = ioAt(dir);
+
+    const onePositional = await main(["node", "orga", "run", "answer", runId, "q1"], io);
+    assert.equal(onePositional, EXIT_CODES.INVALID_ARGS);
+
+    const threePositionals = await main(["node", "orga", "run", "answer", runId, "q1", "text", "extra"], io);
+    assert.equal(threePositionals, EXIT_CODES.INVALID_ARGS);
+
+    const fourPositionals = await main(
+      ["node", "orga", "run", "answer", runId, "q1", "text", "extra1", "extra2"],
+      io,
+    );
+    assert.equal(fourPositionals, EXIT_CODES.INVALID_ARGS);
+  });
+});
+
+test("--file with extra positionals beyond <run-id> is accepted and the extras are ignored", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const answersPath = seedAnswerableRun(dir, runId);
+
+    const io = ioAt(dir);
+    const code = await main(
+      ["node", "orga", "run", "answer", runId, "ignored-1", "ignored-2", "--file", answersPath, "--json"],
+      io,
+    );
+    assert.equal(code, EXIT_CODES.OK);
+
+    const output = JSON.parse(io.outLines[0] as string) as { answered: Array<{ questionId: string }> };
+    assert.deepEqual(
+      output.answered.map((a) => a.questionId),
+      ["q1"],
+    );
+  });
+});
+
+test("--accept-defaults answers only the open questions with a usable default, and reports the rest as skipped", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const db = openStore(dir);
+    try {
+      insertRun(db, runId, 1_000_000);
+      persistOperatorQuestions(
+        db,
+        {
+          runId,
+          questions: [
+            makeQuestionWithDefault("q-has-default", undefined, [runId], "the default answer"),
+            makeQuestion("q-no-default", undefined, [runId]),
+          ],
+        },
+        2_000_000,
+      );
+    } finally {
+      db.close();
+    }
+
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "answer", runId, "--accept-defaults", "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+
+    const output = JSON.parse(io.outLines[0] as string) as {
+      answered: Array<{ questionId: string }>;
+      skippedQuestions: string[];
+    };
+    assert.deepEqual(
+      output.answered.map((a) => a.questionId),
+      ["q-has-default"],
+    );
+    assert.deepEqual(output.skippedQuestions, ["q-no-default"]);
+
+    const dbAfter = openStore(dir);
+    try {
+      const rows = questionRowsFor(dbAfter, runId);
+      const answeredRow = rows.find((row) => row.status === "answered");
+      assert.equal(answeredRow?.answer, "the default answer");
+      const stillOpenRow = rows.find((row) => row.status === "open");
+      assert.equal(stillOpenRow?.answer, null);
+    } finally {
+      dbAfter.close();
+    }
+  });
+});
+
+test("--accept-defaults skips a payload-IS-NULL open row by its own row id, even with a non-NULL safe_default", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    let rowId: string;
+    const db = openStore(dir);
+    try {
+      insertRun(db, runId, 1_000_000);
+      persistOperatorQuestions(
+        db,
+        { runId, questions: [makeQuestionWithDefault("q-null", undefined, [runId], "the default answer")] },
+        2_000_000,
+      );
+      withTransaction(db, () => {
+        db.prepare(`UPDATE questions SET payload = NULL WHERE run_id = ?`).run(runId);
+      });
+      const row = db.prepare(`SELECT id FROM questions WHERE run_id = ?`).get(runId) as { id: string };
+      rowId = row.id;
+    } finally {
+      db.close();
+    }
+
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "answer", runId, "--accept-defaults", "--json"], io);
+    assert.equal(code, EXIT_CODES.OK);
+
+    const output = JSON.parse(io.outLines[0] as string) as {
+      answered: Array<{ questionId: string }>;
+      skippedQuestions: string[];
+    };
+    assert.equal(output.answered.length, 0);
+    assert.deepEqual(output.skippedQuestions, [rowId!]);
+  });
+});
+
+test("--accept-defaults with an empty built answer map takes the early return: exits 0, appends no event, and reports supervisorPid null despite a stale lease", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+
+    const runIdEmpty = "run-empty";
+    const dbEmpty = openStore(dir);
+    try {
+      insertRun(dbEmpty, runIdEmpty, 1_000_000);
+    } finally {
+      dbEmpty.close();
+    }
+
+    const runIdNoDefault = "run-no-default";
+    const dbNoDefault = openStore(dir);
+    try {
+      insertRun(dbNoDefault, runIdNoDefault, 1_000_000);
+      persistOperatorQuestions(
+        dbNoDefault,
+        { runId: runIdNoDefault, questions: [makeQuestion("q1", undefined, [runIdNoDefault])] },
+        2_000_000,
+      );
+    } finally {
+      dbNoDefault.close();
+    }
+
+    const cases: Array<{ runId: string; expectedSkipped: string[] }> = [
+      { runId: runIdEmpty, expectedSkipped: [] },
+      { runId: runIdNoDefault, expectedSkipped: ["q1"] },
+    ];
+
+    for (const { runId, expectedSkipped } of cases) {
+      const seedDb = openStore(dir);
+      try {
+        acquireLease(seedDb, {
+          runId,
+          ownerPid: process.pid,
+          tickIntervalMs: DEFAULT_TICK_INTERVAL_MS,
+          now: () => Date.now() - (3 * DEFAULT_TICK_INTERVAL_MS + 1000),
+        });
+      } finally {
+        seedDb.close();
+      }
+
+      const eventCountBefore = (() => {
+        const db = openStore(dir);
+        try {
+          return eventsFor(db, runId).length;
+        } finally {
+          db.close();
+        }
+      })();
+
+      const { spawnFn, callCount } = countingSpawnFn(99999);
+      const io = ioAt(dir);
+      io.spawnFn = spawnFn;
+      const code = await main(["node", "orga", "run", "answer", runId, "--accept-defaults", "--json"], io);
+      assert.equal(code, EXIT_CODES.OK);
+      assert.equal(callCount(), 0);
+
+      const output = JSON.parse(io.outLines[0] as string) as {
+        answered: unknown[];
+        unblockedTaskIds: unknown[];
+        reopenedTasks: unknown[];
+        skippedTasks: unknown[];
+        skippedQuestions: string[];
+        supervisorPid: number | null;
+      };
+      assert.deepEqual(output.answered, []);
+      assert.deepEqual(output.unblockedTaskIds, []);
+      assert.deepEqual(output.reopenedTasks, []);
+      assert.deepEqual(output.skippedTasks, []);
+      assert.deepEqual(output.skippedQuestions, expectedSkipped);
+      assert.equal(output.supervisorPid, null);
+
+      const dbAfter = openStore(dir);
+      try {
+        assert.equal(eventsFor(dbAfter, runId).length, eventCountBefore);
+      } finally {
+        dbAfter.close();
+      }
+    }
+  });
+});
+
+test("skippedQuestions is an empty array in --json output for both the --file and inline forms", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+
+    const fileRunId = "run-file";
+    const fileAnswersPath = seedAnswerableRun(dir, fileRunId);
+    const fileIo = ioAt(dir);
+    const fileCode = await main(
+      ["node", "orga", "run", "answer", fileRunId, "--file", fileAnswersPath, "--json"],
+      fileIo,
+    );
+    assert.equal(fileCode, EXIT_CODES.OK);
+    const fileOutput = JSON.parse(fileIo.outLines[0] as string) as { skippedQuestions: string[] };
+    assert.deepEqual(fileOutput.skippedQuestions, []);
+
+    const inlineRunId = "run-inline";
+    const db = openStore(dir);
+    try {
+      insertRun(db, inlineRunId, 1_000_000);
+      persistOperatorQuestions(
+        db,
+        { runId: inlineRunId, questions: [makeQuestion("q1", undefined, [inlineRunId])] },
+        2_000_000,
+      );
+    } finally {
+      db.close();
+    }
+    const inlineIo = ioAt(dir);
+    const inlineCode = await main(
+      ["node", "orga", "run", "answer", inlineRunId, "q1", "an answer", "--json"],
+      inlineIo,
+    );
+    assert.equal(inlineCode, EXIT_CODES.OK);
+    const inlineOutput = JSON.parse(inlineIo.outLines[0] as string) as { skippedQuestions: string[] };
+    assert.deepEqual(inlineOutput.skippedQuestions, []);
+  });
+});
+
+test("human-readable output prints the skipped-defaults line only when skippedQuestions is non-empty", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const runId = "run-1";
+    const db = openStore(dir);
+    try {
+      insertRun(db, runId, 1_000_000);
+      persistOperatorQuestions(
+        db,
+        {
+          runId,
+          questions: [
+            makeQuestionWithDefault("q-has-default", undefined, [runId], "the default answer"),
+            makeQuestion("q-no-default", undefined, [runId]),
+          ],
+        },
+        2_000_000,
+      );
+    } finally {
+      db.close();
+    }
+
+    const io = ioAt(dir);
+    const code = await main(["node", "orga", "run", "answer", runId, "--accept-defaults"], io);
+    assert.equal(code, EXIT_CODES.OK);
+    assert.ok(io.outLines.includes("skipped (no answerable default): q-no-default"));
+
+    const fileRunId = "run-2";
+    const fileAnswersPath = seedAnswerableRun(dir, fileRunId);
+    const fileIo = ioAt(dir);
+    const fileCode = await main(["node", "orga", "run", "answer", fileRunId, "--file", fileAnswersPath], fileIo);
+    assert.equal(fileCode, EXIT_CODES.OK);
+    assert.ok(!fileIo.outLines.some((line) => line.startsWith("skipped (no answerable default)")));
   });
 });

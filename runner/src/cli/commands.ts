@@ -27,8 +27,13 @@ import { dryRun, DryRunBoardError } from "./dry-run.ts";
 import { importMarkdown, ImportMarkdownError } from "../board/import-markdown.ts";
 import { validateBoard } from "../board/validate.ts";
 import { renderBoard } from "../board/render.ts";
-import { listOpenQuestions, rawQuestionId, unblockAnsweredTasks } from "../engine/operator-questions.ts";
-import { answerQuestions, UnknownQuestionKeyError } from "../engine/answer-questions.ts";
+import {
+  listOpenQuestions,
+  rawQuestionId,
+  unblockAnsweredTasks,
+  type UnblockAnsweredTasksResult,
+} from "../engine/operator-questions.ts";
+import { answerQuestions, UnknownQuestionKeyError, type AnswerQuestionsResult } from "../engine/answer-questions.ts";
 import { isSupervisorLive } from "../store/lease.ts";
 import type { QuestionRow } from "../store/types.ts";
 import { readYamlFile, type YamlMapping } from "./yaml.ts";
@@ -737,40 +742,129 @@ function readAnswersFile(answersPath: string): Map<string, string> {
   return answers;
 }
 
+function hasParseableQuestionId(row: QuestionRow): boolean {
+  if (row.payload === null) return false;
+  try {
+    const parsed = JSON.parse(row.payload) as unknown;
+    return parsed !== null && typeof parsed === "object" && typeof (parsed as { id?: unknown }).id === "string";
+  } catch {
+    return false;
+  }
+}
+
+interface AcceptDefaultsBuild {
+  answers: Map<string, string>;
+  skippedQuestions: string[];
+}
+
+function buildAcceptDefaultsAnswers(rows: readonly QuestionRow[]): AcceptDefaultsBuild {
+  const membersByRawId = new Map<string, QuestionRow[]>();
+  for (const row of rows) {
+    const key = rawQuestionId(row);
+    const members = membersByRawId.get(key);
+    if (members) members.push(row);
+    else membersByRawId.set(key, [row]);
+  }
+
+  const answers = new Map<string, string>();
+  const skipped: Array<{ id: string; created_at: number; rowId: string }> = [];
+
+  for (const [key, members] of membersByRawId) {
+    const representative = members.reduce((best, row) =>
+      row.created_at < best.created_at || (row.created_at === best.created_at && row.id < best.id) ? row : best,
+    );
+    if (!hasParseableQuestionId(representative) || representative.safe_default === null) {
+      skipped.push({ id: key, created_at: representative.created_at, rowId: representative.id });
+      continue;
+    }
+    answers.set(key, representative.safe_default);
+  }
+
+  skipped.sort((a, b) => {
+    if (a.created_at !== b.created_at) return a.created_at - b.created_at;
+    return a.rowId < b.rowId ? -1 : a.rowId > b.rowId ? 1 : 0;
+  });
+
+  return { answers, skippedQuestions: skipped.map((entry) => entry.id) };
+}
+
 // `--json` emits exactly one JSON value on stdout:
 //   {"runId": "<run-id>", "answered": [{"questionId": "...", "rowIds": ["..."],
 //     "artifact": {"path": "...", "sha256": "..."}}], "unblockedTaskIds": ["..."],
 //     "reopenedTasks": [{"taskId": "...", "questionIds": ["..."]}],
 //     "skippedTasks": [{"taskId": "...", "latestAttemptStageId": "..."}],
-//     "supervisorPid": <number-or-null>}
+//     "skippedQuestions": ["..."], "supervisorPid": <number-or-null>}
 // `answered` lists only keys that had at least one `open` row in this invocation; a key whose
 // matching rows were already all non-`open` is a no-op and absent from it. `reopenedTasks` and
-// `skippedTasks` report the same-invocation `unblockAnsweredTasks` call. `supervisorPid` is the
-// pid of a supervisor spawned by this invocation, or `null` when one was already live or
-// `--no-supervisor` was passed.
+// `skippedTasks` report the same-invocation `unblockAnsweredTasks` call. `skippedQuestions` lists
+// ids `--accept-defaults` could not build an answer for; it is always `[]` for the inline and
+// `--file` forms. `supervisorPid` is the pid of a supervisor spawned by this invocation, or `null`
+// when one was already live, `--no-supervisor` was passed, or this invocation's answer map was
+// empty.
+//
+// Three input forms share this tail: `--file <path>` reads a YAML answers mapping;
+// `<run-id> <question-id> "<text>"` (no flags) answers that one question inline; `--accept-defaults`
+// answers every open question with a usable default and reports the rest in `skippedQuestions`.
 function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run answer requires <run-id>");
+
   const answersPath = flagString(parsed.flags, "file");
-  if (!answersPath) throw new UsageError("run answer requires --file <path>");
+  const acceptDefaults = flagBool(parsed.flags, "accept-defaults");
+  if (answersPath !== undefined && acceptDefaults) {
+    throw new UsageError("run answer: --file and --accept-defaults cannot be combined");
+  }
+
+  let inlineQuestionId: string | undefined;
+  let inlineText: string | undefined;
+  if (answersPath === undefined && !acceptDefaults) {
+    if (parsed.positionals.length !== 3) {
+      throw new UsageError(
+        'run answer requires <run-id> <question-id> "<text>", or --file <path>, or --accept-defaults',
+      );
+    }
+    inlineQuestionId = parsed.positionals[1];
+    inlineText = parsed.positionals[2];
+  }
+
   const root = resolveRoot(io);
   readRun(root, runId);
 
-  const answers = readAnswersFile(answersPath);
+  let answers: Map<string, string>;
+  if (answersPath !== undefined) {
+    answers = readAnswersFile(answersPath);
+  } else if (acceptDefaults) {
+    answers = new Map();
+  } else {
+    answers = new Map([[inlineQuestionId as string, inlineText as string]]);
+  }
+
   const now = io.now();
   const config = readConfig(io);
   const noSupervisor = flagBool(parsed.flags, "no-supervisor");
 
   const db = openStore(root);
-  let result;
-  let unblockResult;
+  let result: AnswerQuestionsResult;
+  let unblockResult: UnblockAnsweredTasksResult;
   let live: boolean | undefined;
+  let skippedQuestions: string[] = [];
   try {
-    result = answerQuestions(db, { root, runId, answers }, now);
-    if (!noSupervisor) {
-      live = isSupervisorLive(db, { runId, tickIntervalMs: config.timing.tickIntervalMs, now: io.now });
+    if (acceptDefaults) {
+      const built = buildAcceptDefaultsAnswers(listOpenQuestions(db, runId));
+      answers = built.answers;
+      skippedQuestions = built.skippedQuestions;
     }
-    unblockResult = unblockAnsweredTasks(db, { runId, now });
+
+    if (answers.size > 0) {
+      result = answerQuestions(db, { root, runId, answers }, now);
+      if (!noSupervisor) {
+        live = isSupervisorLive(db, { runId, tickIntervalMs: config.timing.tickIntervalMs, now: io.now });
+      }
+      unblockResult = unblockAnsweredTasks(db, { runId, now });
+    } else {
+      result = { runId, answered: [], unblockedTaskIds: [] };
+      unblockResult = { unblocked: [], skipped: [] };
+    }
   } catch (err) {
     if (err instanceof UnknownQuestionKeyError) throw new NotFoundError(err.message);
     throw err;
@@ -792,6 +886,7 @@ function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
         unblockedTaskIds: result.unblockedTaskIds,
         reopenedTasks: unblockResult.unblocked,
         skippedTasks: unblockResult.skipped,
+        skippedQuestions,
         supervisorPid,
       }),
     );
@@ -809,6 +904,9 @@ function cmdRunAnswer(parsed: ParsedArgs, io: Io): ExitCode {
           .map((entry) => `${entry.taskId} (latest stage ${entry.latestAttemptStageId})`)
           .join(", ")}`,
       );
+    }
+    if (skippedQuestions.length > 0) {
+      io.stdout(`skipped (no answerable default): ${skippedQuestions.join(", ")}`);
     }
     if (live !== undefined) {
       io.stdout(live ? "supervisor already live" : `started supervisor pid ${supervisorPid}`);
