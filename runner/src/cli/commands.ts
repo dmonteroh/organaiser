@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 import { initProject } from "../store/init.ts";
 import { findProjectRoot, openStore } from "../store/db.ts";
@@ -42,7 +43,16 @@ import { renderAnswersTemplate } from "./answers-template.ts";
 import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
-import { buildEvalCatalog, formatEvalCatalogTable, loadRegistry, PROFILE_IDS } from "../../evals/eval-vocabulary.ts";
+import {
+  buildEvalCatalog,
+  formatEvalCatalogTable,
+  loadRegistry,
+  resolveSuiteProfile,
+  PROFILE_IDS,
+  UnknownSuiteError,
+  UnknownProfileError,
+} from "../../evals/eval-vocabulary.ts";
+import { runEvalCells } from "./eval-run.ts";
 import { workflowAssetPath } from "../workflow-assets.ts";
 
 const SUPERVISOR_ENTRY_PATH = fileURLToPath(new URL("../engine/supervisor.ts", import.meta.url));
@@ -597,6 +607,78 @@ function cmdEvalList(parsed: ParsedArgs, io: Io): ExitCode {
   return EXIT_CODES.OK;
 }
 
+async function cmdEvalRun(parsed: ParsedArgs, io: Io): Promise<ExitCode> {
+  const suite = flagString(parsed.flags, "suite");
+  if (suite === undefined) throw new UsageError("eval run requires --suite <name>");
+  const profile = flagString(parsed.flags, "profile");
+  if (profile === undefined) throw new UsageError("eval run requires --profile <name>");
+
+  let entry;
+  try {
+    entry = resolveSuiteProfile(loadRegistry(), suite, profile);
+  } catch (err) {
+    if (err instanceof UnknownSuiteError || err instanceof UnknownProfileError) {
+      throw new UsageError(err.message);
+    }
+    throw err;
+  }
+
+  const evalRunId = randomUUID();
+  const json = flagBool(parsed.flags, "json");
+  const root = io.cwd();
+  const artifactRoot = path.join(root, ".orga", "evals", evalRunId);
+
+  if (entry.ids.length === 0) {
+    const reason = entry.liveExemptReason ?? "no fixture ids for this suite/profile pair";
+    emit(
+      io,
+      json,
+      {
+        evalRunId,
+        suite,
+        profile,
+        tier: entry.tier,
+        outcome: "no-cells",
+        artifactRoot,
+        cells: [],
+        ...(entry.tier === "live-exempt" ? { liveExemptReason: entry.liveExemptReason } : {}),
+      },
+      `eval run ${evalRunId}: ${suite}/${profile} [${entry.tier}] 0 cells, ${reason}`,
+    );
+    return EXIT_CODES.OK;
+  }
+
+  if (entry.tier === "live" && io.env.ORGA_LIVE !== "1") {
+    io.stderr(
+      `eval run refused: suite "${suite}" profile "${profile}" is live tier and ORGA_LIVE is not set to "1"`,
+    );
+    return EXIT_CODES.VENDOR_UNAVAILABLE;
+  }
+
+  const cells = await runEvalCells({
+    suite,
+    profile,
+    ids: entry.ids,
+    evalRunId,
+    root,
+    onProgress: (line) => io.stderr(line),
+  });
+
+  const passed = cells.filter((c) => c.disposition === "pass").length;
+  const failed = cells.filter((c) => c.disposition === "fail").length;
+  const skipped = cells.filter((c) => c.disposition === "skipped").length;
+  const outcome = failed > 0 ? "failed" : "passed";
+
+  emit(
+    io,
+    json,
+    { evalRunId, suite, profile, tier: entry.tier, outcome, artifactRoot, cells },
+    `eval run ${evalRunId}: ${suite}/${profile} [${entry.tier}] ${cells.length} cell(s), ${passed} passed, ${failed} failed, ${skipped} skipped -> ${outcome}`,
+  );
+
+  return failed > 0 ? EXIT_CODES.FAILED : EXIT_CODES.OK;
+}
+
 function cmdRunReplay(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run replay requires <run-id>");
@@ -1000,6 +1082,8 @@ const VALUE_FLAGS = new Set([
   "file",
   "task",
   "runner-checksum",
+  "suite",
+  "profile",
 ]);
 
 type CommandBody = (parsed: ParsedArgs, io: Io) => ExitCode | Promise<ExitCode>;
@@ -1024,6 +1108,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "run questions": cmdRunQuestions,
   "run answer": cmdRunAnswer,
   "eval list": cmdEvalList,
+  "eval run": cmdEvalRun,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);
