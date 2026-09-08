@@ -43,14 +43,11 @@ import { EXIT_CODES, runStateToExitCode, type ExitCode } from "./exit-codes.ts";
 import loadConfig, { type ConfigSources, type ResolvedConfig } from "./config.ts";
 import { cmdDoctor } from "./doctor.ts";
 import { buildEvalCatalog, formatEvalCatalogTable, loadRegistry, PROFILE_IDS } from "../../evals/eval-vocabulary.ts";
+import { workflowAssetPath } from "../workflow-assets.ts";
 
 const SUPERVISOR_ENTRY_PATH = fileURLToPath(new URL("../engine/supervisor.ts", import.meta.url));
-const DEFAULT_TEMPLATE_PATH = fileURLToPath(
-  new URL("../../../workflows/subagents/implementer-prompt.md", import.meta.url),
-);
-const DEFAULT_WORKFLOW_PATH = fileURLToPath(
-  new URL("../../../workflows/manifests/task-board.v1.yaml", import.meta.url),
-);
+const DEFAULT_TEMPLATE_PATH = workflowAssetPath("subagents/implementer-prompt.md");
+const DEFAULT_WORKFLOW_PATH = workflowAssetPath("manifests/task-board.v1.yaml");
 
 const RUN_STATE_SET = new Set([
   "starting",

@@ -9,29 +9,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 
 import { compilePacket, type PacketInput, type PacketStageInput } from "./packet.ts";
 import { nextAttemptRound } from "../engine/dispatch.ts";
 import { DEVELOPMENT_STAGES } from "../engine/workflow-stages.ts";
 import { INTEGRATION_STAGES } from "../engine/integration-stages.ts";
+import { workflowAssetPath } from "../workflow-assets.ts";
 
-const DEFAULT_IMPLEMENTER_TEMPLATE_PATH = fileURLToPath(
-  new URL("../../../workflows/subagents/implementer-prompt.md", import.meta.url),
-);
-
-const DEFAULT_INTEGRATOR_TEMPLATE_PATH = fileURLToPath(
-  new URL("../../../workflows/subagents/integrator-prompt.md", import.meta.url),
-);
-
-const DEFAULT_SPEC_REVIEWER_TEMPLATE_PATH = fileURLToPath(
-  new URL("../../../workflows/subagents/spec-reviewer-prompt.md", import.meta.url),
-);
-
-const DEFAULT_CODE_QUALITY_REVIEWER_TEMPLATE_PATH = fileURLToPath(
-  new URL("../../../workflows/subagents/code-quality-reviewer-prompt.md", import.meta.url),
-);
+const DEFAULT_IMPLEMENTER_TEMPLATE_PATH = workflowAssetPath("subagents/implementer-prompt.md");
+const DEFAULT_INTEGRATOR_TEMPLATE_PATH = workflowAssetPath("subagents/integrator-prompt.md");
+const DEFAULT_SPEC_REVIEWER_TEMPLATE_PATH = workflowAssetPath("subagents/spec-reviewer-prompt.md");
+const DEFAULT_CODE_QUALITY_REVIEWER_TEMPLATE_PATH = workflowAssetPath("subagents/code-quality-reviewer-prompt.md");
 
 const RESULT_CONTRACT_NOTES = [
   "- resultSchema: stage-result.schema.json",
