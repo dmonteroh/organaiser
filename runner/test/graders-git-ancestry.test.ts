@@ -32,6 +32,7 @@ const BRANCH = "4".repeat(40);
 const OTHER = "5".repeat(40);
 const CLOSED_TIP = "6".repeat(40);
 const DANGLING_PARENT = "7".repeat(40);
+const UNRECORDED_COMMIT = "8".repeat(40);
 
 test("git-ancestry: fast-forward (before is an ancestor of after) is pass", () => {
   const dir = makeCellDir();
@@ -125,4 +126,66 @@ test("git-ancestry: a board task recording a non-sha result_commit is fail", () 
   const check = gradeGitAncestry(readFrozenCell(dir));
   assert.equal(check.outcome, "fail");
   assert.equal(check.detail, 'task t1 records commit identity "not-a-sha", which is not a concrete sha');
+});
+
+test("git-ancestry: a well-formed result_commit absent from a non-truncated graph is fail", () => {
+  const dir = makeCellDir();
+  writeArtifact(dir, "git-before.txt", headText(C1));
+  writeArtifact(dir, "git-after.txt", headText(C1));
+  writeArtifact(dir, "git-commit-graph.txt", graphText([`${C1} ${ROOT}`, ROOT]));
+  writeArtifact(dir, "board-before.yaml", "run: null\ntasks: []\n");
+  writeArtifact(dir, "board-after.yaml", `run: null\ntasks:\n  - id: t1\n    result_commit: "${UNRECORDED_COMMIT}"\n`);
+  const check = gradeGitAncestry(readFrozenCell(dir));
+  assert.equal(check.outcome, "fail");
+  assert.equal(
+    check.detail,
+    `task t1 records commit identity ${UNRECORDED_COMMIT}, which is not present in the frozen commit graph`,
+  );
+});
+
+test("git-ancestry: a well-formed result_commit absent from a truncated graph is operational-failure", () => {
+  const dir = makeCellDir();
+  writeArtifact(dir, "git-before.txt", headText(C1));
+  writeArtifact(dir, "git-after.txt", headText(C1));
+  writeArtifact(dir, "git-commit-graph.txt", graphText([`${C1} ${ROOT}`, ROOT], true));
+  writeArtifact(dir, "board-before.yaml", "run: null\ntasks: []\n");
+  writeArtifact(dir, "board-after.yaml", `run: null\ntasks:\n  - id: t1\n    result_commit: "${UNRECORDED_COMMIT}"\n`);
+  const check = gradeGitAncestry(readFrozenCell(dir));
+  assert.equal(check.outcome, "operational-failure");
+  assert.equal(
+    check.detail,
+    `task t1 records commit identity ${UNRECORDED_COMMIT}, which is not present in the frozen commit graph`,
+  );
+});
+
+test("git-ancestry: a well-formed result_commit present in the graph is pass (positive control)", () => {
+  const dir = makeCellDir();
+  writeArtifact(dir, "git-before.txt", headText(C1));
+  writeArtifact(dir, "git-after.txt", headText(C1));
+  writeArtifact(dir, "git-commit-graph.txt", graphText([`${C1} ${ROOT}`, ROOT]));
+  writeArtifact(dir, "board-before.yaml", "run: null\ntasks: []\n");
+  writeArtifact(dir, "board-after.yaml", `run: null\ntasks:\n  - id: t1\n    result_commit: "${ROOT}"\n`);
+  const check = gradeGitAncestry(readFrozenCell(dir));
+  assert.equal(check.outcome, "pass");
+  assert.equal(check.detail, null);
+});
+
+test("git-ancestry: an empty commit graph beside a real after-HEAD is operational-failure", () => {
+  const dir = makeCellDir();
+  writeArtifact(dir, "git-before.txt", "");
+  writeArtifact(dir, "git-after.txt", headText(C1));
+  writeArtifact(dir, "git-commit-graph.txt", "");
+  const check = gradeGitAncestry(readFrozenCell(dir));
+  assert.equal(check.outcome, "operational-failure");
+  assert.equal(check.detail, "git-commit-graph.txt is empty for a cell that recorded a git HEAD");
+});
+
+test("git-ancestry: a commit graph missing the REFS:/COMMITS: markers is operational-failure", () => {
+  const dir = makeCellDir();
+  writeArtifact(dir, "git-before.txt", headText(C1));
+  writeArtifact(dir, "git-after.txt", headText(C1));
+  writeArtifact(dir, "git-commit-graph.txt", `${C1} ${ROOT}\n${ROOT}\n`);
+  const check = gradeGitAncestry(readFrozenCell(dir));
+  assert.equal(check.outcome, "operational-failure");
+  assert.equal(check.detail, "git-commit-graph.txt is malformed");
 });
