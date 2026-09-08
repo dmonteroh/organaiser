@@ -333,7 +333,7 @@ export function main(argv: readonly string[]): void {
   }
 
   try {
-    const section = generateContractVersionDelta(prevRef, newRef, process.cwd());
+    const section = generateContractVersionDelta(prevRef, newRef, fileURLToPath(new URL("../../", import.meta.url)));
     process.stdout.write(section);
   } catch (err) {
     if (err instanceof Error) {
