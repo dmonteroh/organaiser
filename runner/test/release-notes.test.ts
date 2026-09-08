@@ -9,6 +9,7 @@ import {
   generateContractVersionDelta,
   GitRefError,
   ContractVersionConflictError,
+  MalformedContractBlockError,
 } from "../scripts/release-notes.ts";
 
 function runGit(dir: string, args: string[]): string {
@@ -223,6 +224,71 @@ test("release notes: cross-source contractVersion disagreement fails with a name
         assert.match(message, /2\.0\.0/);
         return true;
       },
+    );
+  });
+});
+
+test("release notes: markdown frontmatter declaring id without contractVersion throws MalformedContractBlockError naming the path", async () => {
+  await withTempWorkspace((dir) => {
+    makeRepo(dir);
+    commitFile(
+      dir,
+      "workflows/malformed.md",
+      "---\nid: malformed-contract\n---\n\nBody.\n",
+      "add malformed contract md",
+    );
+    tag(dir, "v1");
+
+    assert.throws(
+      () => generateContractVersionDelta(null, "v1", dir),
+      (err: unknown) => {
+        assert.equal(err instanceof MalformedContractBlockError, true);
+        const message = (err as Error).message;
+        assert.match(message, /workflows\/malformed\.md/);
+        assert.match(message, /id without contractVersion/);
+        return true;
+      },
+    );
+  });
+});
+
+test("release notes: identical id and contractVersion declared in both markdown frontmatter and yaml manifest folds to one contract, never duplicated or reported as changed", async () => {
+  await withTempWorkspace((dir) => {
+    makeRepo(dir);
+    commitFile(dir, "workflows/alpha.md", frontmatter("alpha", "1.0.0"), "add alpha 1.0.0");
+    commitFile(
+      dir,
+      "workflows/shared.md",
+      frontmatter("shared-workflow", "1.0.0"),
+      "add shared-workflow md",
+    );
+    commitFile(
+      dir,
+      "workflows/manifests/shared.v1.yaml",
+      manifest("shared-workflow", "1.0.0"),
+      "add shared-workflow manifest matching md",
+    );
+    tag(dir, "v1");
+
+    const initial = generateContractVersionDelta(null, "v1", dir);
+    const sharedOccurrences = (initial.match(/`shared-workflow`/g) ?? []).length;
+    assert.equal(
+      sharedOccurrences,
+      1,
+      "identically-declared cross-source contract appears exactly once",
+    );
+    assert.match(initial, /- `shared-workflow`: `1\.0\.0`/);
+
+    commitFile(dir, "workflows/alpha.md", frontmatter("alpha", "1.1.0"), "bump alpha to 1.1.0");
+    tag(dir, "v2");
+
+    const diff = generateContractVersionDelta("v1", "v2", dir);
+    assert.match(diff, /\*\*Changed:\*\*/);
+    assert.match(diff, /- `alpha`: `1\.0\.0` -> `1\.1\.0`/);
+    assert.equal(
+      diff.includes("shared-workflow"),
+      false,
+      "unchanged cross-source contract is not listed as changed, added, or removed",
     );
   });
 });
