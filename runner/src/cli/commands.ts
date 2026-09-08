@@ -53,6 +53,7 @@ import {
   UnknownProfileError,
 } from "../../evals/eval-vocabulary.ts";
 import { runEvalCells } from "./eval-run.ts";
+import { gradeEvalRun } from "../../evals/grade-runner.ts";
 import { workflowAssetPath } from "../workflow-assets.ts";
 
 const SUPERVISOR_ENTRY_PATH = fileURLToPath(new URL("../engine/supervisor.ts", import.meta.url));
@@ -679,6 +680,44 @@ async function cmdEvalRun(parsed: ParsedArgs, io: Io): Promise<ExitCode> {
   return failed > 0 ? EXIT_CODES.FAILED : EXIT_CODES.OK;
 }
 
+function cmdEvalGrade(parsed: ParsedArgs, io: Io): ExitCode {
+  const evalRunId = parsed.positionals[0];
+  if (!evalRunId) throw new UsageError("eval grade requires <evaluation-run-id>");
+  if (evalRunId.includes("/") || evalRunId.includes("\\") || evalRunId === "." || evalRunId === "..") {
+    throw new UsageError(`eval grade requires a single path segment for <evaluation-run-id>, got "${evalRunId}"`);
+  }
+
+  const json = flagBool(parsed.flags, "json");
+  const root = io.cwd();
+  const artifactRoot = path.join(root, ".orga", "evals", evalRunId);
+
+  let stat;
+  try {
+    stat = fs.statSync(artifactRoot);
+  } catch {
+    throw new UsageError(`eval grade found no evaluation run "${evalRunId}" under .orga/evals`);
+  }
+  if (!stat.isDirectory()) {
+    throw new UsageError(`eval grade found no evaluation run "${evalRunId}" under .orga/evals`);
+  }
+
+  const result = gradeEvalRun({ root, evalRunId });
+
+  const passed = result.cells.filter((cell) => cell.outcome === "pass").length;
+  const failed = result.cells.filter((cell) => cell.outcome === "fail").length;
+  const notApplicable = result.cells.filter((cell) => cell.outcome === "not-applicable").length;
+  const operationalFailure = result.cells.filter((cell) => cell.outcome === "operational-failure").length;
+
+  emit(
+    io,
+    json,
+    { evalRunId, artifactRoot: result.artifactRoot, outcome: result.outcome, cells: result.cells },
+    `eval grade ${evalRunId}: ${result.cells.length} cell(s), ${passed} passed, ${failed} failed, ${notApplicable} not-applicable, ${operationalFailure} operational-failure -> ${result.outcome}`,
+  );
+
+  return result.outcome === "no-cells" || result.outcome === "passed" ? EXIT_CODES.OK : EXIT_CODES.FAILED;
+}
+
 function cmdRunReplay(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run replay requires <run-id>");
@@ -1109,6 +1148,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "run answer": cmdRunAnswer,
   "eval list": cmdEvalList,
   "eval run": cmdEvalRun,
+  "eval grade": cmdEvalGrade,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);
