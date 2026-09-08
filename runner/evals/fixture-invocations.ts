@@ -147,6 +147,8 @@ const WHOLE_TEST_FILE_IDS: ReadonlySet<string> = new Set([
   "board-render",
   "import-markdown",
   "legacy-import",
+  "eval-grade",
+  "eval-compare",
 ]);
 
 function wholeTestFilePath(fixtureId: string): string {

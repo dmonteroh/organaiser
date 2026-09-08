@@ -25,6 +25,7 @@ export const RUNNER_UNITS: readonly string[] = [
   "report-validator",
   "renderer",
   "importer",
+  "evaluator",
 ];
 
 export const DETERMINISTIC_FIXTURE_IDS: ReadonlySet<string> = new Set([

@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { RUNNER_UNITS } from "./registry-check.ts";
 
-/** The fourteen registry-declared suite names, in `registry-check.ts`'s canonical order. */
+/** The registry-declared suite names, in `registry-check.ts`'s canonical order. */
 export const SUITE_NAMES: readonly string[] = RUNNER_UNITS;
 
 export const PROFILE_IDS = ["fake", "claude", "codex"] as const;

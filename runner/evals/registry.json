@@ -93,6 +93,10 @@
     "importer": {
       "deterministic": ["import-markdown", "legacy-import"],
       "liveExemptReason": "no section 29.6 scenario imports a Markdown board; both implemented live fixtures construct board JSON directly"
+    },
+    "evaluator": {
+      "deterministic": ["eval-grade", "eval-compare"],
+      "liveExemptReason": "live-context-cost and live-vendor-parity (section 29.6) have no implementation yet; this exemption is temporary and will be replaced once both live fixtures are built"
     }
   }
 }

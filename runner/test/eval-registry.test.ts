@@ -104,9 +104,9 @@ test("eval-registry: a unit carrying both a live entry and a liveExemptReason yi
   assert.equal(errors[0]?.unit, "store");
 });
 
-test("eval-registry: an extra units.evaluator key yields exactly one unit-unknown error", () => {
+test("eval-registry: an extra units key naming a non-RUNNER_UNITS unit yields exactly one unit-unknown error", () => {
   const registry = baseRegistry();
-  registry.units.evaluator = {
+  registry.units["no-such-unit"] = {
     deterministic: ["worker-final-is-data"],
     live: ["live-single-task"],
   };
@@ -115,7 +115,7 @@ test("eval-registry: an extra units.evaluator key yields exactly one unit-unknow
 
   assert.equal(errors.length, 1);
   assert.equal(errors[0]?.kind, "unit-unknown");
-  assert.equal(errors[0]?.unit, "evaluator");
+  assert.equal(errors[0]?.unit, "no-such-unit");
 });
 
 test("eval-registry: DETERMINISTIC_FIXTURE_IDS and LIVE_SCENARIO_IDS are pinned to the eval-suite doc's counts", () => {
