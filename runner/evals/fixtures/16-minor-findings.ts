@@ -142,7 +142,7 @@ function isMainModule(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return fileURLToPath(import.meta.url) === entry;
+    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(entry);
   } catch {
     return false;
   }
