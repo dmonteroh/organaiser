@@ -18,8 +18,11 @@ function readText(cellDir: string, name: string): string {
 
 function readJsonArtifact<T>(cellDir: string, name: string): ArtifactRead<T> {
   try {
-    const value = JSON.parse(readText(cellDir, name)) as T;
-    return { status: "ok", value };
+    const parsed: unknown = JSON.parse(readText(cellDir, name));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { status: "unparseable", reason: `${name} does not contain a JSON object` };
+    }
+    return { status: "ok", value: parsed as T };
   } catch (err) {
     if (isEnoent(err)) return { status: "missing" };
     return { status: "unparseable", reason: errorReason(err) };

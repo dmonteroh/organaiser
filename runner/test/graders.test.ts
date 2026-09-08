@@ -295,6 +295,19 @@ test("task-disposition: unparseable board-after.yaml yields operational-failure"
   assert.equal(check.outcome, "operational-failure");
 });
 
+test("process-count and task-disposition: top-level null JSON artifact yields operational-failure, not a throw", () => {
+  const dir = makeCellDir();
+  writeArtifact(dir, "process.json", "null");
+  writeArtifact(dir, "eval-snapshot.json", "null");
+  writeArtifact(dir, "board-after.yaml", "tasks: []\n");
+  writeArtifact(dir, "state-transitions.jsonl", "");
+  const bundle = readFrozenCell(dir);
+  const processCheck = gradeProcessCount(bundle);
+  assert.equal(processCheck.outcome, "operational-failure");
+  const dispositionCheck = gradeTaskDisposition(bundle);
+  assert.equal(dispositionCheck.outcome, "operational-failure");
+});
+
 test("diff-scope: pass when every touched path is covered by a claim", () => {
   const dir = makeCellDir();
   const boardAfter =
