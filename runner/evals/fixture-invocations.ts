@@ -76,6 +76,8 @@ import {
 } from "./fixtures/20-board-parallelism.ts";
 import { liveBoardDrain, type LiveBoardDrainResult } from "./fixtures/23-live-board-drain.ts";
 import { secretRedaction } from "./fixtures/24-secret-redaction.ts";
+import { idleTimeout } from "./fixtures/25-idle-timeout.ts";
+import { productiveNoCommit } from "./fixtures/26-productive-no-commit.ts";
 
 export type { LiveVendor, LiveSingleTaskResult, LiveBoardDrainResult };
 
@@ -208,9 +210,9 @@ function resolveParametrizedFactory(unit: string, fixtureId: string): SingleInvo
 // export anywhere in this file or in `fixtures.test.ts`'s own import list
 // (`kill-without-supervisor`, `pause-resume-roundtrip`, `relocatable-artifacts`,
 // `read-only-source-tests`, `typed-commit-identity-rejects-placeholder`,
-// `importer-refuses-dead-running`, `idle-timeout`, `productive-no-commit`) are reserved,
-// not-yet-implemented ids that no `registry.json` unit references today; they correctly
-// fall through to `UnknownFixtureIdError` below rather than being fabricated here.
+// `importer-refuses-dead-running`) are reserved, not-yet-implemented ids that no
+// `registry.json` unit references today; they correctly fall through to
+// `UnknownFixtureIdError` below rather than being fabricated here.
 const SINGLE_IDS: Readonly<Record<string, () => Promise<void>>> = {
   "caller-exit-survival": callerExitSurvival,
   "worker-final-is-data": workerFinalIsData,
@@ -238,6 +240,8 @@ const SINGLE_IDS: Readonly<Record<string, () => Promise<void>>> = {
   "claim-overlap-serializes": claimOverlapSerializes,
   "disjoint-claims-parallelize": disjointClaimsParallelize,
   "secret-redaction": secretRedaction,
+  "idle-timeout": idleTimeout,
+  "productive-no-commit": productiveNoCommit,
 };
 
 /**
