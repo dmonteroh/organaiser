@@ -11,7 +11,7 @@ Subagent prompt files under `subagents/` are copy/paste templates. They are disp
 
 ## Contract Layers
 
-Every runnable workflow's contract is authored across three layers: policy markdown (the workflow file and its subagent templates), a YAML manifest (stage topology and orchestration), and a JSON Schema (result and artifact syntax). Each layer is authoritative for a different concern.
+All thirteen workflows in this catalog are `runnerMode: supported`, and each one's contract is authored across three layers: policy markdown (the workflow file and its subagent templates), a YAML manifest (stage topology and orchestration), and a JSON Schema (result and artifact syntax). Each layer is authoritative for a different concern.
 
 | Concern | Authority |
 |---|---|
@@ -48,7 +48,7 @@ Thirteen workflow ids, recorded verbatim as authored in each file's frontmatter:
 
 ### Role ids
 
-Seven role ids, one per runnable template:
+Twenty-eight role ids, one per registered role. `workflows/subagents/` holds twenty-nine templates; `integrator`'s is deliberately outside this register, for the reason recorded below.
 
 - `implementer`, template `subagents/implementer-prompt.md`, owned by `dev-workflow`.
 - `spec-reviewer`, template `subagents/spec-reviewer-prompt.md`, owned by `dev-workflow`.
@@ -79,13 +79,13 @@ Seven role ids, one per runnable template:
 - `explorer`, template `subagents/explorer-prompt.md`, owned by `spike-workflow`.
 - `spike-reviewer`, template `subagents/spike-reviewer-prompt.md`, owned by `spike-workflow`.
 
-`researcher` is owned by `research-workflow` and reused by `decision-workflow` (`decision-workflow.md:24`); `runtime-explorer` is owned by `design-intake-workflow` and reused by `design-handoff-workflow` (`design-handoff-workflow.md:45`). Both occurrences name the identical `Template:` path in each pair of workflow files, satisfying the role-reuse rule above even though none of the four workflows involved is yet `runnerMode: supported`.
+`researcher` is owned by `research-workflow` and reused by `decision-workflow` (`decision-workflow.md:24`); `runtime-explorer` is owned by `design-intake-workflow` and reused by `design-handoff-workflow` (`design-handoff-workflow.md:45`). Both occurrences name the identical `Template:` path in each pair of workflow files, satisfying the role-reuse rule above, which applies because all four workflows involved are `runnerMode: supported`.
 
 `decision-workflow.md`'s orchestrator-side role, previously an unqualified bare id outside this register's scope, is registered above as `decision-architect`; any later manifest for `decision-workflow` uses that id, not the bare `architect` id.
 
 A role heading may repeat across `runnerMode: supported` workflows when every occurrence names the identical `Template:` path; that is role reuse, not a collision. A repeated heading whose occurrences name differing `Template:` paths is a defect.
 
-A role may hold a Role ids register entry while its owning workflow is `runnerMode: unsupported`; such a role requires no golden packet and no manifest stage until its owning workflow becomes `runnerMode: supported`. The same deferral covers the registered role's `Template:` path: it need not resolve to an existing file until its owning workflow becomes `runnerMode: supported`. `decision-architect` is the current instance: its template `subagents/decision-architect-prompt.md` does not yet exist, and authoring it is out of scope here.
+A role may hold a Role ids register entry while its owning workflow is `runnerMode: unsupported`; such a role requires no golden packet and no manifest stage until its owning workflow becomes `runnerMode: supported`. The same deferral covers the registered role's `Template:` path: it need not resolve to an existing file until its owning workflow becomes `runnerMode: supported`. This is forward-looking documentation only: all thirteen workflows are `runnerMode: supported`, so no registered role is currently in that state. `decision-architect` was the last instance, closed in P10.11 when `subagents/decision-architect-prompt.md` was authored and `decision-workflow` became `runnerMode: supported`.
 
 The `integrator` role is deliberately outside this register. `runner/src/engine/scheduler.ts:770` synthesizes the string `"integrator"` for the board's fallback `integration` dispatch, and its template is `subagents/integrator-prompt.md`. No manifest stage declares the role, so it has no owning workflow `Roles` entry, no golden packet, and no manifest stage for the golden-packet parity suite to resolve. Registering it would fail `test/workflow-parity/golden.test.mjs`. Its `Runner Protocol` section is copied from `code-quality-reviewer-prompt.md` with a reworded role-identifier line, so it is also outside the `Runner Protocol` parity family below.
 
@@ -127,7 +127,7 @@ Each role's verdict values, copied verbatim from its template's `Verdict Rule`:
 
 ### Manifest filenames and contract versions
 
-When one of the nine `runnerMode: unsupported` workflows gains a manifest, the manifest filename convention is `<workflow-frontmatter-id>.v1.yaml` and the target `contractVersion` is `2.0.0`. This is forward-looking documentation only: none of the nine gains a manifest by this note, and the existing five manifest filenames (`development.v1.yaml`, `integration.v1.yaml`, `product-spec.v1.yaml`, `task-board.v1.yaml`, `task-refinement.v1.yaml`) are not renamed to match — `development.v1.yaml` and `product-spec.v1.yaml` already shorten their workflow's frontmatter id, and `integration.v1.yaml` has no owning workflow at all.
+If a future workflow enters the catalog as `runnerMode: unsupported` and later gains a manifest, the manifest filename convention is `<workflow-frontmatter-id>.v1.yaml` and the target `contractVersion` is `2.0.0`. This is forward-looking documentation only: all thirteen workflows are `runnerMode: supported` today, and `workflows/manifests/` holds fourteen manifests, the thirteen named by a workflow's `runnerManifest` plus the runner-only `integration.v1.yaml`. Three filenames are not renamed to match the convention: `development.v1.yaml` and `product-spec.v1.yaml` shorten their workflow's frontmatter id (`dev-workflow`, `product-spec-workflow`), and `integration.v1.yaml` has no owning workflow at all.
 
 ## Deliberate Parity: Keep and Verify
 
@@ -156,7 +156,7 @@ A parity family is a block of contract text that exists in more than one file an
 | Outcome parity | manifest transition with terminal outcome |
 | Stage parity | none, authority `manifest (P2)` (see note below) |
 | Ownership | retry cap; skip predicate; artifact schema; question schema; runner versus worker authority (see note below) |
-| Runner Protocol | every role in the role-id register whose owning workflow is `runnerMode: supported` |
+| Runner Protocol | every role in the Role ids register, all twenty-eight, since every owning workflow is `runnerMode: supported` (`integrator` is outside the register and outside this family, see the Role ids note) |
 
 Stage parity note: P1 registers no stage ids. Two known non-1:1 mapping cases are recorded here as evidence, not as members, and are not written into any workflow file. First, the proposed stage ids `architect-light`, `architect-full`, and `architect-split` (P2 proposals) all map to the single `architect` entry in `task-refinement-workflow.md`'s Roles section and to a single Sequence dispatch step, so three stages correspond to one manual step. Second, the proposed stage ids `gather-context` and `orchestrator-route` (P2 proposals) have no correspondingly named step in `product-spec-workflow.md`'s current Sequence, because both are runner-side stages.
 
@@ -175,7 +175,7 @@ Within a single file, each rule has exactly one owner section; every other menti
 Homes, by rule type:
 
 - Loop caps, cap exemptions, and round definitions live in the workflow's `Rules` section. Sequence steps reference the cap ("if the cap is reached"); they do not restate its number or exemption list.
-- For the three runnable workflows, loop caps live in the manifest's `retry` and `caps` blocks; the workflow's `Rules` section states the cap in prose and names the manifest as the authority.
+- For every workflow, loop caps live in the manifest's `retry` and `caps` blocks; the workflow's `Rules` section states the cap in prose and names the manifest as the authority.
 - A procedure lives in the section that defines it (a barrier step, a named convention section). Later steps reference it.
 - Checklists (`Completion` Required, `Completion Self-Check`, `Dispatch Gate`) verify rules. A checklist item may name the fields it checks, but it never restates a rule's full definition or condition; it points at the owning step or section.
 - A template's `Verdict Rule` clause that prevents misgrading (for example, what does not count toward a verdict) is part of the enum's interface, not a restatement.
@@ -201,4 +201,13 @@ Recorded asymmetries and pending decisions, so audits do not rediscover them:
 - Repeat-pass naming outliers pending alignment: `evaluator` (Re-Evaluation Pass), `investigator` (Follow-up Rounds), `devils-advocate` (unnamed repeat handling), `problem-definer` (lowercase "revision passes").
 - Read-only HARD CONSTRAINT wording is now byte-identical across the four read-only runnable templates (`spec-reviewer`, `code-quality-reviewer`, `analyst`, `spec-challenger`); it still varies among read-only-flavored non-runnable templates, for example `handoff-challenger` and `reliability-investigator`.
 - Trial-gated removal candidates (kept until a trial run shows they are no longer needed): the implementer edit-hygiene and re-read-the-brief rules, the "running low on context" anti-rationalization rows, the Enforcement-rule sentence under every Anti-Rationalization table (it duplicates "No step may be skipped"), the roadmap-health rows that argue whether to run the workflow at all, the spike "clean up later" row, and the verification-log Purpose rationale in `dev-workflow`.
-- The nine manual-only workflows have no manifest, by decision D3.
+- Decision D3 limited manifests to three workflows and left nine manual-only with none. Q6 superseded that restriction and P10 gave all nine a manifest, so every workflow in the catalog now carries one.
+- `test/workflow-parity/static.test.mjs`'s `runnerMode: unsupported` branch (the test at line 120, its assertions at lines 135 and 139) is unexercised now that every workflow is `runnerMode: supported`. It is retained deliberately as coverage for any future manual-only workflow, not deleted.
+- P10.2 #3: cross-group ordering in this file's own Role ids register is not uniform. The three legacy groups (`dev-workflow`, `task-refinement-workflow`, `product-spec-workflow`) precede the nine alphabetically ordered groups P10 added. Either state the ordering rule here or normalize the legacy groups in a later pass.
+- P10.5 #1: `workflows/manifests/gap-analysis-workflow.v1.yaml`'s `needsInfoResolutions: 2` was borrowed from `product-spec.v1.yaml` by structural analogy, not derived from `gap-analysis-workflow`'s own needs-info patterns. Worth revisiting once operators report whether the cap is too tight or too loose.
+- P10.5 #3: `workflows/manifests/gap-analysis-workflow.v1.yaml`'s `map-coverage`/`review-map` decomposition-soundness loop has no `cap-reached` escape of its own and terminates only on the mapper's own `questions` or `failed` verdict. It matches `development.v1.yaml`'s uncapped `verify-task` to `implement` precedent, so it is a catalog-wide pattern, not a defect of one manifest.
+- P10.6 #2: no test under `test/workflow-parity/` pins any manifest's transition target value, only structural invariants (edge coverage, totality, cap-breach containment, reachability). An accidental revert of `workflows/manifests/roadmap-health-workflow.v1.yaml`'s `produce-report` edge would not be caught by the suite. True of every transition in every manifest here; the review gates are the current control.
+- P10.8 #3: `workflows/reliability-resiliency-workflow.md`'s Completion Self-Check items 6 and 7 route through the same `finalize` to `investigate` edge as items 1 through 5, though the workflow's own text says they need no re-dispatch. Bounded by `caps.finalizeAttempts`. A proper fix needs a structured which-check-failed signal that no role emits today, plus a multi-way routing stage in `workflows/manifests/reliability-resiliency-workflow.v1.yaml`.
+- P10.10 #1: `workflows/manifests/design-handoff-workflow.v1.yaml` has no edge back into the cycle from the post-`package-ready` stages, so Completion Self-Check checks 1 through 3 have no manifest path for the re-dispatch they describe. Inherited identically from the already-integrated `design-intake-workflow.v1.yaml`.
+- P10.11 #1 (deferred half): `workflows/manifests/decision-workflow.v1.yaml` has no bounded finalize-retry mechanism routing the `architect-produce-adr` self-check's named re-dispatch targets back to their stages, unlike `research-workflow.v1.yaml`'s `synthesize-report`/`resolve-gaps` pair. It fails safe to the `parked` attention outcome. The other half of this item, stating `status: failed` explicitly, was fixed by P10.12-i.
+- P10.1 parity-suite internals, both recorded for a later cleanup pass: `test/workflow-parity/static.test.mjs`'s per-workflow `runnerManifest` resolution loop (lines 562-570) is subsumed by the manifest-set equality asserted immediately above it (lines 557-561) and can never fail once that passes; and `test/workflow-parity/golden.test.mjs`'s per-role verdict test (lines 587-625) compares the golden packet's Result Contract against the schema `$defs` enum but never compares the Verdict enums register's own values against it, which is the check `static.test.mjs` makes at line 697 through `verdictRegisterCoversSchemaEnum`, so a corrupted register value is caught only by `static.test.mjs`.
