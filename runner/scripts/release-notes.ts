@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 interface GitCallOptions {
@@ -314,7 +315,7 @@ function isMainModule(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return fileURLToPath(import.meta.url) === entry;
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
   } catch {
     return false;
   }

@@ -10,6 +10,7 @@
 // exports `supervisor.ts` itself wires together; this file is composition,
 // not a reimplementation of any of them.
 
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { openStore } from "../../src/store/db.ts";
@@ -182,7 +183,7 @@ function isMainModule(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return fileURLToPath(import.meta.url) === entry;
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
   } catch {
     return false;
   }

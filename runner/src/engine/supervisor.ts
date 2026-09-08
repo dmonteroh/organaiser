@@ -14,6 +14,7 @@
 // body is wired in. This stays a stub for tests; production wiring swaps in
 // P5d's real body.
 
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { openStore } from "../store/db.ts";
@@ -99,7 +100,7 @@ function isMainModule(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return fileURLToPath(import.meta.url) === entry;
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entry);
   } catch {
     return false;
   }

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -121,6 +122,33 @@ test("does not re-exec when the pinned target's realpath equals the running entr
     assert.equal(result.signal, null);
     assert.equal(result.status, EXIT_CODES.INVALID_ARGS, `stderr: ${result.stderr}`);
   });
+});
+
+test("isMainModule() runs main() when invoked through a symlinked entry point from a non-realpath-clean location", () => {
+  // Deliberately not withTempWorkspace: it calls fs.realpath on its own
+  // mkdtemp root, which would defeat this repro (the bug requires
+  // process.argv[1] to differ, by symlink, from import.meta.url's
+  // realpath-resolved value).
+  const symlinkRoot = fs.mkdtempSync(path.join(os.tmpdir(), "orga-bin-symlink-"));
+  try {
+    const symlinkedEntry = path.join(symlinkRoot, "orga-entry.ts");
+    fs.symlinkSync(ORGA_BIN_PATH, symlinkedEntry);
+
+    const result = spawnSync(process.execPath, [symlinkedEntry, "--version"], {
+      cwd: symlinkRoot,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+
+    assert.equal(result.signal, null, `stderr: ${result.stderr}`);
+    assert.equal(result.status, EXIT_CODES.OK, `stderr: ${result.stderr}`);
+    assert.ok(
+      result.stdout.trim().length > 0,
+      `expected real, non-empty stdout from the symlinked entry point (a pre-fix isMainModule() would silently no-op with empty stdout and exit 0); got: ${JSON.stringify(result.stdout)}`,
+    );
+  } finally {
+    fs.rmSync(symlinkRoot, { recursive: true, force: true });
+  }
 });
 
 test("never delegates `init`, even when an eligible pinned runner is present in an ancestor", async () => {
