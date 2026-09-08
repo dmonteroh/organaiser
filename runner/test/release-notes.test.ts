@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { withTempWorkspace } from "./helpers/workspace.ts";
 import {
@@ -11,6 +12,9 @@ import {
   ContractVersionConflictError,
   MalformedContractBlockError,
 } from "../scripts/release-notes.ts";
+
+const SCRIPT_PATH = fileURLToPath(new URL("../scripts/release-notes.ts", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 function runGit(dir: string, args: string[]): string {
   return execFileSync("git", args, {
@@ -290,5 +294,34 @@ test("release notes: identical id and contractVersion declared in both markdown 
       false,
       "unchanged cross-source contract is not listed as changed, added, or removed",
     );
+  });
+});
+
+test("release notes: real script resolves the repository directory from its own file location, not the invoking cwd", async () => {
+  await withTempWorkspace((tempDir) => {
+    const cwds = [REPO_ROOT, path.join(REPO_ROOT, "runner"), tempDir];
+    const results = cwds.map((cwd) =>
+      spawnSync(process.execPath, [SCRIPT_PATH, "HEAD"], {
+        cwd,
+        encoding: "utf8",
+        timeout: 30_000,
+      }),
+    );
+
+    const [rootResult] = results;
+    for (const [index, result] of results.entries()) {
+      assert.equal(result.status, 0, `cwd "${cwds[index]}" stderr: ${result.stderr}`);
+      assert.equal(result.stderr, "", `cwd "${cwds[index]}" unexpected stderr`);
+      assert.equal(
+        result.stdout,
+        rootResult.stdout,
+        `cwd "${cwds[index]}" stdout diverged from the repository-root invocation`,
+      );
+    }
+
+    const sharedStdout = rootResult.stdout;
+    assert.equal(sharedStdout.startsWith("## Contract Versions\n"), true);
+    assert.match(sharedStdout, /First release: every contract at its current version\./);
+    assert.match(sharedStdout, /^- `[^`]+`: `[^`]+`$/m);
   });
 });
