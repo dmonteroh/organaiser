@@ -408,6 +408,81 @@ test("(j) AC5: compare.ts imports no grader, grade-runner, cell-runner, fixtures
   });
 });
 
+test("(l) a missing eval-snapshot.json on one side is a variation, refused as multiple varied declared variables", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--profile--fixture-a--1"), {});
+    writeCell(path.join(runDir(dir, right), "unit--profile--fixture-a--1"), { skipSnapshot: true });
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.INVALID_ARGS);
+    assert.equal(io.outLines.length, 0);
+    assert.equal(io.errLines.length, 1);
+    assert.match(io.errLines[0] as string, /prompt/);
+    assert.match(io.errLines[0] as string, /workflowRevision/);
+    assert.match(io.errLines[0] as string, /cliVersion/);
+    assert.match(io.errLines[0] as string, /model/);
+  });
+});
+
+test("(m) an unparseable eval-snapshot.json on one side is a variation, refused as multiple varied declared variables", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    const leftCell = path.join(runDir(dir, left), "unit--profile--fixture-a--1");
+    const rightCell = path.join(runDir(dir, right), "unit--profile--fixture-a--1");
+    writeCell(leftCell, {});
+    writeCell(rightCell, {});
+    writeArtifact(rightCell, "eval-snapshot.json", "{not valid json");
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.INVALID_ARGS);
+    assert.equal(io.outLines.length, 0);
+    assert.equal(io.errLines.length, 1);
+    assert.match(io.errLines[0] as string, /prompt/);
+    assert.match(io.errLines[0] as string, /workflowRevision/);
+    assert.match(io.errLines[0] as string, /cliVersion/);
+    assert.match(io.errLines[0] as string, /model/);
+  });
+});
+
+test("(n) workflowRevision differing on every matched key reports 'single-variable' and names workflowRevision", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--profile--fixture-a--1"), { workflowRevision: "rev-1" });
+    writeCell(path.join(runDir(dir, right), "unit--profile--fixture-a--1"), { workflowRevision: "rev-2" });
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.outcome, "single-variable");
+    assert.equal(parsed.variedVariable, "workflowRevision");
+    assert.deepEqual(parsed.variedVariables, ["workflowRevision"]);
+  });
+});
+
+test("(o) cliVersion differing on every matched key reports 'single-variable' and names cliVersion", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--profile--fixture-a--1"), { cliVersion: "1.0.0" });
+    writeCell(path.join(runDir(dir, right), "unit--profile--fixture-a--1"), { cliVersion: "2.0.0" });
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.outcome, "single-variable");
+    assert.equal(parsed.variedVariable, "cliVersion");
+    assert.deepEqual(parsed.variedVariables, ["cliVersion"]);
+  });
+});
+
 test("(k) two empty run directories report 'no-cells'; disjoint profile keys report 'no-matched-cells'", async () => {
   await withTempWorkspace(async (dir) => {
     const left = "run-left";
