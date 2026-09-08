@@ -207,6 +207,78 @@ test("(e) resolvedConfig written in a different key order is not a variation", a
   });
 });
 
+test("(e2) resolvedConfig differing in array element order is a single-variable variation", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--profile--fixture-a--1"), { resolvedConfig: { tags: ["a", "b", "c"] } });
+    writeCell(path.join(runDir(dir, right), "unit--profile--fixture-a--1"), { resolvedConfig: { tags: ["c", "b", "a"] } });
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.outcome, "single-variable");
+    assert.equal(parsed.variedVariable, "resolvedConfig");
+  });
+});
+
+test("(e3) resolvedConfig differing in a nested-object field is a single-variable variation", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--profile--fixture-a--1"), { resolvedConfig: { outer: { a: 1, b: 2 } } });
+    writeCell(path.join(runDir(dir, right), "unit--profile--fixture-a--1"), { resolvedConfig: { outer: { b: 2, a: 3 } } });
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.outcome, "single-variable");
+    assert.equal(parsed.variedVariable, "resolvedConfig");
+  });
+});
+
+test("(d2) a literal null resolved-config.json versus a missing resolved-config.json is a variation", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    const leftCell = path.join(runDir(dir, left), "unit--profile--fixture-a--1");
+    const rightCell = path.join(runDir(dir, right), "unit--profile--fixture-a--1");
+    writeCell(leftCell, { resolvedConfig: null });
+    writeCell(rightCell, { resolvedConfig: null });
+    fs.unlinkSync(path.join(rightCell, "resolved-config.json"));
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.variedVariables.includes("resolvedConfig"), true);
+    assert.equal(parsed.outcome, "single-variable");
+    assert.equal(parsed.variedVariable, "resolvedConfig");
+  });
+});
+
+test("(d3) a literal null resolved-config.json versus an unparseable one is a variation", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    const leftCell = path.join(runDir(dir, left), "unit--profile--fixture-a--1");
+    const rightCell = path.join(runDir(dir, right), "unit--profile--fixture-a--1");
+    writeCell(leftCell, { resolvedConfig: null });
+    writeCell(rightCell, { resolvedConfig: null });
+    writeArtifact(rightCell, "resolved-config.json", "{not valid json");
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.variedVariables.includes("resolvedConfig"), true);
+    assert.equal(parsed.outcome, "single-variable");
+    assert.equal(parsed.variedVariable, "resolvedConfig");
+  });
+});
+
 test("(f) different fixture coverage reports variedVariable 'prompt' with leftOnlyKeys/rightOnlyKeys populated", async () => {
   await withTempWorkspace(async (dir) => {
     const left = "run-left";
