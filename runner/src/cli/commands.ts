@@ -54,6 +54,7 @@ import {
 } from "../../evals/eval-vocabulary.ts";
 import { runEvalCells } from "./eval-run.ts";
 import { gradeEvalRun } from "../../evals/grade-runner.ts";
+import { compareEvalRuns } from "../../evals/compare.ts";
 import { workflowAssetPath } from "../workflow-assets.ts";
 
 const SUPERVISOR_ENTRY_PATH = fileURLToPath(new URL("../engine/supervisor.ts", import.meta.url));
@@ -718,6 +719,55 @@ function cmdEvalGrade(parsed: ParsedArgs, io: Io): ExitCode {
   return result.outcome === "no-cells" || result.outcome === "passed" ? EXIT_CODES.OK : EXIT_CODES.FAILED;
 }
 
+function cmdEvalCompare(parsed: ParsedArgs, io: Io): ExitCode {
+  const leftEvalRunId = parsed.positionals[0];
+  const rightEvalRunId = parsed.positionals[1];
+  if (!leftEvalRunId || !rightEvalRunId) {
+    throw new UsageError("eval compare requires <left-evaluation-run-id> <right-evaluation-run-id>");
+  }
+  for (const evalRunId of [leftEvalRunId, rightEvalRunId]) {
+    if (evalRunId.includes("/") || evalRunId.includes("\\") || evalRunId === "." || evalRunId === "..") {
+      throw new UsageError(`eval compare requires a single path segment for each evaluation-run-id, got "${evalRunId}"`);
+    }
+  }
+  if (leftEvalRunId === rightEvalRunId) {
+    throw new UsageError(`eval compare requires two distinct evaluation-run-ids, got "${leftEvalRunId}" twice`);
+  }
+
+  const json = flagBool(parsed.flags, "json");
+  const root = io.cwd();
+
+  for (const evalRunId of [leftEvalRunId, rightEvalRunId]) {
+    const artifactRoot = path.join(root, ".orga", "evals", evalRunId);
+    let stat;
+    try {
+      stat = fs.statSync(artifactRoot);
+    } catch {
+      throw new UsageError(`eval compare found no evaluation run "${evalRunId}" under .orga/evals`);
+    }
+    if (!stat.isDirectory()) {
+      throw new UsageError(`eval compare found no evaluation run "${evalRunId}" under .orga/evals`);
+    }
+  }
+
+  const result = compareEvalRuns({ root, leftEvalRunId, rightEvalRunId });
+
+  if (result.variedVariables.length > 1) {
+    throw new UsageError(
+      `eval compare refused: comparison varies ${result.variedVariables.length} declared variables (${result.variedVariables.join(", ")}); exactly one may vary`,
+    );
+  }
+
+  emit(
+    io,
+    json,
+    result,
+    `eval compare ${leftEvalRunId} ${rightEvalRunId}: varied ${result.variedVariable ?? "none"}, ${result.matchedKeys} matched key(s), ${result.cells.length} key(s), ${result.unstableKeys} unstable, ${result.ungradedCells} ungraded -> ${result.outcome}`,
+  );
+
+  return EXIT_CODES.OK;
+}
+
 function cmdRunReplay(parsed: ParsedArgs, io: Io): ExitCode {
   const runId = parsed.positionals[0];
   if (!runId) throw new UsageError("run replay requires <run-id>");
@@ -1149,6 +1199,7 @@ const COMMANDS: Readonly<Record<string, CommandBody>> = {
   "eval list": cmdEvalList,
   "eval run": cmdEvalRun,
   "eval grade": cmdEvalGrade,
+  "eval compare": cmdEvalCompare,
 };
 
 const COMMAND_PATHS = Object.keys(COMMANDS).sort((a, b) => b.split(" ").length - a.split(" ").length);
