@@ -56,6 +56,7 @@ export function writeCellArtifacts(record: CapturedCellRecord, cellDir: string, 
     "git-before.txt": record.git?.before ?? "",
     "git-after.txt": record.git?.after ?? "",
     "diff.patch": record.git?.diff ?? "",
+    "git-commit-graph.txt": record.git?.commitGraph ?? "",
   };
 
   for (const [name, content] of Object.entries(files)) {

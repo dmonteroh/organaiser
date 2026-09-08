@@ -158,6 +158,14 @@ export interface CaptureContextStore {
    * failed.
    */
   gitDiff?: string | null;
+  /**
+   * The workspace's commit-parent graph (`git log --format=%H %P --all`, capped) plus
+   * ref tips (`git show-ref`), computed inside `captureBeforeTeardown` alongside
+   * `gitDiff` — same "must run while `dir` still exists" constraint. `undefined` until
+   * `captureBeforeTeardown` runs; `null` thereafter for a non-git workspace or a failing
+   * git invocation.
+   */
+  commitGraph?: string | null;
   streamFiles?: CaptureStreamFile[];
   workerReports?: unknown[];
 }
@@ -197,6 +205,39 @@ function gitDiffSince(dir: string, headBefore: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+const COMMIT_GRAPH_MAX_COUNT = 500;
+
+// Ref tips and commit-parent lines each come from their own `tryGitCapture` call, never
+// a shared `try`/`catch`: on an empty-but-real repo (unborn HEAD, no commits) `git
+// show-ref` exits 1 while `git log --all` exits 0, and a shared catch would discard a
+// valid commit-graph capture because the sibling ref capture failed.
+function commitGraphSnapshot(dir: string): string | null {
+  if (!fs.existsSync(path.join(dir, ".git"))) return null;
+
+  const log = tryGitCapture(dir, [
+    "log",
+    "--format=%H %P",
+    "--all",
+    `--max-count=${COMMIT_GRAPH_MAX_COUNT + 1}`,
+  ]);
+  if (log === null) return null;
+  const refs = tryGitCapture(dir, ["show-ref"]);
+
+  const logLines = log === "" ? [] : log.split("\n");
+  const truncated = logLines.length > COMMIT_GRAPH_MAX_COUNT;
+  const commitLines = logLines.slice(0, COMMIT_GRAPH_MAX_COUNT).map((line) => line.trimEnd());
+  const refLines = refs === null || refs === "" ? [] : refs.split("\n");
+
+  const lines = [
+    "REFS:",
+    ...refLines,
+    "COMMITS:",
+    ...commitLines,
+    ...(truncated ? [`TRUNCATED: ${COMMIT_GRAPH_MAX_COUNT}`] : []),
+  ];
+  return `${lines.join("\n")}\n`;
 }
 
 function snapshotGitAndBoard(dir: string, runId: string | undefined): CaptureGitBoardSnapshot {
@@ -321,6 +362,7 @@ export function captureBeforeTeardown(dir: string, runId: string | undefined): v
   if (!store) return;
   store.after = snapshotGitAndBoard(dir, runId ?? store.runId);
   store.gitDiff = gitDiffSince(dir, store.before?.gitHead ?? null);
+  store.commitGraph = commitGraphSnapshot(dir);
   store.streamFiles = collectStreamFiles(dir);
   store.workerReports = extractWorkerReports(store.streamFiles);
 }

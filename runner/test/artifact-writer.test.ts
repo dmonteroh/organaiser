@@ -7,7 +7,7 @@ import test from "node:test";
 import { writeCellArtifacts } from "../evals/artifact-writer.ts";
 import type { CapturedCellRecord } from "../evals/cell-runner.ts";
 
-const FOURTEEN_ARTIFACT_NAMES = [
+const ARTIFACT_NAMES = [
   "eval-snapshot.json",
   "fixture-base.txt",
   "resolved-config.json",
@@ -22,6 +22,7 @@ const FOURTEEN_ARTIFACT_NAMES = [
   "git-before.txt",
   "git-after.txt",
   "diff.patch",
+  "git-commit-graph.txt",
 ];
 
 function makeTmpDir(prefix: string): string {
@@ -80,6 +81,7 @@ function fullRecord(overrides: Partial<CapturedCellRecord> = {}): CapturedCellRe
       before: "HEAD abc123\nclean",
       after: "HEAD def456\nclean",
       diff: "diff --git a/x b/x\n+hello\n",
+      commitGraph: "REFS:\nCOMMITS:\nabc123 \n",
     },
     board: {
       before: {
@@ -101,14 +103,14 @@ function fullRecord(overrides: Partial<CapturedCellRecord> = {}): CapturedCellRe
   };
 }
 
-test("artifact-writer: writes exactly the fourteen named artifacts and no others (AC1, AC9)", () => {
+test("artifact-writer: writes exactly the fifteen named artifacts and no others (AC1, AC9)", () => {
   const cellDir = path.join(makeTmpDir("artifact-writer-"), "nested", "cell-1");
   const root = makeTmpDir("artifact-writer-root-");
 
   writeCellArtifacts(fullRecord(), cellDir, root);
 
   const written = fs.readdirSync(cellDir).sort();
-  assert.deepEqual(written, [...FOURTEEN_ARTIFACT_NAMES].sort());
+  assert.deepEqual(written, [...ARTIFACT_NAMES].sort());
 });
 
 test("artifact-writer: creates a non-existent cell directory recursively (AC1)", () => {
@@ -140,7 +142,7 @@ test("artifact-writer: writing the same record twice produces byte-identical art
   writeCellArtifacts(record, cellDirA, root);
   writeCellArtifacts(record, cellDirB, root);
 
-  for (const name of FOURTEEN_ARTIFACT_NAMES) {
+  for (const name of ARTIFACT_NAMES) {
     const contentA = fs.readFileSync(path.join(cellDirA, name));
     const contentB = fs.readFileSync(path.join(cellDirB, name));
     assert.ok(contentA.equals(contentB), `mismatch for ${name}`);
@@ -181,10 +183,11 @@ test("artifact-writer: null/absent fields produce deterministic empty artifacts,
   assert.equal(fs.readFileSync(path.join(cellDirA, "git-before.txt"), "utf8"), "");
   assert.equal(fs.readFileSync(path.join(cellDirA, "git-after.txt"), "utf8"), "");
   assert.equal(fs.readFileSync(path.join(cellDirA, "diff.patch"), "utf8"), "");
+  assert.equal(fs.readFileSync(path.join(cellDirA, "git-commit-graph.txt"), "utf8"), "");
   assert.equal(fs.readFileSync(path.join(cellDirA, "board-before.yaml"), "utf8"), "run: null\ntasks: []\n");
   assert.equal(fs.readFileSync(path.join(cellDirA, "board-after.yaml"), "utf8"), "run: null\ntasks: []\n");
 
-  for (const name of FOURTEEN_ARTIFACT_NAMES) {
+  for (const name of ARTIFACT_NAMES) {
     const contentA = fs.readFileSync(path.join(cellDirA, name));
     const contentB = fs.readFileSync(path.join(cellDirB, name));
     assert.ok(contentA.equals(contentB), `mismatch for ${name}`);
@@ -218,6 +221,7 @@ test("artifact-writer: an injected secret env value is redacted in the written a
         before: `HEAD abc123 ${secret}\nclean`,
         after: "HEAD def456\nclean",
         diff: "diff --git a/x b/x\n+hello\n",
+        commitGraph: "REFS:\nCOMMITS:\n",
       },
     });
 

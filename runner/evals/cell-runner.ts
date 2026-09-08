@@ -74,6 +74,11 @@ export interface EvalCellGitCapture {
    * returns, since by then the directory is already gone.
    */
   diff: string | null;
+  /**
+   * `harness.ts`'s `commitGraphSnapshot`: the workspace's commit-parent graph plus ref
+   * tips, captured under the same "before `fs.rmSync`" constraint as `diff`.
+   */
+  commitGraph: string | null;
 }
 
 export interface EvalCellProcessCapture {
@@ -233,6 +238,7 @@ function assembleCapturedEvidence(ctx: CaptureContextStore): {
           // for why this can no longer be recomputed here against `ctx.workspaceDir`
           // (by this point `withFixtureWorkspace`'s `finally` has already deleted it).
           diff: ctx.gitDiff ?? null,
+          commitGraph: ctx.commitGraph ?? null,
         }
       : null;
 

@@ -166,7 +166,7 @@ test(
         assert.ok(path.isAbsolute(cell.artifactPath));
         assert.ok(cell.artifactPath.startsWith(path.join(dir, ".orga", "evals", parsed.evalRunId)));
         const files = fs.readdirSync(cell.artifactPath);
-        assert.equal(files.length, 14);
+        assert.equal(files.length, 15);
       }
 
       const progressLines = io.errLines.filter((line) => /^\[\d+\/\d+]/.test(line));
@@ -200,7 +200,7 @@ test(
       for (const outcome of outcomes) {
         assert.ok(fs.existsSync(outcome.artifactPath));
         const files = fs.readdirSync(outcome.artifactPath);
-        assert.equal(files.length, 14);
+        assert.equal(files.length, 15);
       }
 
       const unresolvedPath = outcomes[1]?.artifactPath as string;

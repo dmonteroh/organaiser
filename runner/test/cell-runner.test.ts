@@ -48,6 +48,7 @@ test(
     assert.equal(record.git?.before, null);
     assert.equal(record.git?.after, null);
     assert.equal(record.git?.diff, null);
+    assert.equal(record.git?.commitGraph, null);
 
     assert.notEqual(record.board, null);
     const tasksAfter = record.board?.after?.tasks ?? [];
@@ -106,6 +107,16 @@ test(
       record.git?.diff ?? "",
       /task-a\.txt/,
       "the diff must show the real file git/integrate.ts committed during the run",
+    );
+
+    assert.notEqual(record.git?.commitGraph, null);
+    assert.ok(record.git?.commitGraph?.startsWith("REFS:\n"), record.git?.commitGraph ?? undefined);
+    assert.ok(record.git?.commitGraph?.includes("\nCOMMITS:\n"), record.git?.commitGraph ?? undefined);
+    const afterSha = /^HEAD (\S+)/.exec(record.git?.after ?? "")?.[1];
+    assert.ok(afterSha, "record.git?.after must carry a HEAD sha");
+    assert.ok(
+      record.git?.commitGraph?.includes(afterSha as string),
+      `commit graph must contain the after-snapshot sha ${afterSha}: ${record.git?.commitGraph}`,
     );
   },
 );
