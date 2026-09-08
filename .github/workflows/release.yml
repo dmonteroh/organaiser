@@ -1,0 +1,89 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: runner/package-lock.json
+      - name: Resolve version and ref
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          pkg_version="$(node -p "JSON.parse(require('node:fs').readFileSync('runner/package.json','utf8')).version")"
+          if [ "$EVENT_NAME" = "push" ]; then
+            tag="$GITHUB_REF_NAME"
+            if [ "${tag#v}" != "$pkg_version" ]; then
+              echo "release: tag $tag declares version ${tag#v} but runner/package.json declares $pkg_version" >&2
+              exit 1
+            fi
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$pkg_version" >> "$GITHUB_OUTPUT"
+      - name: Resolve previous release tag
+        id: prev
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          NEW_REF: ${{ steps.meta.outputs.ref }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            start="$NEW_REF^"
+          else
+            start="$NEW_REF"
+          fi
+          if prev="$(git describe --tags --abbrev=0 --match 'v*' "$start" 2>/dev/null)"; then
+            echo "prev_ref=$prev" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            echo "release: no previous v* tag found and the checkout is shallow; actions/checkout must use fetch-depth: 0" >&2
+            exit 1
+          fi
+          echo "prev_ref=" >> "$GITHUB_OUTPUT"
+      - name: Build release assets
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          NEW_REF: ${{ steps.meta.outputs.ref }}
+        run: node runner/scripts/build-release-assets.ts "$VERSION" "$NEW_REF" "$GITHUB_WORKSPACE/dist/release"
+      - name: Generate release notes
+        env:
+          NEW_REF: ${{ steps.meta.outputs.ref }}
+          PREV_REF: ${{ steps.prev.outputs.prev_ref }}
+        run: node runner/scripts/release-notes.ts "$NEW_REF" "$PREV_REF" > "$GITHUB_WORKSPACE/dist/release/notes.md"
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.meta.outputs.version }}
+          path: dist/release/
+          if-no-files-found: error
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.ref }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file dist/release/notes.md \
+            "dist/release/organaiser-$VERSION.tgz" \
+            "dist/release/organaiser-$VERSION.tgz.sha256" \
+            "dist/release/organaiser-catalog-$VERSION.zip" \
+            "dist/release/organaiser-catalog-$VERSION.zip.sha256"
