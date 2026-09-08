@@ -25,6 +25,7 @@ import { classifyAttempt, type VendorSignals } from "./classify.ts";
 import { createJsonlFramer } from "./jsonl.ts";
 import { groupAlive } from "./process-group.ts";
 import { createReportValidator, type ReportValidator } from "../compile/report-validator.ts";
+import { workflowAssetPath } from "../workflow-assets.ts";
 
 /** What `buildCommand` returns: the exact argument array to spawn, never a shell string. */
 export interface VendorCommand {
@@ -107,9 +108,7 @@ export interface VendorAdapterOptions {
   schemaPath?: string;
 }
 
-const DEFAULT_SCHEMA_PATH = fileURLToPath(
-  new URL("../../../workflows/schemas/stage-result.schema.json", import.meta.url),
-);
+const DEFAULT_SCHEMA_PATH = workflowAssetPath("schemas/stage-result.schema.json");
 
 // `stage-result.schema.json` $refs four sibling schema files by absolute $id, which in
 // turn $ref two more; Ajv only resolves a $ref against a schema already registered on

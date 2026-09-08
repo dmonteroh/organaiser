@@ -23,6 +23,7 @@ import type { ErrorObject } from "ajv";
 import { openStore, withTransaction } from "../store/db.ts";
 import { appendEvent, mirrorEvent } from "../store/events.ts";
 import { sha256 } from "../store/evidence.ts";
+import { workflowAssetPath } from "../workflow-assets.ts";
 import type { DatabaseSync } from "node:sqlite";
 import type { EventRow } from "../store/types.ts";
 
@@ -36,12 +37,8 @@ export class BoardValidationError extends Error {
   }
 }
 
-function boardSchemaPath(): string {
-  return fileURLToPath(new URL("../../../workflows/schemas/board.schema.json", import.meta.url));
-}
-
 function loadBoardSchema(): object {
-  const raw = fs.readFileSync(boardSchemaPath(), "utf8");
+  const raw = fs.readFileSync(workflowAssetPath("schemas/board.schema.json"), "utf8");
   return JSON.parse(raw) as object;
 }
 

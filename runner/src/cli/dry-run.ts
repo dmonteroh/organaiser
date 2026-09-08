@@ -11,13 +11,13 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject } from "ajv";
 
 import { openStore, withTransaction } from "../store/db.ts";
 import { compilePacket, type PacketInput } from "../compile/packet.ts";
+import { workflowAssetPath } from "../workflow-assets.ts";
 
 export class DryRunBoardError extends Error {
   errors: Array<{ path: string; message: string }>;
@@ -43,12 +43,8 @@ interface Board {
   spec: { tasks: readonly BoardTask[] };
 }
 
-function boardSchemaPath(): string {
-  return fileURLToPath(new URL("../../../workflows/schemas/board.schema.json", import.meta.url));
-}
-
 function validateBoardShape(board: unknown): asserts board is Board {
-  const schema = JSON.parse(fs.readFileSync(boardSchemaPath(), "utf8")) as object;
+  const schema = JSON.parse(fs.readFileSync(workflowAssetPath("schemas/board.schema.json"), "utf8")) as object;
   const ajv = new Ajv2020({ allErrors: true });
   const validate = ajv.compile(schema);
   if (!validate(board)) {

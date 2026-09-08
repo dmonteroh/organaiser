@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject } from "ajv";
+
+import { workflowAssetPath } from "../workflow-assets.ts";
 
 export class ImportMarkdownError extends Error {
   uncertainties: string[];
@@ -283,12 +284,8 @@ const STATUS_MAP: Readonly<Record<string, StatusMapping>> = {
   },
 };
 
-function boardSchemaPath(): string {
-  return fileURLToPath(new URL("../../../workflows/schemas/board.schema.json", import.meta.url));
-}
-
 function validateBoardAgainstSchema(board: unknown, uncertainties: readonly string[]): void {
-  const schema = JSON.parse(fs.readFileSync(boardSchemaPath(), "utf8")) as object;
+  const schema = JSON.parse(fs.readFileSync(workflowAssetPath("schemas/board.schema.json"), "utf8")) as object;
   const ajv = new Ajv2020({ allErrors: true });
   const validate = ajv.compile(schema);
   if (!validate(board)) {
