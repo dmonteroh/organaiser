@@ -89,7 +89,7 @@ This step never claims the board is complete.
 - Steps are executed in order. No step may be skipped.
 - The investigator must NEVER apply a fix. Diagnosis and repair are separate concerns. Mixing them causes incomplete root cause analysis.
 - Reproduction comes before investigation. If you can't reproduce it, document that. Don't skip ahead to guessing.
-- Maximum follow-up rounds: 2 (manifest authority: `manifests/debugging-workflow.v1.yaml` caps). A follow-up round is one investigator re-dispatch triggered by a non-`confirmed` verdict (steps 6-7). If the root cause is still not confirmed after 2 rounds, stop dispatching, mark the task `blocked`, and escalate to the operator with all evidence and any competing hypotheses.
+- Maximum follow-up rounds: 2 (manifest authority: `manifests/debugging-workflow.v1.yaml` caps). A follow-up round is one investigator re-dispatch, triggered either by a non-`confirmed` verifier verdict (steps 6-7) or by `check-instrumentation`'s `false` edge back into `investigate`. If the root cause is still not confirmed after 2 rounds, stop dispatching, mark the task `blocked`, and escalate to the operator with all evidence and any competing hypotheses.
 - The fix task created at step 8 runs under dev-workflow, not this workflow. This workflow produces the diagnosis; dev-workflow produces the fix.
 
 ## Anti-Rationalization Rules
@@ -143,6 +143,8 @@ Before marking a debugging investigation as complete, the orchestrator must veri
 5. The fix task references the proven root cause and requires a regression test.
 6. No temporary instrumentation remains in the codebase (except retentions the orchestrator approved and recorded at the step 3 barrier).
 7. No forbidden claims appear in the report.
+
+These seven checks are not verified by one stage, and not all of them are verified mechanically (manifest authority: `manifests/debugging-workflow.v1.yaml`). The `debugging-self-check` stage's `fix-task-recorded` predicate verifies item 5 only; items 1 and 2 are verified upstream by `check-reproduction`'s `reproduction-or-causal-chain-present` predicate, and item 6 by `check-instrumentation`'s `instrumentation-resolved` predicate. Item 3 is enforced by the stage order itself, since `verify` runs only after `investigate` returns `completed` and only its `confirmed` verdict reaches `debugging-self-check`. Item 4 is a judgment call no predicate performs; it remains enforced by the investigator and verifier stage verdicts. Item 7 has no automated check in this workflow today and is enforced by the orchestrator alone.
 
 If any check fails, return to the step that produces the missing artifact and rerun from there. Do not mark the task `ready` with a failed check.
 
