@@ -58,3 +58,15 @@ test("resolveWorkflowsRoot: neither candidate existing throws an error naming bo
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test("no source file resolves the workflow catalog by hardcoded relative path", () => {
+  const needle = "../../../workflows";
+  for (const root of ["src", "bin"]) {
+    const dir = fileURLToPath(new URL(`../${root}/`, import.meta.url));
+    for (const relative of fs.readdirSync(dir, { recursive: true, encoding: "utf8" })) {
+      if (!relative.endsWith(".ts")) continue;
+      const full = path.join(dir, relative);
+      assert.ok(!fs.readFileSync(full, "utf8").includes(needle), `${full} hardcodes ${needle}`);
+    }
+  }
+});
