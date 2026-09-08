@@ -39,4 +39,7 @@ export interface FrozenCellBundle {
   boardBefore: ArtifactRead<YamlMapping>;
   boardAfter: ArtifactRead<YamlMapping>;
   diff: ArtifactRead<string>;
+  gitBefore: ArtifactRead<string>;
+  gitAfter: ArtifactRead<string>;
+  commitGraph: ArtifactRead<string>;
 }

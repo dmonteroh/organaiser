@@ -9,6 +9,7 @@ import { STAGE_DEFINITIONS } from "../src/engine/scheduler.ts";
 import { LEGAL_TRANSITIONS } from "../evals/graders/legal-order.ts";
 import {
   gradeDiffScope,
+  gradeGitAncestry,
   gradeProcessCount,
   gradeTaskDisposition,
   gradeTransitionOrder,
@@ -412,8 +413,11 @@ test("every grader returns a GradingCheck rather than throwing on an all-missing
     boardBefore: { status: "missing" },
     boardAfter: { status: "missing" },
     diff: { status: "missing" },
+    gitBefore: { status: "missing" },
+    gitAfter: { status: "missing" },
+    commitGraph: { status: "missing" },
   };
-  for (const grader of [gradeTransitionOrder, gradeProcessCount, gradeTaskDisposition, gradeDiffScope]) {
+  for (const grader of [gradeTransitionOrder, gradeProcessCount, gradeTaskDisposition, gradeDiffScope, gradeGitAncestry]) {
     const check = grader(allMissingBundle);
     assert.equal(check.grader, "deterministic");
     assert.equal(check.outcome, "operational-failure");
@@ -430,6 +434,7 @@ const GRADER_FILES = [
   "process-count.ts",
   "task-disposition.ts",
   "diff-scope.ts",
+  "git-ancestry.ts",
   "index.ts",
 ];
 const FORBIDDEN_ALWAYS = ["src/store/", "src/reports/replay.ts", "src/reports/run-replay.ts", '"node:child_process"', "'node:child_process'"];

@@ -81,5 +81,8 @@ export function readFrozenCell(cellDir: string): FrozenCellBundle {
     boardBefore: readYamlArtifact(cellDir, "board-before.yaml"),
     boardAfter: readYamlArtifact(cellDir, "board-after.yaml"),
     diff: readTextArtifact(cellDir, "diff.patch"),
+    gitBefore: readTextArtifact(cellDir, "git-before.txt"),
+    gitAfter: readTextArtifact(cellDir, "git-after.txt"),
+    commitGraph: readTextArtifact(cellDir, "git-commit-graph.txt"),
   };
 }

@@ -81,6 +81,9 @@ function writePassingCell(cellDir: string, options: { recordedPgids?: unknown; v
   writeArtifact(cellDir, "diff.patch", "");
   writeArtifact(cellDir, "events.jsonl", options.events ?? "");
   writeArtifact(cellDir, "vendor-stdout.jsonl", options.vendorStdout ?? "");
+  writeArtifact(cellDir, "git-before.txt", "");
+  writeArtifact(cellDir, "git-after.txt", "");
+  writeArtifact(cellDir, "git-commit-graph.txt", "");
 }
 
 function writeFailingCell(cellDir: string): void {
@@ -93,6 +96,9 @@ function writeFailingCell(cellDir: string): void {
   writeArtifact(cellDir, "diff.patch", "");
   writeArtifact(cellDir, "events.jsonl", "");
   writeArtifact(cellDir, "vendor-stdout.jsonl", "");
+  writeArtifact(cellDir, "git-before.txt", "");
+  writeArtifact(cellDir, "git-after.txt", "");
+  writeArtifact(cellDir, "git-commit-graph.txt", "");
 }
 
 test("(a) a well-formed multi-cell run writes grading.json and metrics.json per cell with pinned fields and grader: deterministic", async () => {

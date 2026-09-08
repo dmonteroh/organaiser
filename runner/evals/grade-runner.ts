@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { readFrozenCell, gradeTransitionOrder, gradeProcessCount, gradeTaskDisposition, gradeDiffScope } from "./graders/index.ts";
+import { readFrozenCell, gradeTransitionOrder, gradeProcessCount, gradeTaskDisposition, gradeDiffScope, gradeGitAncestry } from "./graders/index.ts";
 import type { ArtifactRead, GradingCheck, GradingOutcome, ProcessArtifact } from "./graders/types.ts";
 import { compareIds, serializeGrading, serializeMetrics, worstOutcome, type GradingArtifact, type MetricsArtifact } from "./grading-schema.ts";
 
@@ -74,6 +74,7 @@ export function gradeEvalRun(args: { root: string; evalRunId: string }): GradeEv
       gradeProcessCount(bundle),
       gradeTaskDisposition(bundle),
       gradeDiffScope(bundle),
+      gradeGitAncestry(bundle),
     ].sort((a, b) => compareIds(a.id, b.id));
 
     const outcome = worstOutcome(checks.map((check) => check.outcome));
