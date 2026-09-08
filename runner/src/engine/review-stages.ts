@@ -6,16 +6,14 @@
 // `dispatch.ts` or `scheduler.ts`.
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 
 import { createWorkspace, removeWorkspace, type WorkspaceHandle } from "../git/workspace.ts";
 import { createReportValidator, ReportValidationError, type ReportSchemaError } from "../compile/report-validator.ts";
+import { workflowAssetPath } from "../workflow-assets.ts";
 import type { ReviewerWorkspaceHandle, ReviewerWorkspaceRequest, ReviewerWorkspaceResolver } from "./workflow-stages.ts";
 
-const REVIEW_FINDING_SCHEMA_PATH = fileURLToPath(
-  new URL("../../../workflows/schemas/review-finding.schema.json", import.meta.url),
-);
+const REVIEW_FINDING_SCHEMA_PATH = workflowAssetPath("schemas/review-finding.schema.json");
 
 // `Ajv` (the plain, non-2020 build `report-validator.ts` constructs) has no
 // registered meta-schema for this file's own declared `$schema`

@@ -22,10 +22,11 @@ import type {
   TerminationReport,
 } from "./adapter.ts";
 import { ReportValidationError, createReportValidator, type ReportValidator } from "../compile/report-validator.ts";
+import { workflowAssetPath } from "../workflow-assets.ts";
 
 const DEFAULT_STREAMS_DIR = fileURLToPath(new URL("../../evals/fake-bin/streams/", import.meta.url));
 const DEFAULT_REPLAY_SCRIPT = fileURLToPath(new URL("../../evals/fake-bin/replay.ts", import.meta.url));
-const SCHEMAS_DIR = fileURLToPath(new URL("../../../workflows/schemas/", import.meta.url));
+const SCHEMAS_DIR = workflowAssetPath("schemas/");
 
 // `stage-result.schema.json` $refs four sibling schema files by absolute $id, which in
 // turn $ref two more; Ajv only resolves a $ref against a schema already registered on
