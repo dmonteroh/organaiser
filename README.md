@@ -20,13 +20,19 @@ The workflows make no assumptions about your harness, skills or project, so adap
 
 ## How do I add this to my project?
 
-Copy the workflows you want into your project, keep in mind that workflows have references to files inside the `subagents` folder. Each workflow is just markdown, ready to read. You don't install anything, and there is no runtime.
+Copy the workflows you want into your project, keep in mind that workflows have references to files inside the `subagents` folder. Each workflow is just markdown, ready to read. There are two ways to run them: manual mode, where you install nothing and drive the workflow yourself turn by turn, or runner mode, where the optional `orga` runner, a durable execution layer, drives the workflow for you while the workflow files and manifests it reads stay committed in your project. See [Get the files](#get-the-files) below for both.
 
 Before editing a workflow or a subagent template (including adapting your own copies), read [workflows/conventions.md](workflows/conventions.md). It records which duplicated blocks are deliberate parity that must stay in sync across files, which rules live in exactly one place, and how the repeat-pass mechanisms are named.
 
+## Get the files
+
+Each tagged release publishes two assets: `organaiser-catalog-<version>.zip`, containing `workflows/` and the full `examples/` tree, for people who only want the markdown; and `organaiser-<version>.tgz`, the runner package (`npm pack` output), for people who want to run `orga`. If you'd rather not track a release, clone this repository and copy the files you want, as described above.
+
+For runner mode, `orga.yaml` pins the runner version your project uses. The committed `orgaw` wrapper script reads that pin, bootstraps the matching `organaiser-<version>.tgz` into `.orga/runner/<version>/` the first time it's needed, and forwards every argument you give it to that pinned runner. Everyone on the project ends up running the same runner version without a global install.
+
 ## I have the files in my project, what now?
 
-Start a new thread and prompt your agent to use the workflow. I use this [subagent-orchestrator](https://github.com/dmonteroh/curated-agent-skills/tree/main/skills/subagent-orchestrator) skill to manage how subagents are handled by the main agent, and then let them do their work.
+Start a new thread and prompt your agent to use the workflow. I use this [subagent-orchestrator](https://github.com/dmonteroh/curated-agent-skills/tree/main/skills/subagent-orchestrator) skill to manage how subagents are handled by the main agent, and then let them do their work. In manual mode, the active agent turn you're driving owns orchestration continuity for the whole workflow, with no supervisor process behind it.
 
 Here's a quick example for using Task Refinement:
 ```
@@ -39,11 +45,25 @@ Please run this workflow: @task-refinement-workflow.md using /subagent-orchestra
 This is the task: {path to existing .md file where you have written part of the task OR paste the task here}
 ```
 
+## I have the runner installed, what now?
+
+`orga run start` hands the run to a detached supervisor process that exits once the run rests (waiting on a gate, blocked, or finished); it doesn't stay attached to your terminal, so you check in on it with `orga run status` whenever you like.
+
+```
+orga init
+orga doctor
+orga board validate --board path/to/workflow-board.yaml
+orga run start --board path/to/workflow-board.yaml
+orga run status <run-id>
+```
+
+`orga init` scaffolds `orga.yaml` and this project's `.orga/` state directory. `orga doctor` checks your setup. `orga board validate` checks a board file before you run it. `orga run start` dispatches the run and returns the run id; `orga run status` reports where it stands while the supervisor keeps working in the background.
+
 ## Examples
 
-Worked, end-to-end runs of these workflows, each dispatching real subagents and reproducing their output, live in [examples/](examples/README.md). There is one for task refinement into development (building a small utility), one for a research investigation (cursor vs offset pagination), and one for a spike (regex versus a real parser). Each marks which parts are real captures and which are illustrative, and some include the runnable code they produced so you can try them yourself.
+Worked, end-to-end runs of these workflows live in [examples/](examples/README.md). [examples/manual/](examples/manual/) has one for task refinement into development (building a small utility), one for a research investigation (cursor vs offset pagination), and one for a spike (regex versus a real parser), each dispatching real subagents and reproducing their output. [examples/runner/](examples/runner/) has a runner-mode board run plus a sanitized live vendor capture. Each marks which parts are real captures and which are illustrative, and some include the runnable code they produced so you can try them yourself.
 
-## Token economy and speed
+## Model and effort recommendations
 
 The usage of subagents makes this work more token heavy than working a task end-to-end in a single chat while manually driving the agent. Every subagent started will load your AGENTS/CLAUDE files, and if you have an extensive setup, your subagents will first have to go through that. Now that you know, you can think of options.
 
@@ -52,6 +72,8 @@ I have found success in specifying the LLM, model and effort that is used for ea
 
 For example: The task-refinement-workflow requires, in my opinion, higher effort models like Opus 4.8 or GPT-5.5 (High) in order to make the plan as high-quality and specific as possible. What this means is that the plan gets to be implemented by lower effort or smaller models without loss of quality. This is of course something that you need to experience yourself.
 Something else to consider: the "orchestrator" (the agent that you interact with directly) doesn't need a particularly big model to work correctly either. I have run automatic workflows (Ralph Loop) using Haiku and GPT mini with very little issues, if the supporting context is good enough.
+
+Both modes let you set this per role. In manual mode you choose the model backing the agent turn you're driving. In runner mode you set it through capability classes (for example `high-reasoning`, `balanced-implementation`, `fast-review`) in `orga.yaml`, each mapped to a vendor profile.
 
 ## Works well with
 

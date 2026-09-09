@@ -1,6 +1,6 @@
 # Worked example: task refinement into development
 
-This is an end-to-end run of two workflows on one small task, so you can see what to expect before you try them on your own code. It chains [task-refinement-workflow](../workflows/task-refinement-workflow.md) (turn a rough request into an implementation-ready brief) into [dev-workflow](../workflows/dev-workflow.md) (implement it behind independent review gates).
+This is an end-to-end run of two workflows on one small task, so you can see what to expect before you try them on your own code. It chains [task-refinement-workflow](../../workflows/task-refinement-workflow.md) (turn a rough request into an implementation-ready brief) into [dev-workflow](../../workflows/dev-workflow.md) (implement it behind independent review gates).
 
 The task is deliberately tiny: add a `debounce` utility, with tests, to a project that already has a `throttle` helper. Small enough to read in one sitting, real enough to show every gate firing.
 
@@ -286,4 +286,4 @@ Both gates passed in order, final verification was run after the last change, an
 - **Nothing is swept under the rug.** Minor findings go to a follow-ups file, not into a "looks good" summary. Verification output is captured verbatim and re-run after the last change.
 - **It costs more tokens than typing the code.** Several subagents ran to ship a two-file utility. The return is validation and a decision trail, not speed.
 
-To go deeper, read the contracts themselves: [task-refinement-workflow](../workflows/task-refinement-workflow.md) and [dev-workflow](../workflows/dev-workflow.md), plus the subagent prompt templates in [../workflows/subagents/](../workflows/subagents/).
+To go deeper, read the contracts themselves: [task-refinement-workflow](../../workflows/task-refinement-workflow.md) and [dev-workflow](../../workflows/dev-workflow.md), plus the subagent prompt templates in [../../workflows/subagents/](../../workflows/subagents/).
