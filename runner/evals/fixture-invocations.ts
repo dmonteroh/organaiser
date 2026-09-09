@@ -14,9 +14,10 @@
 //     invoked exactly like Single.
 //   - Whole-test-file: one id names an entire `runner/test/<id>.test.ts` file with no
 //     `evals/fixtures/` export at all; run only via a spawned `node --test <file>`.
-//   - Live: `live-single-task`/`live-board-drain`/`live-review-repair`/`live-blocked-lane`
-//     resolve to `liveSingleTask(vendor)`/`liveBoardDrain(vendor)`/
-//     `liveReviewRepair(vendor)`/`liveBlockedLane(vendor)`, a materially different
+//   - Live: `live-single-task`/`live-board-drain`/`live-review-repair`/`live-blocked-lane`/
+//     `live-runner-restart`/`live-layer-isolation` resolve to `liveSingleTask(vendor)`/
+//     `liveBoardDrain(vendor)`/`liveReviewRepair(vendor)`/`liveBlockedLane(vendor)`/
+//     `liveRunnerRestart(vendor)`/`liveLayerIsolation(vendor)`, a materially different
 //     `(vendor) => Promise<Result>` signature reached only through the `claude`/`codex`
 //     profiles.
 //
@@ -82,8 +83,18 @@ import { idleTimeout } from "./fixtures/25-idle-timeout.ts";
 import { productiveNoCommit } from "./fixtures/26-productive-no-commit.ts";
 import { liveReviewRepair, type LiveReviewRepairResult } from "./fixtures/27-live-review-repair.ts";
 import { liveBlockedLane, type LiveBlockedLaneResult } from "./fixtures/28-live-blocked-lane.ts";
+import { liveRunnerRestart, type LiveRunnerRestartResult } from "./fixtures/29-live-runner-restart.ts";
+import { liveLayerIsolation, type LiveLayerIsolationResult } from "./fixtures/30-live-layer-isolation.ts";
 
-export type { LiveVendor, LiveSingleTaskResult, LiveBoardDrainResult, LiveReviewRepairResult, LiveBlockedLaneResult };
+export type {
+  LiveVendor,
+  LiveSingleTaskResult,
+  LiveBoardDrainResult,
+  LiveReviewRepairResult,
+  LiveBlockedLaneResult,
+  LiveRunnerRestartResult,
+  LiveLayerIsolationResult,
+};
 
 const ADAPTER_STREAM_CASES_DIR = fileURLToPath(new URL("../test/fixtures/adapter-substrate/", import.meta.url));
 
@@ -132,7 +143,14 @@ export interface LiveInvocation {
   shape: "live";
   run: (
     vendor: LiveVendor,
-  ) => Promise<LiveSingleTaskResult | LiveBoardDrainResult | LiveReviewRepairResult | LiveBlockedLaneResult>;
+  ) => Promise<
+    | LiveSingleTaskResult
+    | LiveBoardDrainResult
+    | LiveReviewRepairResult
+    | LiveBlockedLaneResult
+    | LiveRunnerRestartResult
+    | LiveLayerIsolationResult
+  >;
 }
 
 export type ResolvedInvocation =
@@ -146,6 +164,8 @@ const LIVE_IDS: Readonly<Record<string, LiveInvocation["run"]>> = {
   "live-board-drain": liveBoardDrain,
   "live-review-repair": liveReviewRepair,
   "live-blocked-lane": liveBlockedLane,
+  "live-runner-restart": liveRunnerRestart,
+  "live-layer-isolation": liveLayerIsolation,
 };
 
 // Whole-test-file ids have no `evals/fixtures/` export at all (C3): they name an entire

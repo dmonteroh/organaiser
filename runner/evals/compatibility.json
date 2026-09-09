@@ -92,6 +92,34 @@
           "evidenceRef": "runner/evals/fixtures/23-live-board-drain.ts#L30-L33"
         }
       ]
+    },
+    "live-runner-restart": {
+      "lastSuccessByVendor": {
+        "codex": "2026-09-09",
+        "claude": "2026-09-09"
+      },
+      "observations": [
+        {
+          "vendor": "codex",
+          "date": "2026-09-09",
+          "cliVersion": "0.46.0",
+          "model": "gpt-oss:20b",
+          "outcome": "succeeded",
+          "restingRunState": "blocked",
+          "detail": "killed worker classified exited, killed attempt landed interrupted/indeterminate, too-early resume exited 4, resumed supervisor redispatched a fresh round-2 implement attempt; ~7.1s",
+          "evidenceRef": "runner/evals/fixtures/29-live-runner-restart.ts#L29-L35"
+        },
+        {
+          "vendor": "claude",
+          "date": "2026-09-09",
+          "cliVersion": "2.1.245",
+          "model": "sonnet",
+          "outcome": "succeeded",
+          "restingRunState": "blocked",
+          "detail": "killed worker classified exited, killed attempt landed interrupted/indeterminate, too-early resume exited 4, resumed supervisor redispatched a fresh round-2 implement attempt; ~7.5s",
+          "evidenceRef": "runner/evals/fixtures/29-live-runner-restart.ts#L29-L35"
+        }
+      ]
     }
   }
 }

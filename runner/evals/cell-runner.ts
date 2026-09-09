@@ -28,6 +28,8 @@ import {
   type LiveBoardDrainResult,
   type LiveReviewRepairResult,
   type LiveBlockedLaneResult,
+  type LiveRunnerRestartResult,
+  type LiveLayerIsolationResult,
   type SequenceConstituent,
 } from "./fixture-invocations.ts";
 import { resolveVendorProfile, serializeResolvedProfile } from "../src/cli/profiles.ts";
@@ -415,6 +417,8 @@ const LIVE_TASK_FIXTURE_NAMES: Readonly<Record<string, string>> = {
   "live-board-drain": "liveBoardDrain",
   "live-review-repair": "liveReviewRepair",
   "live-blocked-lane": "liveBlockedLane",
+  "live-runner-restart": "liveRunnerRestart",
+  "live-layer-isolation": "liveLayerIsolation",
 };
 
 interface LiveOutcome {
@@ -433,7 +437,13 @@ interface LiveOutcome {
  */
 export function mapLiveOutcome(
   fixtureId: string,
-  result: LiveSingleTaskResult | LiveBoardDrainResult | LiveReviewRepairResult | LiveBlockedLaneResult,
+  result:
+    | LiveSingleTaskResult
+    | LiveBoardDrainResult
+    | LiveReviewRepairResult
+    | LiveBlockedLaneResult
+    | LiveRunnerRestartResult
+    | LiveLayerIsolationResult,
 ): LiveOutcome {
   if (result.skipped) {
     return {
@@ -453,10 +463,10 @@ export function mapLiveOutcome(
     };
   }
 
-  // live-board-drain, live-review-repair, live-blocked-lane: each fixture's own code
-  // throws on any non-passing resting state, so this branch is always a pass in practice
-  // (see C9/AC3), and none of these three result types carries a
-  // cliVersion/workflowRevision/model field.
+  // live-board-drain, live-review-repair, live-blocked-lane, live-runner-restart,
+  // live-layer-isolation: each fixture's own code throws on any non-passing outcome, so
+  // this branch is always a pass in practice (see C9/AC3), and none of these result types
+  // carries a cliVersion/workflowRevision/model field.
   return {
     disposition: "pass",
     dispositionDetail: null,
@@ -469,7 +479,14 @@ export async function runLiveInvocation(
   vendor: LiveVendor,
   run: (
     vendor: LiveVendor,
-  ) => Promise<LiveSingleTaskResult | LiveBoardDrainResult | LiveReviewRepairResult | LiveBlockedLaneResult>,
+  ) => Promise<
+    | LiveSingleTaskResult
+    | LiveBoardDrainResult
+    | LiveReviewRepairResult
+    | LiveBlockedLaneResult
+    | LiveRunnerRestartResult
+    | LiveLayerIsolationResult
+  >,
 ): Promise<LiveOutcome> {
   try {
     const result = await run(vendor);
