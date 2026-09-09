@@ -120,6 +120,71 @@
           "evidenceRef": "runner/evals/fixtures/29-live-runner-restart.ts#L29-L35"
         }
       ]
+    },
+    "live-vendor-parity": {
+      "lastSuccessByVendor": {},
+      "observations": [
+        {
+          "vendor": "claude",
+          "date": "2026-09-09",
+          "cliVersion": "2.1.245",
+          "model": "sonnet",
+          "outcome": "blocked",
+          "restingRunState": "blocked",
+          "detail": "worker-crash/no-candidate-report, exit_code: 1, ~2.1s",
+          "evidenceRef": "runner/evals/fixtures/32-live-vendor-parity.ts#L22-L29"
+        },
+        {
+          "vendor": "claude",
+          "date": "2026-09-09",
+          "cliVersion": "2.1.245",
+          "model": "sonnet",
+          "outcome": "blocked",
+          "restingRunState": "blocked",
+          "detail": "worker-crash/no-candidate-report, exit_code: 1, ~2.1s",
+          "evidenceRef": "runner/evals/fixtures/32-live-vendor-parity.ts#L22-L29"
+        },
+        {
+          "vendor": "claude",
+          "date": "2026-09-09",
+          "cliVersion": "2.1.245",
+          "model": "sonnet",
+          "outcome": "blocked",
+          "restingRunState": "blocked",
+          "detail": "worker-crash/no-candidate-report, exit_code: 1, ~2.1s",
+          "evidenceRef": "runner/evals/fixtures/32-live-vendor-parity.ts#L22-L29"
+        },
+        {
+          "vendor": "codex",
+          "date": "2026-09-09",
+          "cliVersion": "0.46.0",
+          "model": "gpt-oss:20b",
+          "outcome": "blocked",
+          "restingRunState": "blocked",
+          "detail": "interrupted/worker-timeout (firedBudget: spawn-timeout), ~30.6s",
+          "evidenceRef": "runner/evals/fixtures/32-live-vendor-parity.ts#L22-L29"
+        },
+        {
+          "vendor": "codex",
+          "date": "2026-09-09",
+          "cliVersion": "0.46.0",
+          "model": "gpt-oss:20b",
+          "outcome": "blocked",
+          "restingRunState": "blocked",
+          "detail": "interrupted/worker-timeout (firedBudget: spawn-timeout), ~142.9s",
+          "evidenceRef": "runner/evals/fixtures/32-live-vendor-parity.ts#L22-L29"
+        },
+        {
+          "vendor": "codex",
+          "date": "2026-09-09",
+          "cliVersion": "0.46.0",
+          "model": "gpt-oss:20b",
+          "outcome": "blocked",
+          "restingRunState": "blocked",
+          "detail": "interrupted/worker-timeout (firedBudget: spawn-timeout), ~30.7s",
+          "evidenceRef": "runner/evals/fixtures/32-live-vendor-parity.ts#L22-L29"
+        }
+      ]
     }
   }
 }
