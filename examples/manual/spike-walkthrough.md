@@ -1,6 +1,6 @@
 # Worked example: spike workflow
 
-This is an end-to-end run of [spike-workflow](../workflows/spike-workflow.md) on one concrete question, so you can see what to expect before you run a spike of your own. A spike is time-boxed exploration that intentionally writes throwaway code to answer a specific question. The output is validated learning, not production code, and every spike ends with an explicit adopt, adapt, or abandon decision.
+This is an end-to-end run of [spike-workflow](../../workflows/spike-workflow.md) on one concrete question, so you can see what to expect before you run a spike of your own. A spike is time-boxed exploration that intentionally writes throwaway code to answer a specific question. The output is validated learning, not production code, and every spike ends with an explicit adopt, adapt, or abandon decision.
 
 The question for this run: can a regex parse and evaluate a small search-filter language, or do we need a real parser? This is the classic "is the cheap approach good enough?" spike, and the honest answer here turns out to be "no, but part of it is."
 
@@ -29,7 +29,7 @@ Every spike defines its contract up front. Vague spikes sprawl; a tight contract
 | Failure signal | The regex approach produces wrong results for, or cannot represent, grouped/nested queries (or mishandles `AND`/`OR` precedence). |
 | Forbidden | No npm dependencies or parser library; no full production parser; no changes outside the sandbox. |
 
-The throwaway scripts the explorer wrote during this run are kept next to this walkthrough at [spike-run/scratch/](spike-run/scratch/) so you can reproduce the result. From the `examples` directory, run `node spike-run/scratch/eval.js` (the two regex approaches) and `node spike-run/scratch/adversarial.js` (the disproving probe).
+The throwaway scripts the explorer wrote during this run are kept next to this walkthrough at [spike-run/scratch/](spike-run/scratch/) so you can reproduce the result. From the `examples/manual` directory, run `node spike-run/scratch/eval.js` (the two regex approaches) and `node spike-run/scratch/adversarial.js` (the disproving probe).
 
 ---
 
@@ -131,7 +131,7 @@ The reviewer did not take the explorer's word for it. It re-ran all three scratc
 A spike must end in a decision. "Let's keep exploring" is not an outcome; you either extend the time box explicitly or decide. With a `question-answered` verdict and a disproved hypothesis, the orchestrator (with the operator) weighs the three options:
 
 - **Adopt**: no. The pure-regex evaluator is disproved. Adopting it would ship a silently wrong precedence bug.
-- **Adapt**: yes. The spike showed exactly which part of the idea survives. Regex is a fine lexer for the mini-language; evaluation needs a tiny recursive-descent parser (parseOr to parseAnd to parseAtom), which is about 20 lines, needs no dependency, and was already proven correct as the reference in the spike. Create a follow-up task to build that properly: refine it through [task-refinement-workflow](../workflows/task-refinement-workflow.md), then implement under [dev-workflow](../workflows/dev-workflow.md). The spike code is reference only, never promoted directly.
+- **Adapt**: yes. The spike showed exactly which part of the idea survives. Regex is a fine lexer for the mini-language; evaluation needs a tiny recursive-descent parser (parseOr to parseAnd to parseAtom), which is about 20 lines, needs no dependency, and was already proven correct as the reference in the spike. Create a follow-up task to build that properly: refine it through [task-refinement-workflow](../../workflows/task-refinement-workflow.md), then implement under [dev-workflow](../../workflows/dev-workflow.md). The spike code is reference only, never promoted directly.
 - **Abandon**: no, but note that abandoning the regex-evaluation path specifically (a partial abandon) is part of the adapt decision.
 
 Decision recorded: **adapt**, with the implementation notes carried into the follow-up task so the next agent does not rediscover the precedence trap.
@@ -157,4 +157,4 @@ The operator approves keeping the recursive-descent reference and deleting the t
 - **Throwaway code is still deleted on your terms.** Cleanup proposes what to keep and what to remove, and waits for operator approval before deleting anything.
 - **It costs tokens and some disposable code.** What you get back is certainty about an approach before you commit to it.
 
-To go deeper, read the contract itself: [spike-workflow](../workflows/spike-workflow.md), plus the [explorer](../workflows/subagents/explorer-prompt.md) and [spike-reviewer](../workflows/subagents/spike-reviewer-prompt.md) prompt templates.
+To go deeper, read the contract itself: [spike-workflow](../../workflows/spike-workflow.md), plus the [explorer](../../workflows/subagents/explorer-prompt.md) and [spike-reviewer](../../workflows/subagents/spike-reviewer-prompt.md) prompt templates.

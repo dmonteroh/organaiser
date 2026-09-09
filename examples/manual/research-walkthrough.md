@@ -1,6 +1,6 @@
 # Worked example: research workflow
 
-This is an end-to-end run of [research-workflow](../workflows/research-workflow.md) on one real question, so you can see what to expect before pointing it at your own. The workflow's job is to produce evidence-backed findings: a `researcher` gathers and cites, an independent `cross-checker` verifies the citations and coverage from a fresh context, and only then does the orchestrator synthesize a final answer.
+This is an end-to-end run of [research-workflow](../../workflows/research-workflow.md) on one real question, so you can see what to expect before pointing it at your own. The workflow's job is to produce evidence-backed findings: a `researcher` gathers and cites, an independent `cross-checker` verifies the citations and coverage from a fresh context, and only then does the orchestrator synthesize a final answer.
 
 The question for this run is a classic, portable one: when should an API use cursor-based versus offset-based pagination, and what are the tradeoffs?
 
@@ -184,4 +184,4 @@ One item is carried forward labeled, not buried: the claim that GitHub's docs fr
 - **Contradictions are surfaced, not resolved silently.** The report separated genuine conflicts (none here) from design-choice differences.
 - **It costs more tokens than a single prompt.** Two web-research subagents ran, opening and re-opening real pages. The return is a citation trail you can audit, not a fast guess.
 
-To go deeper, read the contract itself: [research-workflow](../workflows/research-workflow.md), plus the [researcher](../workflows/subagents/researcher-prompt.md) and [cross-checker](../workflows/subagents/cross-checker-prompt.md) prompt templates.
+To go deeper, read the contract itself: [research-workflow](../../workflows/research-workflow.md), plus the [researcher](../../workflows/subagents/researcher-prompt.md) and [cross-checker](../../workflows/subagents/cross-checker-prompt.md) prompt templates.
