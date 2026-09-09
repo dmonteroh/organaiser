@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "conditions": [
+    {
+      "line": 1,
+      "text": "A six-task fixture completes after the submitting client exits.",
+      "citations": [
+        { "kind": "deterministic", "id": "caller-exit-survival" },
+        { "kind": "live", "id": "live-board-drain" }
+      ]
+    },
+    {
+      "line": 2,
+      "text": "A daemon restart causes no duplicate dispatch or lost result.",
+      "citations": [
+        { "kind": "deterministic", "id": "supervisor-restart" },
+        { "kind": "deterministic", "id": "duplicate-dispatch" },
+        { "kind": "deterministic", "id": "stale-running-recovery" }
+      ]
+    },
+    {
+      "line": 3,
+      "text": "Codex and Claude each complete the same single-task fixture.",
+      "citations": [
+        { "kind": "live", "id": "live-single-task" }
+      ]
+    },
+    {
+      "line": 4,
+      "text": "A worker final response cannot terminate a board run.",
+      "citations": [
+        { "kind": "deterministic", "id": "worker-final-is-data" },
+        { "kind": "deterministic", "id": "board-not-drained" }
+      ]
+    },
+    {
+      "line": 5,
+      "text": "Overlapping claims never execute concurrently.",
+      "citations": [
+        { "kind": "deterministic", "id": "claim-overlap-serializes" },
+        { "kind": "deterministic", "id": "in-place-serializes" }
+      ]
+    },
+    {
+      "line": 6,
+      "text": "Every code change passes specification and quality review in order.",
+      "citations": [
+        { "kind": "deterministic", "id": "gate-order" }
+      ]
+    },
+    {
+      "line": 7,
+      "text": "Review retries use fresh sessions.",
+      "citations": [
+        { "kind": "deterministic", "id": "fresh-reviewer" }
+      ]
+    },
+    {
+      "line": 8,
+      "text": "A capped task parks while unrelated tasks continue.",
+      "citations": [
+        { "kind": "deterministic", "id": "gate-cap-parks-task" },
+        { "kind": "deterministic", "id": "operator-block-does-not-global-stop" }
+      ]
+    },
+    {
+      "line": 9,
+      "text": "Destination movement cannot be overwritten.",
+      "citations": [
+        { "kind": "deterministic", "id": "destination-cas" },
+        { "kind": "deterministic", "id": "integration-conflict" }
+      ]
+    },
+    {
+      "line": 10,
+      "text": "The operator's active checkout remains untouched.",
+      "citations": [
+        { "kind": "deterministic", "id": "unrelated-dirty-checkout-does-not-affect-task" },
+        { "kind": "deterministic", "id": "worktree-cleanup" },
+        { "kind": "deterministic", "id": "in-place-refuses-dirty" },
+        { "kind": "deterministic", "id": "in-place-claims-exclude-recorded-dirt" }
+      ]
+    },
+    {
+      "line": 11,
+      "text": "Every process, gate, integration, and cleanup has durable evidence.",
+      "citations": [
+        { "kind": "deterministic", "id": "partial-stream-survives-kill" },
+        { "kind": "deterministic", "id": "blocking-finding-requires-proof" },
+        { "kind": "deterministic", "id": "landed-work-recovery-without-false-success" },
+        { "kind": "deterministic", "id": "worktree-cleanup" }
+      ]
+    },
+    {
+      "line": 12,
+      "text": "CI requires no vendor credentials.",
+      "citations": [
+        { "kind": "deterministic", "id": "ci-credential-free" }
+      ]
+    },
+    {
+      "line": 13,
+      "text": "Live results record vendor, model, effort, CLI version, and workflow revision.",
+      "citations": [
+        { "kind": "live", "id": "live-single-task" },
+        { "kind": "live", "id": "live-board-drain" },
+        { "kind": "deterministic", "id": "cell-runner" }
+      ]
+    }
+  ]
+}
