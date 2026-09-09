@@ -1,0 +1,45 @@
+{
+  "taskId": "task-blocker",
+  "specPath": null,
+  "specSha256": null,
+  "workflowVersion": null,
+  "reviewedCommit": null,
+  "contextSnapshot": null,
+  "verificationMode": "legacy",
+  "attempts": [
+    {
+      "attemptId": "858696d5-e5f7-40dd-857a-7f83ea208320",
+      "verdict": "pass",
+      "failedCondition": null,
+      "checkResults": {
+        "checks": {},
+        "overall": "pass"
+      },
+      "workerClaims": null,
+      "claimsParity": null,
+      "failureDetail": null,
+      "recordedAt": "2026-09-09T07:56:34.652Z"
+    },
+    {
+      "attemptId": "1421a011-e3c5-429b-a085-90b4bf881edc",
+      "verdict": "pass",
+      "failedCondition": null,
+      "checkResults": {
+        "checks": {},
+        "overall": "pass"
+      },
+      "workerClaims": null,
+      "claimsParity": null,
+      "failureDetail": null,
+      "recordedAt": "2026-09-09T07:56:34.950Z"
+    }
+  ],
+  "evidence": {
+    "implementerCommits": [],
+    "specReviewer": null,
+    "qualityReviewer": null,
+    "verification": null,
+    "integrationCommit": null
+  },
+  "state": "pending"
+}

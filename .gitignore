@@ -3,5 +3,6 @@ tmp/
 AGENTS.md
 CLAUDE.md
 .orga/
+!examples/runner/**/.orga/
 runner/node_modules/
 .worktrees/

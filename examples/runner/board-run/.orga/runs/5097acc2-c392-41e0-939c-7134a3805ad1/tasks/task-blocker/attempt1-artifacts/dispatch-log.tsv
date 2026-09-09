@@ -1,0 +1,4 @@
+seq	role	reason	commit_before	commit_after	packet_file	report_file
+1	implementer		754d19509ff05b6f061194e7fc7433dffcc04b48	754d19509ff05b6f061194e7fc7433dffcc04b48		
+2	spec-reviewer					spec-reviewer.report.txt
+3	quality-reviewer					quality-reviewer.report.txt
