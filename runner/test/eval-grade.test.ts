@@ -47,6 +47,8 @@ interface MetricsArtifactJson {
   recordedPgidCount: number | null;
   eventCount: number | null;
   vendorStdoutBytes: number | null;
+  startupContextBytes: number | null;
+  firstActionLatencyMs: number | null;
 }
 
 function runDir(dir: string, evalRunId: string): string {
@@ -62,8 +64,21 @@ function evalSnapshotJson(disposition: "pass" | "fail" | "skipped" = "skipped"):
   return `${JSON.stringify({ disposition }, null, 2)}\n`;
 }
 
-function processJson(overrides: Partial<{ recordedPgids: unknown; pid: number | null; exitCode: number | null; wallTimeMs: number }> = {}): string {
-  return `${JSON.stringify({ recordedPgids: [], pid: null, exitCode: 0, wallTimeMs: 5, ...overrides }, null, 2)}\n`;
+function processJson(
+  overrides: Partial<{
+    recordedPgids: unknown;
+    pid: number | null;
+    exitCode: number | null;
+    wallTimeMs: number;
+    startupContextBytes: number | null;
+    firstActionLatencyMs: number | null;
+  }> = {},
+): string {
+  return `${JSON.stringify(
+    { recordedPgids: [], pid: null, exitCode: 0, wallTimeMs: 5, startupContextBytes: null, firstActionLatencyMs: null, ...overrides },
+    null,
+    2,
+  )}\n`;
 }
 
 const EMPTY_BOARD_YAML = "run: null\ntasks: []\n";
@@ -276,6 +291,51 @@ test("(h) metrics.json's five value fields are all null for a cell with no proce
     assert.equal(metrics.recordedPgidCount, null);
     assert.equal(metrics.eventCount, null);
     assert.equal(metrics.vendorStdoutBytes, null);
+  });
+});
+
+test("(j) a process.json carrying startupContextBytes/firstActionLatencyMs yields the same two values in metrics.json", async () => {
+  await withTempWorkspace(async (dir) => {
+    const evalRunId = "run-context-cost-present";
+    const cellDir = path.join(runDir(dir, evalRunId), "cell-context-cost");
+    writeArtifact(cellDir, "eval-snapshot.json", evalSnapshotJson());
+    writeArtifact(cellDir, "process.json", processJson({ startupContextBytes: 2048, firstActionLatencyMs: 1200 }));
+    writeArtifact(cellDir, "state-transitions.jsonl", "");
+    writeArtifact(cellDir, "board-before.yaml", EMPTY_BOARD_YAML);
+    writeArtifact(cellDir, "board-after.yaml", EMPTY_BOARD_YAML);
+    writeArtifact(cellDir, "diff.patch", "");
+    writeArtifact(cellDir, "events.jsonl", "");
+    writeArtifact(cellDir, "vendor-stdout.jsonl", "");
+    writeArtifact(cellDir, "git-before.txt", "");
+    writeArtifact(cellDir, "git-after.txt", "");
+    writeArtifact(cellDir, "git-commit-graph.txt", "");
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "grade", evalRunId, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+
+    const parsed = JSON.parse(io.outLines[0] as string) as EvalGradeJson;
+    const cell = parsed.cells.find((c) => c.cellId === "cell-context-cost");
+    const metrics = JSON.parse(fs.readFileSync(cell?.metricsPath as string, "utf8")) as MetricsArtifactJson;
+    assert.equal(metrics.startupContextBytes, 2048);
+    assert.equal(metrics.firstActionLatencyMs, 1200);
+  });
+});
+
+test("(k) a process.json carrying neither startupContextBytes nor firstActionLatencyMs yields null for both in metrics.json, with no live process spawned", async () => {
+  await withTempWorkspace(async (dir) => {
+    const evalRunId = "run-context-cost-absent";
+    writePassingCell(path.join(runDir(dir, evalRunId), "cell-no-context-cost"));
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "grade", evalRunId, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+
+    const parsed = JSON.parse(io.outLines[0] as string) as EvalGradeJson;
+    const cell = parsed.cells.find((c) => c.cellId === "cell-no-context-cost");
+    const metrics = JSON.parse(fs.readFileSync(cell?.metricsPath as string, "utf8")) as MetricsArtifactJson;
+    assert.equal(metrics.startupContextBytes, null);
+    assert.equal(metrics.firstActionLatencyMs, null);
   });
 });
 

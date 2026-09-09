@@ -31,6 +31,7 @@ import {
   type LiveRunnerRestartResult,
   type LiveLayerIsolationResult,
   type LiveVendorParityResult,
+  type LiveContextCostResult,
   type SequenceConstituent,
 } from "./fixture-invocations.ts";
 import { resolveVendorProfile, serializeResolvedProfile } from "../src/cli/profiles.ts";
@@ -91,6 +92,8 @@ export interface EvalCellProcessCapture {
   pid: number | null;
   exitCode: number | null;
   wallTimeMs: number;
+  startupContextBytes: number | null;
+  firstActionLatencyMs: number | null;
 }
 
 /**
@@ -421,12 +424,14 @@ const LIVE_TASK_FIXTURE_NAMES: Readonly<Record<string, string>> = {
   "live-runner-restart": "liveRunnerRestart",
   "live-layer-isolation": "liveLayerIsolation",
   "live-vendor-parity": "liveVendorParity",
+  "live-context-cost": "liveContextCost",
 };
 
 interface LiveOutcome {
   disposition: EvalCellDisposition;
   dispositionDetail: string | null;
   snapshotFields: { cliVersion: string | null; workflowRevision: string | null; model: string | null };
+  processFields: { startupContextBytes: number | null; firstActionLatencyMs: number | null };
 }
 
 /**
@@ -447,13 +452,15 @@ export function mapLiveOutcome(
     | LiveBlockedLaneResult
     | LiveRunnerRestartResult
     | LiveLayerIsolationResult
-    | LiveVendorParityResult,
+    | LiveVendorParityResult
+    | LiveContextCostResult,
 ): LiveOutcome {
   if (result.skipped) {
     return {
       disposition: "skipped",
       dispositionDetail: result.reason,
       snapshotFields: { cliVersion: null, workflowRevision: null, model: null },
+      processFields: { startupContextBytes: null, firstActionLatencyMs: null },
     };
   }
 
@@ -464,6 +471,7 @@ export function mapLiveOutcome(
       disposition: pass ? "pass" : "fail",
       dispositionDetail: pass ? null : `run rested at state "${r.state}"`,
       snapshotFields: { cliVersion: r.cliVersion, workflowRevision: r.workflowRevision, model: r.model },
+      processFields: { startupContextBytes: null, firstActionLatencyMs: null },
     };
   }
 
@@ -474,6 +482,17 @@ export function mapLiveOutcome(
       disposition: pass ? "pass" : "fail",
       dispositionDetail: pass ? null : `run rested at state "${r.state}"`,
       snapshotFields: { cliVersion: r.cliVersion, workflowRevision: r.workflowRevision, model: r.model },
+      processFields: { startupContextBytes: null, firstActionLatencyMs: null },
+    };
+  }
+
+  if (fixtureId === "live-context-cost") {
+    const r = result as Extract<LiveContextCostResult, { skipped: false }>;
+    return {
+      disposition: "pass",
+      dispositionDetail: null,
+      snapshotFields: { cliVersion: r.cliVersion, workflowRevision: null, model: r.model },
+      processFields: { startupContextBytes: r.startupContextBytes, firstActionLatencyMs: r.firstActionLatencyMs },
     };
   }
 
@@ -485,6 +504,7 @@ export function mapLiveOutcome(
     disposition: "pass",
     dispositionDetail: null,
     snapshotFields: { cliVersion: null, workflowRevision: null, model: null },
+    processFields: { startupContextBytes: null, firstActionLatencyMs: null },
   };
 }
 
@@ -501,6 +521,7 @@ export async function runLiveInvocation(
     | LiveRunnerRestartResult
     | LiveLayerIsolationResult
     | LiveVendorParityResult
+    | LiveContextCostResult
   >,
 ): Promise<LiveOutcome> {
   try {
@@ -511,6 +532,7 @@ export async function runLiveInvocation(
       disposition: "fail",
       dispositionDetail: errorMessage(err),
       snapshotFields: { cliVersion: null, workflowRevision: null, model: null },
+      processFields: { startupContextBytes: null, firstActionLatencyMs: null },
     };
   }
 }
@@ -569,6 +591,8 @@ export function createCellRunner(evalRunId: string): CellRunner {
             pid: null,
             exitCode: null,
             wallTimeMs: Date.now() - startedAt,
+            startupContextBytes: live.processFields.startupContextBytes,
+            firstActionLatencyMs: live.processFields.firstActionLatencyMs,
           },
           vendorStdout: null,
           vendorStderr: null,
@@ -605,6 +629,8 @@ export function createCellRunner(evalRunId: string): CellRunner {
             pid: outcome.pid,
             exitCode: outcome.exitCode,
             wallTimeMs: Date.now() - startedAt,
+            startupContextBytes: null,
+            firstActionLatencyMs: null,
           },
           vendorStdout: { [wholeTestFileBasename(invocation.testFilePath)]: outcome.stdout },
           vendorStderr: outcome.stderr,
@@ -642,6 +668,8 @@ export function createCellRunner(evalRunId: string): CellRunner {
             pid: null,
             exitCode: null,
             wallTimeMs: Date.now() - startedAt,
+            startupContextBytes: null,
+            firstActionLatencyMs: null,
           },
           vendorStdout: evidence.vendorStdout,
           vendorStderr: null,
@@ -683,6 +711,8 @@ export function createCellRunner(evalRunId: string): CellRunner {
           pid: null,
           exitCode: null,
           wallTimeMs: Date.now() - startedAt,
+          startupContextBytes: null,
+          firstActionLatencyMs: null,
         },
         vendorStdout: evidence.vendorStdout,
         vendorStderr: null,

@@ -110,7 +110,7 @@
     },
     "evaluator": {
       "deterministic": ["eval-grade", "eval-compare"],
-      "live": ["live-vendor-parity"]
+      "live": ["live-vendor-parity", "live-context-cost"]
     }
   }
 }

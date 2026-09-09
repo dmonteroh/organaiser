@@ -17,6 +17,8 @@ export interface MetricsArtifact {
   recordedPgidCount: number | null;
   eventCount: number | null;
   vendorStdoutBytes: number | null;
+  startupContextBytes: number | null;
+  firstActionLatencyMs: number | null;
 }
 
 export const OUTCOME_SEVERITY: Readonly<Record<GradingOutcome, number>> = {

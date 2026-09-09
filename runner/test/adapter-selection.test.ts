@@ -23,6 +23,7 @@ import { liveBlockedLane } from "../evals/fixtures/28-live-blocked-lane.ts";
 import { liveRunnerRestart } from "../evals/fixtures/29-live-runner-restart.ts";
 import { liveLayerIsolation } from "../evals/fixtures/30-live-layer-isolation.ts";
 import { liveVendorParity } from "../evals/fixtures/32-live-vendor-parity.ts";
+import { liveContextCost } from "../evals/fixtures/31-live-context-cost.ts";
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import type { TickContext } from "../src/engine/tick.ts";
@@ -480,6 +481,26 @@ test("liveVendorParity reports skipped and spawns no vendor process when ORGA_LI
   const startedAt = Date.now();
   try {
     const result = await liveVendorParity("claude");
+    assert.equal(result.skipped, true);
+    if (result.skipped) {
+      assert.match(result.reason, /ORGA_LIVE/);
+    }
+    // The ORGA_LIVE gate is checked before even the version/auth probe runs, so a
+    // real spawn (which always takes tens of milliseconds at minimum) would blow this
+    // generous budget; this is a coarse proxy for "no process was spawned".
+    assert.ok(Date.now() - startedAt < 2000, "the skip path must return without spawning any process");
+  } finally {
+    if (previousLive === undefined) delete process.env.ORGA_LIVE;
+    else process.env.ORGA_LIVE = previousLive;
+  }
+});
+
+test("liveContextCost reports skipped and spawns no vendor process when ORGA_LIVE is unset", async () => {
+  const previousLive = process.env.ORGA_LIVE;
+  delete process.env.ORGA_LIVE;
+  const startedAt = Date.now();
+  try {
+    const result = await liveContextCost("claude");
     assert.equal(result.skipped, true);
     if (result.skipped) {
       assert.match(result.reason, /ORGA_LIVE/);

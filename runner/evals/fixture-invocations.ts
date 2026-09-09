@@ -15,11 +15,12 @@
 //   - Whole-test-file: one id names an entire `runner/test/<id>.test.ts` file with no
 //     `evals/fixtures/` export at all; run only via a spawned `node --test <file>`.
 //   - Live: `live-single-task`/`live-board-drain`/`live-review-repair`/`live-blocked-lane`/
-//     `live-runner-restart`/`live-layer-isolation`/`live-vendor-parity` resolve to
-//     `liveSingleTask(vendor)`/`liveBoardDrain(vendor)`/`liveReviewRepair(vendor)`/
+//     `live-runner-restart`/`live-layer-isolation`/`live-vendor-parity`/`live-context-cost`
+//     resolve to `liveSingleTask(vendor)`/`liveBoardDrain(vendor)`/`liveReviewRepair(vendor)`/
 //     `liveBlockedLane(vendor)`/`liveRunnerRestart(vendor)`/`liveLayerIsolation(vendor)`/
-//     `liveVendorParity(vendor)`, a materially different `(vendor) => Promise<Result>`
-//     signature reached only through the `claude`/`codex` profiles.
+//     `liveVendorParity(vendor)`/`liveContextCost(vendor)`, a materially different
+//     `(vendor) => Promise<Result>` signature reached only through the `claude`/`codex`
+//     profiles.
 //
 // No fixture file under `evals/fixtures/` is imported for its side effects only, or
 // modified: every import below is exactly what `fixtures.test.ts` already imports for
@@ -86,6 +87,7 @@ import { liveBlockedLane, type LiveBlockedLaneResult } from "./fixtures/28-live-
 import { liveRunnerRestart, type LiveRunnerRestartResult } from "./fixtures/29-live-runner-restart.ts";
 import { liveLayerIsolation, type LiveLayerIsolationResult } from "./fixtures/30-live-layer-isolation.ts";
 import { liveVendorParity, type LiveVendorParityResult } from "./fixtures/32-live-vendor-parity.ts";
+import { liveContextCost, type LiveContextCostResult } from "./fixtures/31-live-context-cost.ts";
 
 export type {
   LiveVendor,
@@ -96,6 +98,7 @@ export type {
   LiveRunnerRestartResult,
   LiveLayerIsolationResult,
   LiveVendorParityResult,
+  LiveContextCostResult,
 };
 
 const ADAPTER_STREAM_CASES_DIR = fileURLToPath(new URL("../test/fixtures/adapter-substrate/", import.meta.url));
@@ -153,6 +156,7 @@ export interface LiveInvocation {
     | LiveRunnerRestartResult
     | LiveLayerIsolationResult
     | LiveVendorParityResult
+    | LiveContextCostResult
   >;
 }
 
@@ -170,6 +174,7 @@ const LIVE_IDS: Readonly<Record<string, LiveInvocation["run"]>> = {
   "live-runner-restart": liveRunnerRestart,
   "live-layer-isolation": liveLayerIsolation,
   "live-vendor-parity": liveVendorParity,
+  "live-context-cost": liveContextCost,
 };
 
 // Whole-test-file ids have no `evals/fixtures/` export at all (C3): they name an entire

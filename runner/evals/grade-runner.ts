@@ -27,7 +27,10 @@ function readTextOrNull(filePath: string): string | null {
   }
 }
 
-function readProcessNumber(processRead: ArtifactRead<ProcessArtifact>, key: "wallTimeMs" | "exitCode"): number | null {
+function readProcessNumber(
+  processRead: ArtifactRead<ProcessArtifact>,
+  key: "wallTimeMs" | "exitCode" | "startupContextBytes" | "firstActionLatencyMs",
+): number | null {
   if (processRead.status !== "ok") return null;
   const raw = processRead.value as unknown as Record<string, unknown>;
   const value = raw[key];
@@ -89,6 +92,8 @@ export function gradeEvalRun(args: { root: string; evalRunId: string }): GradeEv
       recordedPgidCount: readRecordedPgidCount(bundle.process),
       eventCount: readEventCount(cellDir),
       vendorStdoutBytes: readVendorStdoutBytes(cellDir),
+      startupContextBytes: readProcessNumber(bundle.process, "startupContextBytes"),
+      firstActionLatencyMs: readProcessNumber(bundle.process, "firstActionLatencyMs"),
     };
 
     const gradingPath = path.join(cellDir, "grading.json");
