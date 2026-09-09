@@ -412,138 +412,140 @@ export async function liveRunnerRestart(vendor: LiveVendor): Promise<LiveRunnerR
 
         await sleep(LEASE_STALENESS_WAIT_MS);
 
-        const resumed = spawnResumeSupervisor(root, runId);
-        if (typeof resumed.pid === "number") registry.track(resumed.pid);
+        try {
+          const resumed = spawnResumeSupervisor(root, runId);
+          if (typeof resumed.pid === "number") registry.track(resumed.pid);
 
-        const classified = await waitFor(() => {
-          const rows = allRows<{ payload: string }>(
+          const classified = await waitFor(() => {
+            const rows = allRows<{ payload: string }>(
+              root,
+              `SELECT payload FROM events WHERE run_id = ? AND attempt_id = ? AND type = 'reconcile.classified'`,
+              runId,
+              killedAttemptId,
+            );
+            return rows.length > 0;
+          }, 10000, 200);
+          assert.ok(
+            classified,
+            `live-runner-restart (${vendor}): the resumed supervisor's startup reconciliation must classify the killed worker; runId ${runId}; ${diagnostics(root, runId)}`,
+          );
+
+          const classifiedRow = allRows<{ payload: string }>(
             root,
             `SELECT payload FROM events WHERE run_id = ? AND attempt_id = ? AND type = 'reconcile.classified'`,
             runId,
             killedAttemptId,
-          );
-          return rows.length > 0;
-        }, 10000, 200);
-        assert.ok(
-          classified,
-          `live-runner-restart (${vendor}): the resumed supervisor's startup reconciliation must classify the killed worker; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-
-        const classifiedRow = allRows<{ payload: string }>(
-          root,
-          `SELECT payload FROM events WHERE run_id = ? AND attempt_id = ? AND type = 'reconcile.classified'`,
-          runId,
-          killedAttemptId,
-        )[0] as { payload: string };
-        const classifiedPayload = JSON.parse(classifiedRow.payload) as {
-          classification: string;
-          interruptReason: string | null;
-        };
-        assert.notEqual(
-          classifiedPayload.classification,
-          "live",
-          `live-runner-restart (${vendor}): a killed worker must never classify "live"; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-        assert.equal(
-          classifiedPayload.interruptReason,
-          "indeterminate",
-          `live-runner-restart (${vendor}): a killed mutating attempt must classify interruptReason "indeterminate"; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-
-        const killedAttemptRow = allRows<{ status: string; interrupt_reason: string | null }>(
-          root,
-          `SELECT status, interrupt_reason FROM attempts WHERE id = ?`,
-          killedAttemptId,
-        )[0] as { status: string; interrupt_reason: string | null };
-        assert.equal(
-          killedAttemptRow.status,
-          "interrupted",
-          `live-runner-restart (${vendor}): the killed attempt's row must land status "interrupted"; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-        assert.equal(
-          killedAttemptRow.interrupt_reason,
-          "indeterminate",
-          `live-runner-restart (${vendor}): the killed attempt's row must land interrupt_reason "indeterminate"; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-
-        const reachedTerminal = await waitFor(() => {
-          const run = readRunRow(root, runId);
-          return ["succeeded", "failed", "blocked", "cancelled"].includes(run.state as string);
-        }, RUN_TERMINAL_TIMEOUT_MS, 500);
-        const finalRun = readRunRow(root, runId);
-
-        for (const pgid of recordedPgidsForRun(root, runId)) registry.track(pgid);
-
-        assert.ok(
-          reachedTerminal,
-          `live-runner-restart (${vendor}): the run must reach a terminal state under the resumed supervisor; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-
-        const allAttempts = allRows<{
-          id: string;
-          task_id: string;
-          stage_id: string;
-          round: number;
-          input_version: string;
-          status: string;
-        }>(
-          root,
-          `SELECT id, task_id, stage_id, round, input_version, status FROM attempts WHERE run_id = ?`,
-          runId,
-        );
-        const tupleKeys = allAttempts.map((a) => `${a.task_id}::${a.stage_id}::${a.round}::${a.input_version}`);
-        assert.equal(
-          new Set(tupleKeys).size,
-          tupleKeys.length,
-          `live-runner-restart (${vendor}): every (task_id, stage_id, round, input_version) tuple must be distinct; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-
-        const implementAttempts = allAttempts.filter((a) => a.stage_id === "implement");
-        const notInterrupted = implementAttempts.filter((a) => a.status !== "interrupted");
-        assert.ok(
-          notInterrupted.length <= 1,
-          `live-runner-restart (${vendor}): at most one attempt at the killed stage may be non-interrupted; runId ${runId}; ${diagnostics(root, runId)}`,
-        );
-
-        const normalizedEvents = allRows<{ attempt_id: string; payload: string }>(
-          root,
-          `SELECT attempt_id, payload FROM events WHERE run_id = ? AND type = 'attempt.normalized'`,
-          runId,
-        );
-        const claimViolationAttemptIds = new Set(
-          allRows<{ attempt_id: string }>(
-            root,
-            `SELECT attempt_id FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`,
-            runId,
-          ).map((row) => row.attempt_id),
-        );
-        const everCompletedAttemptIds = normalizedEvents
-          .filter((row) => {
-            const payload = JSON.parse(row.payload) as { ok: boolean };
-            return payload.ok && !claimViolationAttemptIds.has(row.attempt_id);
-          })
-          .map((row) => row.attempt_id);
-        const statusById = new Map(allAttempts.map((a) => [a.id, a.status]));
-        for (const attemptId of everCompletedAttemptIds) {
+          )[0] as { payload: string };
+          const classifiedPayload = JSON.parse(classifiedRow.payload) as {
+            classification: string;
+            interruptReason: string | null;
+          };
           assert.notEqual(
-            statusById.get(attemptId),
-            "interrupted",
-            `live-runner-restart (${vendor}): attempt ${attemptId} reached completed and must never later be interrupted; runId ${runId}; ${diagnostics(root, runId)}`,
+            classifiedPayload.classification,
+            "live",
+            `live-runner-restart (${vendor}): a killed worker must never classify "live"; runId ${runId}; ${diagnostics(root, runId)}`,
           );
-        }
+          assert.equal(
+            classifiedPayload.interruptReason,
+            "indeterminate",
+            `live-runner-restart (${vendor}): a killed mutating attempt must classify interruptReason "indeterminate"; runId ${runId}; ${diagnostics(root, runId)}`,
+          );
 
-        return {
-          skipped: false,
-          runId,
-          vendor,
-          killedAttemptId,
-          classification: classifiedPayload.classification,
-          interruptReason: classifiedPayload.interruptReason,
-          tooEarlyResumeExitCode: tooEarlyExitCode as number,
-          finalState: finalRun.state as string,
-          implementAttemptCount: implementAttempts.length,
-          wallTimeMs: Date.now() - startedAt,
-        };
+          const killedAttemptRow = allRows<{ status: string; interrupt_reason: string | null }>(
+            root,
+            `SELECT status, interrupt_reason FROM attempts WHERE id = ?`,
+            killedAttemptId,
+          )[0] as { status: string; interrupt_reason: string | null };
+          assert.equal(
+            killedAttemptRow.status,
+            "interrupted",
+            `live-runner-restart (${vendor}): the killed attempt's row must land status "interrupted"; runId ${runId}; ${diagnostics(root, runId)}`,
+          );
+          assert.equal(
+            killedAttemptRow.interrupt_reason,
+            "indeterminate",
+            `live-runner-restart (${vendor}): the killed attempt's row must land interrupt_reason "indeterminate"; runId ${runId}; ${diagnostics(root, runId)}`,
+          );
+
+          const reachedTerminal = await waitFor(() => {
+            const run = readRunRow(root, runId);
+            return ["succeeded", "failed", "blocked", "cancelled"].includes(run.state as string);
+          }, RUN_TERMINAL_TIMEOUT_MS, 500);
+          const finalRun = readRunRow(root, runId);
+
+          assert.ok(
+            reachedTerminal,
+            `live-runner-restart (${vendor}): the run must reach a terminal state under the resumed supervisor; runId ${runId}; ${diagnostics(root, runId)}`,
+          );
+
+          const allAttempts = allRows<{
+            id: string;
+            task_id: string;
+            stage_id: string;
+            round: number;
+            input_version: string;
+            status: string;
+          }>(
+            root,
+            `SELECT id, task_id, stage_id, round, input_version, status FROM attempts WHERE run_id = ?`,
+            runId,
+          );
+          const tupleKeys = allAttempts.map((a) => `${a.task_id}::${a.stage_id}::${a.round}::${a.input_version}`);
+          assert.equal(
+            new Set(tupleKeys).size,
+            tupleKeys.length,
+            `live-runner-restart (${vendor}): every (task_id, stage_id, round, input_version) tuple must be distinct; runId ${runId}; ${diagnostics(root, runId)}`,
+          );
+
+          const implementAttempts = allAttempts.filter((a) => a.stage_id === "implement");
+          const notInterrupted = implementAttempts.filter((a) => a.status !== "interrupted");
+          assert.ok(
+            notInterrupted.length <= 1,
+            `live-runner-restart (${vendor}): at most one attempt at the killed stage may be non-interrupted; runId ${runId}; ${diagnostics(root, runId)}`,
+          );
+
+          const normalizedEvents = allRows<{ attempt_id: string; payload: string }>(
+            root,
+            `SELECT attempt_id, payload FROM events WHERE run_id = ? AND type = 'attempt.normalized'`,
+            runId,
+          );
+          const claimViolationAttemptIds = new Set(
+            allRows<{ attempt_id: string }>(
+              root,
+              `SELECT attempt_id FROM events WHERE run_id = ? AND type = 'attempt.claim-violation'`,
+              runId,
+            ).map((row) => row.attempt_id),
+          );
+          const everCompletedAttemptIds = normalizedEvents
+            .filter((row) => {
+              const payload = JSON.parse(row.payload) as { ok: boolean };
+              return payload.ok && !claimViolationAttemptIds.has(row.attempt_id);
+            })
+            .map((row) => row.attempt_id);
+          const statusById = new Map(allAttempts.map((a) => [a.id, a.status]));
+          for (const attemptId of everCompletedAttemptIds) {
+            assert.notEqual(
+              statusById.get(attemptId),
+              "interrupted",
+              `live-runner-restart (${vendor}): attempt ${attemptId} reached completed and must never later be interrupted; runId ${runId}; ${diagnostics(root, runId)}`,
+            );
+          }
+
+          return {
+            skipped: false,
+            runId,
+            vendor,
+            killedAttemptId,
+            classification: classifiedPayload.classification,
+            interruptReason: classifiedPayload.interruptReason,
+            tooEarlyResumeExitCode: tooEarlyExitCode as number,
+            finalState: finalRun.state as string,
+            implementAttemptCount: implementAttempts.length,
+            wallTimeMs: Date.now() - startedAt,
+          };
+        } finally {
+          for (const pgid of recordedPgidsForRun(root, runId)) registry.track(pgid);
+        }
       } finally {
         registry.killAll();
         await registry.allDead();
