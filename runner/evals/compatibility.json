@@ -185,6 +185,54 @@
           "evidenceRef": "runner/evals/fixtures/32-live-vendor-parity.ts#L22-L29"
         }
       ]
+    },
+    "live-context-cost": {
+      "lastSuccessByVendor": {
+        "claude": "2026-09-09",
+        "codex": "2026-09-09"
+      },
+      "observations": [
+        {
+          "vendor": "claude",
+          "date": "2026-09-09",
+          "cliVersion": "2.1.245",
+          "model": "sonnet",
+          "outcome": "succeeded",
+          "restingRunState": "blocked",
+          "detail": "startupContextBytes 9786, firstActionLatencyMs 1147; restingRunState 'blocked' reflects this scenario's own run row, which spawn:false leaves at 'starting' forever (no supervisor tick ever runs) rather than a dispatched-and-stalled board; 'blocked' is the closest available RestingRunState enum value for 'never progressed'",
+          "evidenceRef": "runner/evals/fixtures/31-live-context-cost.ts#L18-L26"
+        },
+        {
+          "vendor": "codex",
+          "date": "2026-09-09",
+          "cliVersion": "0.46.0",
+          "model": "gpt-oss:20b",
+          "outcome": "succeeded",
+          "restingRunState": "blocked",
+          "detail": "startupContextBytes 9786, firstActionLatencyMs 37840; restingRunState 'blocked' is a schema-fit label, not a stalled dispatch (see the claude observation's detail for why)",
+          "evidenceRef": "runner/evals/fixtures/31-live-context-cost.ts#L18-L26"
+        },
+        {
+          "vendor": "codex",
+          "date": "2026-09-09",
+          "cliVersion": "0.46.0",
+          "model": "gpt-oss:20b",
+          "outcome": "succeeded",
+          "restingRunState": "blocked",
+          "detail": "startupContextBytes 9786, firstActionLatencyMs 115517; restingRunState 'blocked' is a schema-fit label, not a stalled dispatch (see the claude observation's detail for why)",
+          "evidenceRef": "runner/evals/fixtures/31-live-context-cost.ts#L18-L26"
+        },
+        {
+          "vendor": "codex",
+          "date": "2026-09-09",
+          "cliVersion": "0.46.0",
+          "model": "gpt-oss:20b",
+          "outcome": "succeeded",
+          "restingRunState": "blocked",
+          "detail": "startupContextBytes 9786, firstActionLatencyMs 39725, via the full orga eval run/orga eval grade pipeline (wallTimeMs 39982); restingRunState 'blocked' is a schema-fit label, not a stalled dispatch (see the claude observation's detail for why)",
+          "evidenceRef": "runner/evals/fixtures/31-live-context-cost.ts#L18-L26"
+        }
+      ]
     }
   }
 }
