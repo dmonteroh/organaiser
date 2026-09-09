@@ -31,10 +31,8 @@
 // the `implement` stage, ~92-159s each; no candidate report was produced, matching the
 // `worker-crash`/`no-candidate-report` pattern already recorded against
 // `14-live-single-task.ts`. Each `claude` run (`claude-cli 2.1.245`, model `sonnet`)
-// classified `status: "failed"`, `exit_code: 1`, ~1.4-1.6s each — the undiagnosed Claude
-// `worker-crash` on this dispatch path (`P6g-live-dispatch-packet-follow-ups.md` item 4).
-// No run has yet reached `completed`; see the follow-ups file for the full per-attempt
-// evidence and a stated no-forced-entry note for `compatibility.json`.
+// classified `status: "failed"`, `exit_code: 1`, ~1.4-1.6s each, an undiagnosed Claude
+// `worker-crash` on this dispatch path. No run has yet reached `completed`.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

@@ -56,6 +56,7 @@ import {
   alive,
   groupAlive,
   ProcessRegistry,
+  recordedPgidsForRun,
   sleep,
 } from "./harness.ts";
 
@@ -470,6 +471,9 @@ export async function liveRunnerRestart(vendor: LiveVendor): Promise<LiveRunnerR
           return ["succeeded", "failed", "blocked", "cancelled"].includes(run.state as string);
         }, RUN_TERMINAL_TIMEOUT_MS, 500);
         const finalRun = readRunRow(root, runId);
+
+        for (const pgid of recordedPgidsForRun(root, runId)) registry.track(pgid);
+
         assert.ok(
           reachedTerminal,
           `live-runner-restart (${vendor}): the run must reach a terminal state under the resumed supervisor; runId ${runId}; ${diagnostics(root, runId)}`,
