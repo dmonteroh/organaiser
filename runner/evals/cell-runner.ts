@@ -30,6 +30,7 @@ import {
   type LiveBlockedLaneResult,
   type LiveRunnerRestartResult,
   type LiveLayerIsolationResult,
+  type LiveVendorParityResult,
   type SequenceConstituent,
 } from "./fixture-invocations.ts";
 import { resolveVendorProfile, serializeResolvedProfile } from "../src/cli/profiles.ts";
@@ -419,6 +420,7 @@ const LIVE_TASK_FIXTURE_NAMES: Readonly<Record<string, string>> = {
   "live-blocked-lane": "liveBlockedLane",
   "live-runner-restart": "liveRunnerRestart",
   "live-layer-isolation": "liveLayerIsolation",
+  "live-vendor-parity": "liveVendorParity",
 };
 
 interface LiveOutcome {
@@ -430,10 +432,11 @@ interface LiveOutcome {
 /**
  * Live disposition mapping per C9's per-id split (architect pass 2): every id shares a
  * thrown-rejection -> "fail" and a resolved `{skipped: true}` -> "skipped" branch.
- * `live-single-task`'s resolved, non-skipped branch maps all four `state` values; every
- * other id's resolved, non-skipped branch is always a pass in practice (each one's own
- * code throws on any other outcome — the rejection branch above is that id's realistic
- * fail path, not a state-based mapping).
+ * `live-single-task` and `live-vendor-parity`'s resolved, non-skipped branches each map
+ * their `state` field (pass only when `"succeeded"`); every other id's resolved,
+ * non-skipped branch is always a pass in practice (each one's own code throws on any
+ * other outcome — the rejection branch above is that id's realistic fail path, not a
+ * state-based mapping).
  */
 export function mapLiveOutcome(
   fixtureId: string,
@@ -443,7 +446,8 @@ export function mapLiveOutcome(
     | LiveReviewRepairResult
     | LiveBlockedLaneResult
     | LiveRunnerRestartResult
-    | LiveLayerIsolationResult,
+    | LiveLayerIsolationResult
+    | LiveVendorParityResult,
 ): LiveOutcome {
   if (result.skipped) {
     return {
@@ -455,6 +459,16 @@ export function mapLiveOutcome(
 
   if (fixtureId === "live-single-task") {
     const r = result as Extract<LiveSingleTaskResult, { skipped: false }>;
+    const pass = r.state === "succeeded";
+    return {
+      disposition: pass ? "pass" : "fail",
+      dispositionDetail: pass ? null : `run rested at state "${r.state}"`,
+      snapshotFields: { cliVersion: r.cliVersion, workflowRevision: r.workflowRevision, model: r.model },
+    };
+  }
+
+  if (fixtureId === "live-vendor-parity") {
+    const r = result as Extract<LiveVendorParityResult, { skipped: false }>;
     const pass = r.state === "succeeded";
     return {
       disposition: pass ? "pass" : "fail",
@@ -486,6 +500,7 @@ export async function runLiveInvocation(
     | LiveBlockedLaneResult
     | LiveRunnerRestartResult
     | LiveLayerIsolationResult
+    | LiveVendorParityResult
   >,
 ): Promise<LiveOutcome> {
   try {

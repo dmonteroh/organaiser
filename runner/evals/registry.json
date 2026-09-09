@@ -110,7 +110,7 @@
     },
     "evaluator": {
       "deterministic": ["eval-grade", "eval-compare"],
-      "liveExemptReason": "live-context-cost and live-vendor-parity (section 29.6) have no implementation yet; this exemption is temporary and will be replaced once both live fixtures are built"
+      "live": ["live-vendor-parity"]
     }
   }
 }
