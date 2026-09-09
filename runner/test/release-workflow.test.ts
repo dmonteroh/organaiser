@@ -65,4 +65,11 @@ test("release workflow", async (t) => {
     const matches = text.match(/^\s*if:/gm) ?? [];
     assert.equal(matches.length, 1);
   });
+
+  await t.test("release acceptance check step runs before the build and the release create", () => {
+    assert.ok(text.includes("runner/evals/release-acceptance.ts"));
+    const checkIndex = text.indexOf("runner/evals/release-acceptance.ts");
+    assert.ok(checkIndex < text.indexOf("runner/scripts/build-release-assets.ts"));
+    assert.ok(checkIndex < text.indexOf("gh release create"));
+  });
 });

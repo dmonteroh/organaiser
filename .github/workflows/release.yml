@@ -55,6 +55,8 @@ jobs:
             exit 1
           fi
           echo "prev_ref=" >> "$GITHUB_OUTPUT"
+      - name: Check release acceptance traceability
+        run: node runner/evals/release-acceptance.ts
       - name: Build release assets
         env:
           VERSION: ${{ steps.meta.outputs.version }}

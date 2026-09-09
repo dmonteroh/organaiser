@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { loadReleaseAcceptanceTable } from "../evals/release-acceptance.ts";
+
 interface GitCallOptions {
   cwd: string;
   trimOutput?: boolean;
@@ -50,6 +52,13 @@ export class ContractVersionConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ContractVersionConflictError";
+  }
+}
+
+export class ReleaseAcceptanceTableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReleaseAcceptanceTableError";
   }
 }
 
@@ -251,6 +260,8 @@ export function diffContracts(
 }
 
 const HEADING = "## Contract Versions";
+const ACCEPTANCE_HEADING = "## Release Acceptance Traceability";
+type ReleaseAcceptanceTable = ReturnType<typeof loadReleaseAcceptanceTable>;
 
 export function renderContractVersionSection(delta: ContractDelta): string {
   const lines: string[] = [HEADING, ""];
@@ -301,6 +312,32 @@ export function renderContractVersionSection(delta: ContractDelta): string {
   return `${lines.join("\n")}\n`;
 }
 
+export function renderReleaseAcceptanceSection(table: ReleaseAcceptanceTable): string {
+  const lines: string[] = [ACCEPTANCE_HEADING, ""];
+
+  for (const condition of table.conditions) {
+    lines.push(`- ${condition.line}. ${condition.text}`);
+    for (const citation of condition.citations) {
+      lines.push(`  - \`${citation.kind}\`: \`${citation.id}\``);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+export function generateReleaseAcceptanceSection(): string {
+  let table: ReleaseAcceptanceTable;
+  try {
+    table = loadReleaseAcceptanceTable();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new ReleaseAcceptanceTableError(
+      `runner/evals/release-acceptance.json is missing or unparseable: ${detail}`,
+    );
+  }
+  return renderReleaseAcceptanceSection(table);
+}
+
 export function generateContractVersionDelta(
   prevRef: string | null,
   newRef: string,
@@ -333,8 +370,10 @@ export function main(argv: readonly string[]): void {
   }
 
   try {
-    const section = generateContractVersionDelta(prevRef, newRef, fileURLToPath(new URL("../../", import.meta.url)));
-    process.stdout.write(section);
+    const contractSection = generateContractVersionDelta(prevRef, newRef, fileURLToPath(new URL("../../", import.meta.url)));
+    const acceptanceSection = generateReleaseAcceptanceSection();
+    process.stdout.write(contractSection);
+    process.stdout.write(acceptanceSection);
   } catch (err) {
     if (err instanceof Error) {
       process.stderr.write(`${err.message}\n`);

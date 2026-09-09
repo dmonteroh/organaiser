@@ -11,6 +11,9 @@ import {
   GitRefError,
   ContractVersionConflictError,
   MalformedContractBlockError,
+  renderReleaseAcceptanceSection,
+  generateReleaseAcceptanceSection,
+  ReleaseAcceptanceTableError,
 } from "../scripts/release-notes.ts";
 
 const SCRIPT_PATH = fileURLToPath(new URL("../scripts/release-notes.ts", import.meta.url));
@@ -324,4 +327,72 @@ test("release notes: real script resolves the repository directory from its own 
     assert.match(sharedStdout, /First release: every contract at its current version\./);
     assert.match(sharedStdout, /^- `[^`]+`: `[^`]+`$/m);
   });
+});
+
+test("release acceptance section: renders every condition and citation in table order", () => {
+  const table = {
+    schemaVersion: 1,
+    conditions: [
+      {
+        line: 1,
+        text: "A six-task fixture completes after the submitting client exits.",
+        citations: [{ kind: "deterministic" as const, id: "six-task-fixture" }],
+      },
+      {
+        line: 2,
+        text: "CI requires no vendor credentials.",
+        citations: [
+          { kind: "deterministic" as const, id: "release-workflow" },
+          { kind: "live" as const, id: "live-single-task" },
+        ],
+      },
+    ],
+  };
+
+  const section = renderReleaseAcceptanceSection(table);
+
+  assert.equal(
+    section,
+    "## Release Acceptance Traceability\n\n" +
+      "- 1. A six-task fixture completes after the submitting client exits.\n" +
+      "  - `deterministic`: `six-task-fixture`\n" +
+      "- 2. CI requires no vendor credentials.\n" +
+      "  - `deterministic`: `release-workflow`\n" +
+      "  - `live`: `live-single-task`\n",
+  );
+});
+
+test("release acceptance section: a missing or unparseable release-acceptance.json throws ReleaseAcceptanceTableError naming the file", (t) => {
+  const real = fs.readFileSync as unknown as (...args: unknown[]) => unknown;
+  let mode: "missing" | "unparseable" = "missing";
+
+  t.mock.method(fs, "readFileSync", (p: unknown, ...rest: unknown[]): unknown => {
+    if (String(p).endsWith("release-acceptance.json")) {
+      if (mode === "missing") {
+        throw new Error("ENOENT: no such file or directory, open 'release-acceptance.json'");
+      }
+      return "{not valid json";
+    }
+    return real(p, ...rest);
+  });
+
+  assert.throws(
+    () => generateReleaseAcceptanceSection(),
+    (err: unknown) => {
+      assert.equal(err instanceof ReleaseAcceptanceTableError, true);
+      assert.match((err as Error).message, /release-acceptance\.json/);
+      return true;
+    },
+  );
+
+  mode = "unparseable";
+
+  assert.throws(
+    () => generateReleaseAcceptanceSection(),
+    (err: unknown) => {
+      assert.equal(err instanceof ReleaseAcceptanceTableError, true);
+      assert.match((err as Error).message, /release-acceptance\.json/);
+      return true;
+    },
+  );
 });
