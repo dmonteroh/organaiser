@@ -27,8 +27,16 @@
 // production service: Codex is pointed at a local Ollama model server through a
 // fixture-owned `CODEX_HOME`, never the operator's real one.
 //
-// Recorded live evidence: none yet. This fixture has not completed a live run for either
-// vendor as of this header's writing.
+// Recorded live evidence: one `codex` run on 2026-09-09 (`codex-cli 0.46.0` against a local
+// `gpt-oss:20b` Ollama model) never reached a resting run state within the 20-minute
+// fixture budget; repeated `integration`-stage attempt dispatch/reap cycles were observed
+// without either task settling into a terminal disposition. Three `claude` runs on
+// 2026-09-09 (two for this fixture, one shared with `27-live-review-repair.ts`'s own
+// `claude` attempt on the same date) each failed the readiness probe itself
+// (`claude auth status --json`'s 8-second budget) under this environment's heavy
+// concurrent load — confirmed by a direct, non-fixture invocation of the same command
+// also exceeding 8 seconds — so no vendor process for the fixture's own attempt was ever
+// spawned. No run has yet reached `blocked` with the asserted dispositions.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";

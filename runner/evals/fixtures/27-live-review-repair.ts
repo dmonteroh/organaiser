@@ -33,8 +33,17 @@
 // production service: Codex is pointed at a local Ollama model server through a
 // fixture-owned `CODEX_HOME`, never the operator's real one.
 //
-// Recorded live evidence: none yet. This fixture has not completed a live run for either
-// vendor as of this header's writing.
+// Recorded live evidence: one `codex` run on 2026-09-09 (`codex-cli 0.46.0` against a local
+// `gpt-oss:20b` Ollama model) reached a resting run state but recorded zero `specReviewGate`
+// rows where exactly one round-1 `fail` row was expected; the ephemeral fixture workspace
+// was already torn down by the time this assertion failure surfaced, so whether the
+// implementer's own candidate actually satisfied the boundary requirement or an earlier
+// stage failed before ever reaching `review-spec` was not preserved for inspection. One
+// `claude` run on 2026-09-09 (`claude-cli 2.1.245`) failed the readiness probe itself
+// (`claude auth status --json`'s 8-second budget) under this environment's heavy
+// concurrent load — confirmed by a direct, non-fixture invocation of the same command also
+// exceeding 8 seconds — so no vendor process for the fixture's own attempt was ever spawned.
+// No run has yet reached the asserted round-1-fail/fix-spec/review-quality evidence set.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
