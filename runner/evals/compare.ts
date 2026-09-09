@@ -3,8 +3,10 @@ import path from "node:path";
 
 import { compareIds } from "./grading-schema.ts";
 
-export const DECLARED_VARIABLES = ["prompt", "workflowRevision", "cliVersion", "model", "resolvedConfig"] as const;
+export const DECLARED_VARIABLES = ["prompt", "workflowRevision", "cliVersion", "model", "resolvedConfig", "vendor"] as const;
 export type DeclaredVariable = (typeof DECLARED_VARIABLES)[number];
+
+export type CompareVary = "vendor";
 
 export type CompareCellOutcome = "pass" | "fail" | "not-applicable" | "operational-failure" | "ungraded";
 
@@ -22,6 +24,13 @@ export interface CompareCellGroup {
   repeats: readonly CompareRepeat[];
 }
 
+export interface VendorEvidenceSide {
+  profiles: readonly string[];
+  cliVersion: readonly string[];
+  model: readonly string[];
+  resolvedConfig: readonly string[];
+}
+
 export interface CompareResult {
   left: string;
   right: string;
@@ -36,6 +45,7 @@ export interface CompareResult {
   leftOnlyKeys: readonly string[];
   rightOnlyKeys: readonly string[];
   cells: readonly CompareCellGroup[];
+  vendorEvidence?: { left: VendorEvidenceSide; right: VendorEvidenceSide };
 }
 
 type SnapshotFieldName = "prompt" | "workflowRevision" | "cliVersion" | "model";
@@ -65,6 +75,21 @@ function canonical(value: unknown): string {
 function cellKeyOf(basename: string): string {
   const match = /^(.*)--\d+$/.exec(basename);
   return match ? match[1] : basename;
+}
+
+function basenameSegments(basename: string): string[] | undefined {
+  const segments = basename.split("--");
+  return segments.length === 4 ? segments : undefined;
+}
+
+function vendorKeyOf(basename: string): string {
+  const segments = basenameSegments(basename);
+  return segments ? `${segments[0]}--${segments[2]}` : cellKeyOf(basename);
+}
+
+function vendorProfileOf(basename: string): string {
+  const segments = basenameSegments(basename);
+  return segments ? (segments[1] as string) : "unknown";
 }
 
 function readProperty(value: unknown, key: string): unknown {
@@ -141,7 +166,7 @@ function readCellOutcome(cellDir: string): CompareCellOutcome {
   return typeof outcome === "string" && KNOWN_CELL_OUTCOMES.has(outcome) ? (outcome as CompareCellOutcome) : "ungraded";
 }
 
-function readCells(artifactRoot: string): CellRecord[] {
+function readCells(artifactRoot: string, vary: CompareVary | undefined): CellRecord[] {
   let entries;
   try {
     entries = fs.readdirSync(artifactRoot, { withFileTypes: true });
@@ -163,8 +188,10 @@ function readCells(artifactRoot: string): CellRecord[] {
       cliVersion: snapshotVariables.cliVersion,
       model: snapshotVariables.model,
       resolvedConfig: readResolvedConfigVariable(cellDir),
+      vendor: vendorProfileOf(cellId),
     };
-    return { cellId, key: cellKeyOf(cellId), variables, outcome: readCellOutcome(cellDir) };
+    const key = vary === "vendor" ? vendorKeyOf(cellId) : cellKeyOf(cellId);
+    return { cellId, key, variables, outcome: readCellOutcome(cellDir) };
   });
 }
 
@@ -187,14 +214,29 @@ function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
 }
 
 const PER_KEY_VARIABLES: readonly DeclaredVariable[] = ["workflowRevision", "cliVersion", "model", "resolvedConfig"];
+const VENDOR_ENTAILED_VARIABLES: readonly DeclaredVariable[] = ["cliVersion", "model", "resolvedConfig"];
 
-export function compareEvalRuns(args: { root: string; leftEvalRunId: string; rightEvalRunId: string }): CompareResult {
-  const { root, leftEvalRunId, rightEvalRunId } = args;
+function vendorEvidenceSide(cells: readonly CellRecord[]): VendorEvidenceSide {
+  return {
+    profiles: distinctSorted(cells.map((cell) => cell.variables.vendor)),
+    cliVersion: distinctSorted(cells.map((cell) => cell.variables.cliVersion)),
+    model: distinctSorted(cells.map((cell) => cell.variables.model)),
+    resolvedConfig: distinctSorted(cells.map((cell) => cell.variables.resolvedConfig)),
+  };
+}
+
+export function compareEvalRuns(args: {
+  root: string;
+  leftEvalRunId: string;
+  rightEvalRunId: string;
+  vary?: CompareVary;
+}): CompareResult {
+  const { root, leftEvalRunId, rightEvalRunId, vary } = args;
   const leftArtifactRoot = path.join(root, ".orga", "evals", leftEvalRunId);
   const rightArtifactRoot = path.join(root, ".orga", "evals", rightEvalRunId);
 
-  const leftCells = readCells(leftArtifactRoot);
-  const rightCells = readCells(rightArtifactRoot);
+  const leftCells = readCells(leftArtifactRoot, vary);
+  const rightCells = readCells(rightArtifactRoot, vary);
 
   const leftByKey = groupByKey(leftCells);
   const rightByKey = groupByKey(rightCells);
@@ -205,13 +247,26 @@ export function compareEvalRuns(args: { root: string; leftEvalRunId: string; rig
   const rightOnlyKeys = allKeys.filter((key) => !leftByKey.has(key) && rightByKey.has(key));
 
   const variedSet = new Set<DeclaredVariable>();
+  const perKeyVariables =
+    vary === "vendor" ? PER_KEY_VARIABLES.filter((variable) => !VENDOR_ENTAILED_VARIABLES.includes(variable)) : PER_KEY_VARIABLES;
 
-  for (const variable of PER_KEY_VARIABLES) {
+  for (const variable of perKeyVariables) {
     for (const key of matchedKeyList) {
       const leftValues = distinctSorted((leftByKey.get(key) ?? []).map((cell) => cell.variables[variable]));
       const rightValues = distinctSorted((rightByKey.get(key) ?? []).map((cell) => cell.variables[variable]));
       if (!arraysEqual(leftValues, rightValues)) {
         variedSet.add(variable);
+        break;
+      }
+    }
+  }
+
+  if (vary === "vendor") {
+    for (const key of matchedKeyList) {
+      const leftValues = distinctSorted((leftByKey.get(key) ?? []).map((cell) => cell.variables.vendor));
+      const rightValues = distinctSorted((rightByKey.get(key) ?? []).map((cell) => cell.variables.vendor));
+      if (!arraysEqual(leftValues, rightValues)) {
+        variedSet.add("vendor");
         break;
       }
     }
@@ -224,6 +279,14 @@ export function compareEvalRuns(args: { root: string; leftEvalRunId: string; rig
   const variedVariables = DECLARED_VARIABLES.filter((variable) => variedSet.has(variable));
   const variedVariable = variedVariables.length === 1 ? variedVariables[0] : null;
 
+  const vendorEvidence: CompareResult["vendorEvidence"] =
+    vary === "vendor"
+      ? {
+          left: vendorEvidenceSide(matchedKeyList.flatMap((key) => leftByKey.get(key) ?? [])),
+          right: vendorEvidenceSide(matchedKeyList.flatMap((key) => rightByKey.get(key) ?? [])),
+        }
+      : undefined;
+
   const cells: CompareCellGroup[] = allKeys.map((key) => {
     const leftRepeats: CompareRepeat[] = (leftByKey.get(key) ?? [])
       .slice()
@@ -234,8 +297,11 @@ export function compareEvalRuns(args: { root: string; leftEvalRunId: string; rig
       .sort((a, b) => compareIds(a.cellId, b.cellId))
       .map((cell) => ({ side: "right" as const, cellId: cell.cellId, outcome: cell.outcome }));
     const repeats = [...leftRepeats, ...rightRepeats];
-    const distinctOutcomes = new Set(repeats.map((repeat) => repeat.outcome));
-    return { key, unstable: distinctOutcomes.size > 1, repeats };
+    const unstable =
+      vary === "vendor"
+        ? new Set(leftRepeats.map((repeat) => repeat.outcome)).size > 1 || new Set(rightRepeats.map((repeat) => repeat.outcome)).size > 1
+        : new Set(repeats.map((repeat) => repeat.outcome)).size > 1;
+    return { key, unstable, repeats };
   });
 
   const unstableKeys = cells.filter((group) => group.unstable).length;
@@ -269,5 +335,6 @@ export function compareEvalRuns(args: { root: string; leftEvalRunId: string; rig
     leftOnlyKeys,
     rightOnlyKeys,
     cells,
+    vendorEvidence,
   };
 }

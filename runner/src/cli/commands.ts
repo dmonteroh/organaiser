@@ -737,6 +737,12 @@ function cmdEvalCompare(parsed: ParsedArgs, io: Io): ExitCode {
   const json = flagBool(parsed.flags, "json");
   const root = io.cwd();
 
+  const varyFlag = flagString(parsed.flags, "vary");
+  if (varyFlag !== undefined && varyFlag !== "vendor") {
+    throw new UsageError(`eval compare --vary accepts: vendor (got "${varyFlag}")`);
+  }
+  const vary = varyFlag === "vendor" ? "vendor" : undefined;
+
   for (const evalRunId of [leftEvalRunId, rightEvalRunId]) {
     const artifactRoot = path.join(root, ".orga", "evals", evalRunId);
     let stat;
@@ -750,7 +756,7 @@ function cmdEvalCompare(parsed: ParsedArgs, io: Io): ExitCode {
     }
   }
 
-  const result = compareEvalRuns({ root, leftEvalRunId, rightEvalRunId });
+  const result = compareEvalRuns({ root, leftEvalRunId, rightEvalRunId, vary });
 
   if (result.variedVariables.length > 1) {
     throw new UsageError(
@@ -1173,6 +1179,7 @@ const VALUE_FLAGS = new Set([
   "runner-checksum",
   "suite",
   "profile",
+  "vary",
 ]);
 
 type CommandBody = (parsed: ParsedArgs, io: Io) => ExitCode | Promise<ExitCode>;

@@ -510,3 +510,146 @@ test("(k) two empty run directories report 'no-cells'; disjoint profile keys rep
     assert.equal(parsed.outcome, "no-matched-cells");
   });
 });
+
+interface VendorEvidenceSideJson {
+  profiles: readonly string[];
+  cliVersion: readonly string[];
+  model: readonly string[];
+  resolvedConfig: readonly string[];
+}
+
+interface CompareJsonWithVendor extends CompareJson {
+  vendorEvidence?: { left: VendorEvidenceSideJson; right: VendorEvidenceSideJson };
+}
+
+test("(p) AC2/AC3: --vary vendor matches cells of the identical fixture run under different profiles and names 'vendor'", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--1"), {});
+    writeCell(path.join(runDir(dir, right), "unit--codex--fixture-a--1"), {});
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--vary", "vendor", "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.outcome, "single-variable");
+    assert.equal(parsed.variedVariable, "vendor");
+    assert.deepEqual(parsed.variedVariables, ["vendor"]);
+    assert.equal(parsed.matchedKeys, 1);
+    assert.ok(parsed.cells.some((cell) => cell.key === "unit--fixture-a"));
+  });
+});
+
+test("(q) AC4: a --vary vendor pair that also varies prompt reports 'multi-variable' and is refused", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--1"), { prompt: "fixture-a" });
+    writeCell(path.join(runDir(dir, right), "unit--codex--fixture-a--1"), { prompt: "fixture-a-changed" });
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--vary", "vendor", "--json"], io);
+    assert.equal(code, EXIT_CODES.INVALID_ARGS);
+    assert.equal(io.outLines.length, 0);
+    assert.equal(io.errLines.length, 1);
+    assert.match(io.errLines[0] as string, /vendor/);
+    assert.match(io.errLines[0] as string, /prompt/);
+  });
+});
+
+test("(r) AC5: --vary vendor flags a key unstable only from each side's own repeats, never merely from a cross-side difference", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--1"), { prompt: "fixture-a", outcome: "pass" });
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--2"), { prompt: "fixture-a", outcome: "fail" });
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-b--1"), { prompt: "fixture-b", outcome: "pass" });
+    writeCell(path.join(runDir(dir, right), "unit--codex--fixture-a--1"), { prompt: "fixture-a", outcome: "pass" });
+    writeCell(path.join(runDir(dir, right), "unit--codex--fixture-b--1"), { prompt: "fixture-b", outcome: "fail" });
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--vary", "vendor", "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+
+    const selfUnstableGroup = parsed.cells.find((cell) => cell.key === "unit--fixture-a");
+    assert.equal(selfUnstableGroup?.unstable, true);
+
+    const crossOnlyGroup = parsed.cells.find((cell) => cell.key === "unit--fixture-b");
+    assert.equal(crossOnlyGroup?.unstable, false);
+  });
+});
+
+test("(s) AC6: an unrecognized --vary value raises a usage error naming the accepted values", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--1"), {});
+    writeCell(path.join(runDir(dir, right), "unit--codex--fixture-a--1"), {});
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--vary", "bogus"], io);
+    assert.equal(code, EXIT_CODES.INVALID_ARGS);
+    assert.ok(io.errLines.length > 0);
+    assert.match(io.errLines[0] as string, /vendor/);
+  });
+});
+
+test("(t) AC2: the same cross-profile fixtures report 'no-matched-cells' in default mode, without --vary", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--1"), {});
+    writeCell(path.join(runDir(dir, right), "unit--codex--fixture-a--1"), {});
+
+    const io = fakeIo(dir);
+    const code = await main(["node", "orga", "eval", "compare", left, right, "--json"], io);
+    assert.equal(code, EXIT_CODES.OK, io.errLines.join("\n"));
+    const parsed = JSON.parse(io.outLines[0] as string) as CompareJson;
+    assert.equal(parsed.outcome, "no-matched-cells");
+  });
+});
+
+test("(u) AC4: --vary vendor carries vendorEvidence with both sides' four arrays; default mode omits the key entirely", async () => {
+  await withTempWorkspace(async (dir) => {
+    const left = "run-left";
+    const right = "run-right";
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--1"), {
+      model: "model-x",
+      cliVersion: "1.0.0",
+      resolvedConfig: { vendor: "claude" },
+    });
+    writeCell(path.join(runDir(dir, left), "unit--claude--fixture-a--2"), {
+      model: "model-x2",
+      cliVersion: "1.0.1",
+      resolvedConfig: { vendor: "claude" },
+    });
+    writeCell(path.join(runDir(dir, right), "unit--codex--fixture-a--1"), {
+      model: "model-y",
+      cliVersion: "2.0.0",
+      resolvedConfig: { vendor: "codex" },
+    });
+
+    const ioVendor = fakeIo(dir);
+    const codeVendor = await main(["node", "orga", "eval", "compare", left, right, "--vary", "vendor", "--json"], ioVendor);
+    assert.equal(codeVendor, EXIT_CODES.OK, ioVendor.errLines.join("\n"));
+    const parsedVendor = JSON.parse(ioVendor.outLines[0] as string) as CompareJsonWithVendor;
+
+    assert.deepEqual(parsedVendor.vendorEvidence?.left.profiles, ["claude"]);
+    assert.deepEqual(parsedVendor.vendorEvidence?.left.cliVersion, [`ok:${JSON.stringify("1.0.0")}`, `ok:${JSON.stringify("1.0.1")}`]);
+    assert.deepEqual(parsedVendor.vendorEvidence?.left.model, [`ok:${JSON.stringify("model-x")}`, `ok:${JSON.stringify("model-x2")}`]);
+    assert.deepEqual(parsedVendor.vendorEvidence?.left.resolvedConfig, [`ok:${JSON.stringify({ vendor: "claude" })}`]);
+
+    assert.deepEqual(parsedVendor.vendorEvidence?.right.profiles, ["codex"]);
+    assert.deepEqual(parsedVendor.vendorEvidence?.right.cliVersion, [`ok:${JSON.stringify("2.0.0")}`]);
+    assert.deepEqual(parsedVendor.vendorEvidence?.right.model, [`ok:${JSON.stringify("model-y")}`]);
+    assert.deepEqual(parsedVendor.vendorEvidence?.right.resolvedConfig, [`ok:${JSON.stringify({ vendor: "codex" })}`]);
+
+    const ioDefault = fakeIo(dir);
+    const codeDefault = await main(["node", "orga", "eval", "compare", left, right, "--json"], ioDefault);
+    assert.equal(codeDefault, EXIT_CODES.OK, ioDefault.errLines.join("\n"));
+    const parsedDefault: unknown = JSON.parse(ioDefault.outLines[0] as string);
+    assert.equal(Object.prototype.hasOwnProperty.call(parsedDefault, "vendorEvidence"), false);
+  });
+});
