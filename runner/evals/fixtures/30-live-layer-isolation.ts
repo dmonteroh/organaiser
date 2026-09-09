@@ -25,16 +25,16 @@
 // fixture-owned `CODEX_HOME`, never the operator's real one.
 //
 // Recorded live evidence: three `codex` runs and three `claude` runs on 2026-09-09, none
-// reaching `completed`. Each `codex` run (`codex-cli 0.46.0` against a local `gpt-oss:20b`
-// Ollama model, `ORGA_SPAWN_MS=120000` to clear this machine's real Codex startup latency)
-// classified `status: "failed"`, `exit_code: 1` at the `implement` stage, ~92-159s each; no
-// candidate report was produced, matching the `worker-crash`/`no-candidate-report` pattern
-// already recorded against `14-live-single-task.ts`. Each `claude` run (`claude-cli
-// 2.1.245`, model `sonnet`) classified `status: "failed"`, `exit_code: 1`, ~1.4-1.6s each —
-// the undiagnosed Claude `worker-crash` on this dispatch path
-// (`P6g-live-dispatch-packet-follow-ups.md` item 4). No run has yet reached `completed`;
-// see the follow-ups file for the full per-attempt evidence and a stated no-forced-entry
-// note for `compatibility.json`.
+// reaching `completed`, all six resting `blocked`. Each `codex` run (`codex-cli 0.46.0`
+// against a local `gpt-oss:20b` Ollama model, `ORGA_SPAWN_MS=120000` to clear this
+// machine's real Codex startup latency) classified `status: "failed"`, `exit_code: 1` at
+// the `implement` stage, ~92-159s each; no candidate report was produced, matching the
+// `worker-crash`/`no-candidate-report` pattern already recorded against
+// `14-live-single-task.ts`. Each `claude` run (`claude-cli 2.1.245`, model `sonnet`)
+// classified `status: "failed"`, `exit_code: 1`, ~1.4-1.6s each — the undiagnosed Claude
+// `worker-crash` on this dispatch path (`P6g-live-dispatch-packet-follow-ups.md` item 4).
+// No run has yet reached `completed`; see the follow-ups file for the full per-attempt
+// evidence and a stated no-forced-entry note for `compatibility.json`.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
