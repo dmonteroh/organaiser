@@ -18,6 +18,8 @@ import { selectAdapter } from "../src/adapters/select.ts";
 import type { ResolvedVendorProfile } from "../src/cli/profiles.ts";
 import { liveSingleTask } from "../evals/fixtures/14-live-single-task.ts";
 import { liveBoardDrain } from "../evals/fixtures/23-live-board-drain.ts";
+import { liveReviewRepair } from "../evals/fixtures/27-live-review-repair.ts";
+import { liveBlockedLane } from "../evals/fixtures/28-live-blocked-lane.ts";
 import { openStore, withTransaction } from "../src/store/db.ts";
 import { initProject } from "../src/store/init.ts";
 import type { TickContext } from "../src/engine/tick.ts";
@@ -375,6 +377,46 @@ test("liveBoardDrain reports skipped and spawns no vendor process when ORGA_LIVE
   const startedAt = Date.now();
   try {
     const result = await liveBoardDrain("claude");
+    assert.equal(result.skipped, true);
+    if (result.skipped) {
+      assert.match(result.reason, /ORGA_LIVE/);
+    }
+    // The ORGA_LIVE gate is checked before even the version/auth probe runs, so a
+    // real spawn (which always takes tens of milliseconds at minimum) would blow this
+    // generous budget; this is a coarse proxy for "no process was spawned".
+    assert.ok(Date.now() - startedAt < 2000, "the skip path must return without spawning any process");
+  } finally {
+    if (previousLive === undefined) delete process.env.ORGA_LIVE;
+    else process.env.ORGA_LIVE = previousLive;
+  }
+});
+
+test("liveReviewRepair reports skipped and spawns no vendor process when ORGA_LIVE is unset", async () => {
+  const previousLive = process.env.ORGA_LIVE;
+  delete process.env.ORGA_LIVE;
+  const startedAt = Date.now();
+  try {
+    const result = await liveReviewRepair("claude");
+    assert.equal(result.skipped, true);
+    if (result.skipped) {
+      assert.match(result.reason, /ORGA_LIVE/);
+    }
+    // The ORGA_LIVE gate is checked before even the version/auth probe runs, so a
+    // real spawn (which always takes tens of milliseconds at minimum) would blow this
+    // generous budget; this is a coarse proxy for "no process was spawned".
+    assert.ok(Date.now() - startedAt < 2000, "the skip path must return without spawning any process");
+  } finally {
+    if (previousLive === undefined) delete process.env.ORGA_LIVE;
+    else process.env.ORGA_LIVE = previousLive;
+  }
+});
+
+test("liveBlockedLane reports skipped and spawns no vendor process when ORGA_LIVE is unset", async () => {
+  const previousLive = process.env.ORGA_LIVE;
+  delete process.env.ORGA_LIVE;
+  const startedAt = Date.now();
+  try {
+    const result = await liveBlockedLane("claude");
     assert.equal(result.skipped, true);
     if (result.skipped) {
       assert.match(result.reason, /ORGA_LIVE/);

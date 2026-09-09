@@ -32,7 +32,7 @@
         "partial-stream-survives-kill",
         "structured-error-source"
       ],
-      "live": ["live-single-task", "live-board-drain"]
+      "live": ["live-single-task", "live-board-drain", "live-review-repair", "live-blocked-lane"]
     },
     "codex-adapter": {
       "deterministic": [
@@ -42,7 +42,7 @@
         "partial-stream-survives-kill",
         "structured-error-source"
       ],
-      "live": ["live-single-task", "live-board-drain"]
+      "live": ["live-single-task", "live-board-drain", "live-review-repair", "live-blocked-lane"]
     },
     "fake-adapter": {
       "deterministic": [

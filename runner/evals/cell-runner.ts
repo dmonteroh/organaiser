@@ -26,6 +26,8 @@ import {
   type LiveVendor,
   type LiveSingleTaskResult,
   type LiveBoardDrainResult,
+  type LiveReviewRepairResult,
+  type LiveBlockedLaneResult,
   type SequenceConstituent,
 } from "./fixture-invocations.ts";
 import { resolveVendorProfile, serializeResolvedProfile } from "../src/cli/profiles.ts";
@@ -408,6 +410,13 @@ export function runWholeTestFile(testFilePath: string): Promise<WholeTestFileOut
   });
 }
 
+const LIVE_TASK_FIXTURE_NAMES: Readonly<Record<string, string>> = {
+  "live-single-task": "liveSingleTask",
+  "live-board-drain": "liveBoardDrain",
+  "live-review-repair": "liveReviewRepair",
+  "live-blocked-lane": "liveBlockedLane",
+};
+
 interface LiveOutcome {
   disposition: EvalCellDisposition;
   dispositionDetail: string | null;
@@ -415,16 +424,16 @@ interface LiveOutcome {
 }
 
 /**
- * Live disposition mapping per C9's per-id split (architect pass 2): both ids share a
+ * Live disposition mapping per C9's per-id split (architect pass 2): every id shares a
  * thrown-rejection -> "fail" and a resolved `{skipped: true}` -> "skipped" branch.
- * `live-single-task`'s resolved, non-skipped branch maps all four `state` values;
- * `live-board-drain`'s resolved, non-skipped branch is always `state: "succeeded"` in
- * practice (its own code throws on anything else — the rejection branch above is this
- * id's realistic fail path, not the state-based mapping).
+ * `live-single-task`'s resolved, non-skipped branch maps all four `state` values; every
+ * other id's resolved, non-skipped branch is always a pass in practice (each one's own
+ * code throws on any other outcome — the rejection branch above is that id's realistic
+ * fail path, not a state-based mapping).
  */
 export function mapLiveOutcome(
   fixtureId: string,
-  result: LiveSingleTaskResult | LiveBoardDrainResult,
+  result: LiveSingleTaskResult | LiveBoardDrainResult | LiveReviewRepairResult | LiveBlockedLaneResult,
 ): LiveOutcome {
   if (result.skipped) {
     return {
@@ -444,9 +453,10 @@ export function mapLiveOutcome(
     };
   }
 
-  // live-board-drain: the fixture itself throws on any non-"succeeded" resting state, so
-  // this branch is always a pass in practice (see C9/AC3), and this result type carries
-  // no cliVersion/workflowRevision/model field at all.
+  // live-board-drain, live-review-repair, live-blocked-lane: each fixture's own code
+  // throws on any non-passing resting state, so this branch is always a pass in practice
+  // (see C9/AC3), and none of these three result types carries a
+  // cliVersion/workflowRevision/model field.
   return {
     disposition: "pass",
     dispositionDetail: null,
@@ -457,7 +467,9 @@ export function mapLiveOutcome(
 export async function runLiveInvocation(
   fixtureId: string,
   vendor: LiveVendor,
-  run: (vendor: LiveVendor) => Promise<LiveSingleTaskResult | LiveBoardDrainResult>,
+  run: (
+    vendor: LiveVendor,
+  ) => Promise<LiveSingleTaskResult | LiveBoardDrainResult | LiveReviewRepairResult | LiveBlockedLaneResult>,
 ): Promise<LiveOutcome> {
   try {
     const result = await run(vendor);
@@ -512,7 +524,7 @@ export function createCellRunner(evalRunId: string): CellRunner {
           constituents: null,
           snapshot: {
             prompt: fixtureId,
-            taskFixture: fixtureId === "live-single-task" ? "liveSingleTask" : "liveBoardDrain",
+            taskFixture: LIVE_TASK_FIXTURE_NAMES[fixtureId] ?? fixtureId,
             cliVersion: live.snapshotFields.cliVersion,
             workflowRevision: live.snapshotFields.workflowRevision,
             model: live.snapshotFields.model,
