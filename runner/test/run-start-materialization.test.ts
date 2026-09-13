@@ -156,6 +156,7 @@ test("startRun materializes one tasks row per enabled entry, at pre-admission st
       dependencies: [],
       priority: 5,
       claims: { files: ["a.txt"] },
+      // board-enabled-waiver: this test verifies that a genuinely enabled task actually materializes into a tasks row and reaches admission, so enabled must be true here.
       enabled: true,
     });
     const disabledTask = buildTask({ id: "t-disabled", enabled: false });
@@ -366,6 +367,7 @@ test("a second run start reusing task ids already in the store fails with a clea
 test("run dry-run stays side-effect-free with respect to tasks, even for a board whose task is enabled", async () => {
   await withTempWorkspace(async (dir) => {
     initProject(dir);
+    // board-enabled-waiver: this test verifies that dry-run does not materialize an otherwise-enabled task, so the task must be genuinely enabled here for the assertion to be meaningful.
     const boardPath = writeBoard(dir, [buildTask({ id: "t-dry-run", enabled: true })]);
     const io = ioAt(dir);
 
