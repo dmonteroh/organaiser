@@ -94,7 +94,9 @@ export interface RegistryError {
     | "deterministic-missing"
     | "deterministic-unknown-id"
     | "live-missing"
-    | "live-unknown-id";
+    | "live-unknown-id"
+    | "deterministic-unresolved-invocation"
+    | "live-unresolved-invocation";
   detail: string;
 }
 
@@ -104,10 +106,7 @@ interface RegistryUnitEntry {
   liveExemptReason?: unknown;
 }
 
-export function validateRegistry(
-  registry: unknown,
-  availableTestIds: ReadonlySet<string>,
-): RegistryError[] {
+function readUnits(registry: unknown): Record<string, RegistryUnitEntry> {
   if (
     typeof registry !== "object" ||
     registry === null ||
@@ -118,7 +117,14 @@ export function validateRegistry(
     throw new EvalRegistryError("registry must be an object with a `units` object key");
   }
 
-  const units = (registry as { units: Record<string, RegistryUnitEntry> }).units;
+  return (registry as { units: Record<string, RegistryUnitEntry> }).units;
+}
+
+export function validateRegistry(
+  registry: unknown,
+  availableTestIds: ReadonlySet<string>,
+): RegistryError[] {
+  const units = readUnits(registry);
   const errors: RegistryError[] = [];
 
   const declaredUnits = new Set(RUNNER_UNITS);
@@ -194,6 +200,51 @@ export function validateRegistry(
             kind: "live-unknown-id",
             detail: `"${unit}" names live id "${id}", which is not a section 29.6 scenario id`,
           });
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
+// A value-level static import of fixture-invocations.ts pulls its entire
+// evals/fixtures/ tree into every `orga` command's module graph (this file
+// sits on that graph via commands.ts -> eval-vocabulary.ts). Deferred to call
+// time here, mirroring runner/src/cli/eval-run.ts's cell-runner.ts deferral.
+export async function validateRegistryInvocations(registry: unknown): Promise<RegistryError[]> {
+  const { resolveInvocation } = await import("./fixture-invocations.ts");
+  const units = readUnits(registry);
+  const errors: RegistryError[] = [];
+
+  for (const [unit, entry] of Object.entries(units)) {
+    const deterministic = Array.isArray(entry.deterministic) ? entry.deterministic : [];
+    for (const id of deterministic) {
+      try {
+        resolveInvocation(unit, "fake", id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push({
+          unit,
+          kind: "deterministic-unresolved-invocation",
+          detail: `"${unit}" names deterministic id "${id}", which resolveInvocation(unit, "fake", id) rejects: ${message}`,
+        });
+      }
+    }
+
+    const live = Array.isArray(entry.live) ? entry.live : [];
+    for (const id of live) {
+      for (const vendor of ["claude", "codex"] as const) {
+        try {
+          resolveInvocation(unit, vendor, id);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          errors.push({
+            unit,
+            kind: "live-unresolved-invocation",
+            detail: `"${unit}" names live id "${id}", which resolveInvocation(unit, "${vendor}", id) rejects: ${message}`,
+          });
+          break;
         }
       }
     }
