@@ -392,7 +392,7 @@ export function boardWithTasks(tasks: readonly FixtureTaskSpec[]): unknown {
         requiredWorkflowVersions: {},
         claims: "unknown",
         verification: [],
-        enabled: true,
+        enabled: false,
       })),
     },
   };
@@ -415,10 +415,11 @@ export function writeFixtureFiles(dir: string, tasks: readonly FixtureTaskSpec[]
 // supervisor from its own fixed production wiring; this fixture suite always
 // kills that first supervisor immediately (it never dispatches anything
 // useful for a fixture — see the harness module comment on `test-supervisor`)
-// and spawns its own configurable one instead. `startRun` never inserts
-// `tasks` rows from `board.spec.tasks` — no P5a-P5e module does, in this
-// phase — so every fixture that needs the scheduler to see real tasks seeds
-// them directly, exactly as P5b/P5e's own tests already do
+// and spawns its own configurable one instead. `boardWithTasks` declares
+// every task `enabled: false` deliberately: fixtures seed the `tasks` table
+// themselves, at stages the real admission pipeline would not yet produce,
+// so every fixture that needs the scheduler to see real tasks seeds them
+// directly, exactly as P5b/P5e's own tests already do
 // (`seedWaitingOperatorTask` in supervisor-detach.test.ts).
 export function startFixtureRun(dir: string, tasks: readonly FixtureTaskSpec[]): { runId: string; firstSupervisorPid: number } {
   initProject(dir);

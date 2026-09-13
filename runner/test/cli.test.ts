@@ -56,7 +56,7 @@ function minimalBoard(): unknown {
           requiredWorkflowVersions: {},
           claims: "unknown",
           verification: [],
-          enabled: true,
+          enabled: false,
         },
       ],
     },
@@ -1049,7 +1049,7 @@ test("run start --foreground returns only after the run rests, mapped to the mat
     assert.equal(after, before, "--foreground must spawn no detached child process");
     assert.equal(io.outLines.length, 1, "exactly one stdout value after the wait ends");
     const run = JSON.parse(io.outLines[0] as string) as RunRow;
-    assert.equal(run.state, "succeeded", "an empty board has nothing to dispatch and rests at succeeded");
+    assert.equal(run.state, "succeeded", "a board whose only task is deliberately disabled has nothing to dispatch and rests at succeeded");
     assert.equal(code, EXIT_CODES.OK);
     assert.equal(runStateToExitCode(run.state), code);
 
@@ -1083,11 +1083,10 @@ test("the interrupt handler is installed before runSupervisor is awaited, with n
 });
 
 // A live SIGINT race against this phase's `--foreground` path is not a
-// reliable black-box CLI assertion: with no task materialized into the
-// `tasks` table by any command in this build (`run start` included), the
-// in-process supervisor's own first tick always rests immediately, so the
-// window between installing the handler and the process resting is on the
-// order of single-digit milliseconds — too small to hit deterministically
+// reliable black-box CLI assertion: this board's single task is disabled, so
+// the in-process supervisor's own first tick always rests immediately, and
+// the window between installing the handler and the process resting is on
+// the order of single-digit milliseconds — too small to hit deterministically
 // from outside the process. `installForegroundInterruptHandler`'s own
 // signal-handling correctness (durable cancellation ahead of a competing
 // exit handler, real SIGTERM/SIGKILL escalation of a live worker) is

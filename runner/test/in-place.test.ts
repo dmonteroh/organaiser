@@ -134,7 +134,7 @@ function minimalBoard(): unknown {
           requiredWorkflowVersions: {},
           claims: "unknown",
           verification: [],
-          enabled: true,
+          enabled: false,
         },
       ],
     },
