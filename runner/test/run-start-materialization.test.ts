@@ -202,6 +202,36 @@ test("startRun materializes one tasks row per enabled entry, at pre-admission st
   });
 });
 
+test("startRun with every task disabled creates the runs row and materializes zero tasks/claims, without throwing", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const { boardPath, board } = boardAndPath(dir, [
+      buildTask({ id: "t-disabled-one", enabled: false }),
+      buildTask({ id: "t-disabled-two", enabled: false }),
+    ]);
+
+    const result = startRun({
+      root: dir,
+      boardPath,
+      board,
+      workflowPath: WORKFLOW_PATH,
+      templatePath: TEMPLATE_PATH,
+      now: () => FIXED_NOW,
+      spawn: false,
+    });
+
+    const db = openStore(dir);
+    try {
+      assert.equal(countAll(db, "runs"), 1);
+      assert.ok(db.prepare("SELECT id FROM runs WHERE id = ?").get(result.runId), "the started run must be the one row present");
+      assert.equal(countAll(db, "tasks"), 0);
+      assert.equal(countAll(db, "claims"), 0);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 test("an explicit claims object always gets a files row; nonFile is added only when populated", async () => {
   await withTempWorkspace(async (dir) => {
     initProject(dir);

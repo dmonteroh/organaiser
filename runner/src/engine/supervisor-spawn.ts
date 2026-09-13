@@ -199,7 +199,7 @@ export function startRun(options: StartRunOptions): StartRunResult {
           // would reject any real file write by a task seeded this way as
           // out-of-claim. Inert today only because
           // createProductionSchedulerTick passes undefined for the
-          // workspace argument (scheduler.ts:1333 and 1374), so
+          // workspace argument (scheduler.ts:1332 and 1373), so
           // validateAttemptClaims never runs. Whoever wires a real
           // WorkspaceProvider must give claims: "unknown" a genuinely
           // permissive representation at that time.
