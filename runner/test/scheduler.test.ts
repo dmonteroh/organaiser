@@ -1409,6 +1409,23 @@ test("reconcileState flags an orphaned claims row even with a workspace provider
   });
 });
 
+test("reconcileState still flags a claim whose task_id collides with a real task belonging to a different run", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    const otherRunId = "run-2";
+    insertRun(db, otherRunId, clock.now());
+    insertTask(db, { id: "shared-task-id", runId: otherRunId, stageId: "integration", now: clock.now() });
+
+    const provider = defaultProvider(dir);
+    seedFilesClaim(db, runId, "shared-task-id", ["x.txt"]);
+
+    const runtime = createSchedulerRuntime();
+    reconcileState(buildCtx(db, runId, clock), runtime, provider);
+
+    assert.equal(runtime.scratch.invariantViolations.length, 1);
+    assert.match(runtime.scratch.invariantViolations[0] as string, /claim row\(s\) exist whose task is not present/);
+  });
+});
+
 test("a composed tick with a workspace provider and a seeded claims row does not rest blocked on stray-claims evidence", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
     insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
