@@ -14,7 +14,7 @@ import { initProject } from "../store/init.ts";
 import { findProjectRoot, openStore } from "../store/db.ts";
 import { eventsJsonlPath } from "../store/events.ts";
 import type { RunRow } from "../store/types.ts";
-import { startRun, BoardValidationError } from "../engine/supervisor-spawn.ts";
+import { startRun, BoardValidationError, TaskIdCollisionError } from "../engine/supervisor-spawn.ts";
 import { checkInPlaceStart } from "../git/in-place.ts";
 import {
   pauseRun,
@@ -224,7 +224,7 @@ async function cmdRunStart(parsed: ParsedArgs, io: Io): Promise<ExitCode> {
   try {
     result = startRun({ root, boardPath, board, workflowPath, templatePath, now: io.now });
   } catch (err) {
-    if (err instanceof BoardValidationError) throw new UsageError(err.message);
+    if (err instanceof BoardValidationError || err instanceof TaskIdCollisionError) throw new UsageError(err.message);
     throw err;
   }
 
@@ -257,7 +257,7 @@ async function cmdRunStartForeground(args: ForegroundStartArgs): Promise<ExitCod
     try {
       result = startRun({ root, boardPath, board, workflowPath, templatePath, now: io.now, spawn: false });
     } catch (err) {
-      if (err instanceof BoardValidationError) throw new UsageError(err.message);
+      if (err instanceof BoardValidationError || err instanceof TaskIdCollisionError) throw new UsageError(err.message);
       throw err;
     }
 

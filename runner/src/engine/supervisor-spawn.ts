@@ -25,6 +25,7 @@ import { appendEvent, mirrorEvent } from "../store/events.ts";
 import { sha256 } from "../store/evidence.ts";
 import { workflowAssetPath } from "../workflow-assets.ts";
 import { validateBoard as validateBoardSemantics } from "../board/validate.ts";
+import type { Board } from "../board/schema.ts";
 import type { DatabaseSync } from "node:sqlite";
 import type { EventRow } from "../store/types.ts";
 
@@ -35,6 +36,17 @@ export class BoardValidationError extends Error {
     super(message);
     this.name = "BoardValidationError";
     this.errors = errors;
+  }
+}
+
+export class TaskIdCollisionError extends Error {
+  taskIds: string[];
+  constructor(taskIds: string[]) {
+    super(
+      `task ids already exist in this .orga store: ${taskIds.join(", ")}. Task ids must be unique across every run in one store; rename them in the board or use a fresh project root.`,
+    );
+    this.name = "TaskIdCollisionError";
+    this.taskIds = taskIds;
   }
 }
 
@@ -114,6 +126,11 @@ export function startRun(options: StartRunOptions): StartRunResult {
     throw new BoardValidationError(`board failed semantic validation: ${summary}`, semantics.errors);
   }
 
+  // Safe: both validateBoard (schema-only) and validateBoardSemantics above
+  // (via loadAndValidateBoardShape, validate.ts:137-139) have already run
+  // board.schema.json against this object.
+  const shaped = options.board as Board;
+
   const now = options.now ?? Date.now;
   const nowMs = now();
   const runId = randomUUID();
@@ -129,6 +146,18 @@ export function startRun(options: StartRunOptions): StartRunResult {
   let createdEvent: EventRow;
   try {
     createdEvent = withTransaction(db, () => {
+      const enabledTasks = shaped.spec.tasks.filter((task) => task.enabled !== false);
+      const enabledIds = enabledTasks.map((task) => task.id);
+      if (enabledIds.length > 0) {
+        const placeholders = enabledIds.map(() => "?").join(", ");
+        const collisions = db
+          .prepare(`SELECT id FROM tasks WHERE id IN (${placeholders})`)
+          .all(...enabledIds) as Array<{ id: string }>;
+        if (collisions.length > 0) {
+          throw new TaskIdCollisionError(collisions.map((row) => row.id).sort());
+        }
+      }
+
       db.prepare(
         `INSERT INTO runs (id, board_path, desired_state, state, terminal_reason, config_snapshot_ref, created_at, started_at, ended_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -143,6 +172,53 @@ export function startRun(options: StartRunOptions): StartRunResult {
         null,
         null,
       );
+
+      for (const task of enabledTasks) {
+        db.prepare(
+          `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          task.id,
+          runId,
+          task.id,
+          task.title,
+          task.briefPath,
+          task.entry.workflowId,
+          null,
+          JSON.stringify(task.dependencies),
+          task.priority,
+          "defined",
+          null,
+          nowMs,
+          nowMs,
+        );
+
+        if (task.claims === "unknown") {
+          // readClaimedPaths (scheduler.ts:408-419) parses "[]" to an empty
+          // claimed set, so validateAttemptClaims (scheduler.ts:437-451)
+          // would reject any real file write by a task seeded this way as
+          // out-of-claim. Inert today only because
+          // createProductionSchedulerTick passes undefined for the
+          // workspace argument (scheduler.ts:1333 and 1374), so
+          // validateAttemptClaims never runs. Whoever wires a real
+          // WorkspaceProvider must give claims: "unknown" a genuinely
+          // permissive representation at that time.
+          db.prepare(
+            `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ).run(randomUUID(), runId, task.id, "files", "[]", nowMs);
+        } else {
+          db.prepare(
+            `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+          ).run(randomUUID(), runId, task.id, "files", JSON.stringify(task.claims.files ?? []), nowMs);
+
+          if (task.claims.nonFile && task.claims.nonFile.length > 0) {
+            db.prepare(
+              `INSERT INTO claims (id, run_id, task_id, dimension, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+            ).run(randomUUID(), runId, task.id, "nonFile", JSON.stringify(task.claims.nonFile), nowMs);
+          }
+        }
+      }
+
       return appendEvent(db, {
         id: randomUUID(),
         run_id: runId,
