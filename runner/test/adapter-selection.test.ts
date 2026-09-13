@@ -35,6 +35,8 @@ import {
 } from "../src/engine/scheduler.ts";
 import { sha256 } from "../src/store/evidence.ts";
 import { withTempWorkspace } from "./helpers/workspace.ts";
+import { randomUUID } from "node:crypto";
+import { exitLine, reportLine, writeFileLine, writeStream } from "../evals/fixtures/harness.ts";
 
 const REPLAY_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "orga-select-replay-"));
 const REPLAY_SCRIPT_PATH = path.join(REPLAY_DIR, "replay.cjs");
@@ -513,4 +515,246 @@ test("liveContextCost reports skipped and spawns no vendor process when ORGA_LIV
     if (previousLive === undefined) delete process.env.ORGA_LIVE;
     else process.env.ORGA_LIVE = previousLive;
   }
+});
+
+// `createProductionSchedulerTick`'s fake branch honoring `ORGA_FAKE_STREAMS_DIR`
+// and its `taskId`-keyed `scenarioFor`: the tests below drive a real dispatch
+// through the factory exactly the way the claude-branch test above does, but
+// via a scripted stream file rather than a probed vendor CLI. Each stream
+// script writes a marker file at a relative path (resolved against the fake
+// branch's real `process.cwd()`, since no workspace provider is configured
+// for the `integration` stage here) so that "was this directory actually
+// read" is directly observable rather than inferred from timing.
+
+function seedFakeStreamsTask(
+  db: ReturnType<typeof openStore>,
+  runId: string,
+  taskId: string,
+  now: number,
+): void {
+  withTransaction(db, () => {
+    db.prepare(
+      "INSERT INTO runs (id, board_path, desired_state, state, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(runId, "board.yaml", "running", "starting", now);
+    db.prepare(
+      `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(taskId, runId, taskId, "Task a", "brief.md", "task-board", "integration", "[]", 0, "implementing", null, now, now);
+  });
+}
+
+function markerPaths(): { relPath: string; absPath: string } {
+  const relPath = path.join(".orga", "test-adapter-selection-tmp", randomUUID(), "marker.txt");
+  return { relPath, absPath: path.join(process.cwd(), relPath) };
+}
+
+// Repeatedly drives `tick` (mirroring the bounded reap-until-settled loop
+// `test/scheduler.test.ts` uses for its own real-process assertions) until the
+// task's `attempts` row leaves `running`, so the assertion after it observes
+// the spawned replay process's actual, finished effect rather than a race.
+async function driveTickUntilAttemptSettles(
+  tick: (ctx: TickContext) => Promise<unknown>,
+  ctx: TickContext,
+  db: ReturnType<typeof openStore>,
+  runId: string,
+  taskId: string,
+  timeoutMs = 5000,
+): Promise<{ status: string; vendor: string }> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    await tick(ctx);
+    const row = db
+      .prepare(`SELECT status, vendor FROM attempts WHERE run_id = ? AND task_id = ?`)
+      .get(runId, taskId) as { status: string; vendor: string } | undefined;
+    if (row && row.status !== "running") return row;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `attempt for task ${taskId} never left 'running' within ${timeoutMs}ms (last status: ${row?.status ?? "no row"})`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+test("createProductionSchedulerTick's fake branch honors ORGA_FAKE_STREAMS_DIR and keys the scenario by taskId", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-fake-streams-override-"));
+    const marker = markerPaths();
+    try {
+      const runId = "run-fake-streams-override";
+      const taskId = "task-a";
+      const now = 3_000_000;
+      seedFakeStreamsTask(db, runId, taskId, now);
+
+      writeStream(streamsDir, "integration", taskId, [
+        writeFileLine(marker.relPath, "fake-stream-override-marker\n"),
+        reportLine({ runId, taskId, stageId: "integration", roleId: "integrator" }),
+        exitLine(0),
+      ]);
+
+      const env: NodeJS.ProcessEnv = { ORGA_FAKE_STREAMS_DIR: streamsDir };
+      const tick = await createProductionSchedulerTick({ db, runId, root: dir, env });
+      const ctx: TickContext = {
+        db,
+        runId,
+        tickIndex: 0,
+        now: () => now,
+        leaseDeadlineMs: now + 60000,
+        signal: new AbortController().signal,
+      };
+
+      const settled = await driveTickUntilAttemptSettles(tick, ctx, db, runId, taskId);
+      assert.equal(settled.vendor, "fake");
+      assert.equal(
+        fs.readFileSync(marker.absPath, "utf8"),
+        "fake-stream-override-marker\n",
+        "the marker is only reachable if both the override directory and the taskId-keyed scenario name resolved correctly",
+      );
+    } finally {
+      db.close();
+      fs.rmSync(streamsDir, { recursive: true, force: true });
+      fs.rmSync(path.dirname(marker.absPath), { recursive: true, force: true });
+    }
+  });
+});
+
+test("createProductionSchedulerTick's fake branch falls back to the bundled default streams directory when ORGA_FAKE_STREAMS_DIR is unset or the empty string", async () => {
+  for (const [label, overrideValue] of [
+    ["unset", undefined],
+    ["empty string", ""],
+  ] as const) {
+    await withTempWorkspace(async (dir) => {
+      initProject(dir);
+      const db = openStore(dir);
+      const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-fake-streams-default-"));
+      const marker = markerPaths();
+      try {
+        const runId = `run-fake-streams-default-${label.replace(/\s+/g, "-")}`;
+        const taskId = "task-a";
+        const now = 4_000_000;
+        seedFakeStreamsTask(db, runId, taskId, now);
+
+        // The exact same ready-to-fire stream as the positive-leg test above,
+        // staged in a directory this run must never consult: the bundled
+        // default directory has no `integration--task-a.jsonl` of its own,
+        // so a genuine fallback fails the dispatch rather than silently
+        // reading the temp directory.
+        writeStream(streamsDir, "integration", taskId, [
+          writeFileLine(marker.relPath, "fake-stream-override-marker\n"),
+          reportLine({ runId, taskId, stageId: "integration", roleId: "integrator" }),
+          exitLine(0),
+        ]);
+
+        const env: NodeJS.ProcessEnv = overrideValue === undefined ? {} : { ORGA_FAKE_STREAMS_DIR: overrideValue };
+        const tick = await createProductionSchedulerTick({ db, runId, root: dir, env });
+        const ctx: TickContext = {
+          db,
+          runId,
+          tickIndex: 0,
+          now: () => now,
+          leaseDeadlineMs: now + 60000,
+          signal: new AbortController().signal,
+        };
+
+        const settled = await driveTickUntilAttemptSettles(tick, ctx, db, runId, taskId);
+        assert.equal(
+          settled.vendor,
+          "fake",
+          `(${label}) an attempts row is created with vendor 'fake', proving the run actually dispatched rather than never reaching the adapter`,
+        );
+        assert.equal(
+          fs.existsSync(marker.absPath),
+          false,
+          `(${label}) the override directory's scripted marker must never be written when the bundled default directory is used instead`,
+        );
+      } finally {
+        db.close();
+        fs.rmSync(streamsDir, { recursive: true, force: true });
+        fs.rmSync(path.dirname(marker.absPath), { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("createProductionSchedulerTick ignores ORGA_FAKE_STREAMS_DIR entirely when ORGA_VENDOR is claude", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const orgaYamlPath = path.join(dir, "orga.yaml");
+    const existingOrgaYaml = fs.readFileSync(orgaYamlPath, "utf8");
+    fs.writeFileSync(
+      orgaYamlPath,
+      `${existingOrgaYaml}vendors:\n  claude:\n    default:\n      environmentAllowlist:\n        - PATH\n`,
+    );
+
+    const versionFixturePath = path.join(REPLAY_DIR, "production-tick-version-inert.txt");
+    fs.writeFileSync(versionFixturePath, "select-test-cli 9.9.9\n", "utf8");
+
+    const db = openStore(dir);
+    const streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), "orga-fake-streams-inert-"));
+    const marker = markerPaths();
+    try {
+      const runId = "run-fake-streams-inert-under-claude";
+      const taskId = "task-a";
+      const now = 5_000_000;
+      const workflowSha = sha256("workflow-fixture-content-for-inert-under-claude");
+      const configSnapshotRef = JSON.stringify({
+        board: { path: "board.yaml", sha256: sha256("board-fixture-content-for-inert-under-claude") },
+        workflow: { path: "workflow.yaml", sha256: workflowSha },
+        template: { path: "template.md", sha256: sha256("template-fixture-content-for-inert-under-claude") },
+      });
+
+      withTransaction(db, () => {
+        db.prepare(
+          "INSERT INTO runs (id, board_path, desired_state, state, config_snapshot_ref, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ).run(runId, "board.yaml", "running", "starting", configSnapshotRef, now);
+        db.prepare(
+          `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(taskId, runId, taskId, "Task a", "brief.md", "task-board", "integration", "[]", 0, "implementing", null, now, now);
+      });
+
+      // A stream ready to fire in a directory a claude-vendor run must never
+      // reach: this proves inertness by the override's absent effect, not
+      // merely by the absence of a crash.
+      writeStream(streamsDir, "integration", taskId, [
+        writeFileLine(marker.relPath, "fake-stream-override-marker\n"),
+        reportLine({ runId, taskId, stageId: "integration", roleId: "integrator" }),
+        exitLine(0),
+      ]);
+
+      const env: NodeJS.ProcessEnv = {
+        ORGA_VENDOR: "claude",
+        ORGA_EXECUTABLE: REPLAY_SCRIPT_PATH,
+        ORGA_MODEL: "production-tick-model",
+        ORGA_FAKE_STREAMS_DIR: streamsDir,
+        PATH: process.env.PATH,
+        SELECT_TEST_FIXTURE: versionFixturePath,
+      };
+
+      const tick = await createProductionSchedulerTick({ db, runId, root: dir, env });
+      const ctx: TickContext = {
+        db,
+        runId,
+        tickIndex: 0,
+        now: () => now,
+        leaseDeadlineMs: now + 60000,
+        signal: new AbortController().signal,
+      };
+      await tick(ctx);
+
+      const row = db.prepare(`SELECT vendor FROM attempts WHERE run_id = ?`).get(runId) as { vendor: string };
+      assert.equal(row.vendor, "claude");
+      assert.equal(
+        fs.existsSync(marker.absPath),
+        false,
+        "the fake branch's streams override must never be consulted once ORGA_VENDOR resolves to a real vendor",
+      );
+    } finally {
+      db.close();
+      fs.rmSync(streamsDir, { recursive: true, force: true });
+      fs.rmSync(path.dirname(marker.absPath), { recursive: true, force: true });
+    }
+  });
 });

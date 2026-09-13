@@ -1329,7 +1329,27 @@ export async function createProductionSchedulerTick(options: CreateProductionSch
   const vendor: "claude" | "codex" | "fake" = rawVendor === "claude" || rawVendor === "codex" ? rawVendor : "fake";
 
   if (vendor === "fake") {
-    return createSchedulerTick(new FakeAdapter({ terminate: terminateFakeAttempt }), DEFAULT_SCHEDULER_STEPS, undefined, undefined, options.root);
+    // Test/development-only affordance, not a supported end-user feature:
+    // `ORGA_FAKE_STREAMS_DIR`, when set to a non-empty string, overrides
+    // `FakeAdapter`'s default bundled streams directory, and `scenarioFor`
+    // keys the stream file by `taskId` instead of the default random
+    // `attemptId`, so a test can pre-place a stream at
+    // `<streamsDir>/<stageId>--<taskId>.jsonl` before driving a dispatch
+    // through the real CLI. Because the key omits round, a retried attempt
+    // of the same task at the same stage replays the same script; this is a
+    // known limitation of the override, not a general retry-scripting
+    // mechanism.
+    return createSchedulerTick(
+      new FakeAdapter({
+        terminate: terminateFakeAttempt,
+        streamsDir: options.env.ORGA_FAKE_STREAMS_DIR || undefined,
+        scenarioFor: (attempt) => attempt.taskId,
+      }),
+      DEFAULT_SCHEDULER_STEPS,
+      undefined,
+      undefined,
+      options.root,
+    );
   }
 
   const orgaYamlPath = path.join(options.root, "orga.yaml");
