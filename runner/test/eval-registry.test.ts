@@ -172,3 +172,17 @@ test("eval-registry: registry-check.ts reaches fixture-invocations.ts only throu
   assert.ok(source.includes('await import("./fixture-invocations.ts")'));
   assert.ok(!source.includes('from "./fixture-invocations.ts"'));
 });
+
+test("eval-registry: the live vendor loop only breaks after a thrown resolveInvocation, never after a successful one", () => {
+  // resolveInvocation's live-id branch is vendor-agnostic today, so a
+  // behavioral test can't force "claude" to succeed while "codex" throws for
+  // the same id. This pins the control-flow shape directly: a `break;`
+  // immediately after the resolveInvocation(unit, vendor, id) call (i.e. on
+  // the success path, before the catch) would mean "codex" is only ever
+  // attempted when "claude" throws, which the brief forbids.
+  const source = fs.readFileSync(registryCheckPath, "utf8");
+  assert.ok(
+    /resolveInvocation\(unit, vendor, id\);\s*\}\s*catch/.test(source),
+    "resolveInvocation(unit, vendor, id) must fall through to the next vendor on success, not break early",
+  );
+});

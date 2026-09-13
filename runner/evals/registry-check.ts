@@ -237,7 +237,6 @@ export async function validateRegistryInvocations(registry: unknown): Promise<Re
       for (const vendor of ["claude", "codex"] as const) {
         try {
           resolveInvocation(unit, vendor, id);
-          break;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           errors.push({
