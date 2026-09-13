@@ -10,17 +10,28 @@ import path from "node:path";
 export type DispatchLogRole = "implementer" | "spec-reviewer" | "quality-reviewer";
 export type ReviewerDispatchLogRole = "spec-reviewer" | "quality-reviewer";
 
-// `development.v1.yaml`'s five `kind: agent` stage ids, mapped to the
-// dispatch-log's own role vocabulary (`artifact-validator.ts`'s
-// `DISPATCH_ROLES`) rather than the stage's own `role` field: `review-quality`
-// declares `role: "code-quality-reviewer"`, which is not a member of that
-// vocabulary.
+// `development.v1.yaml`'s five `kind: agent` stage ids plus
+// `integration.v1.yaml`'s one, mapped to the dispatch-log's own role
+// vocabulary (`artifact-validator.ts`'s `DISPATCH_ROLES`) rather than either
+// manifest's own `role` field: `review-quality` and `cross-task-review` both
+// declare `role: "code-quality-reviewer"`, which is not a member of that
+// vocabulary. `cross-task-review` shares `review-quality`'s
+// `"quality-reviewer"` entry rather than getting its own, since both
+// pipelines write into the same `taskDir` and `computeAttemptRound` numbers
+// each driver's attempt dirs strictly after whatever the other driver already
+// wrote in that same `taskDir` — so a development-pipeline `quality-reviewer`
+// row, when present, always occupies a lower attempt round than any
+// integration-pipeline row and wins first-writer-wins accretion.
 export const STAGE_DISPATCH_LOG_ROLE: Readonly<Record<string, DispatchLogRole>> = {
   implement: "implementer",
   "fix-spec": "implementer",
   "fix-quality": "implementer",
   "review-spec": "spec-reviewer",
   "review-quality": "quality-reviewer",
+  // `integration.v1.yaml`'s one `kind: agent` stage. Same role and same
+  // verdict vocabulary as `review-quality`, so it shares that stage's
+  // dispatch-log role rather than introducing a new one.
+  "cross-task-review": "quality-reviewer",
 };
 
 export const SPEC_REVIEWER_REPORT_FILENAME = "spec-reviewer.report.txt";

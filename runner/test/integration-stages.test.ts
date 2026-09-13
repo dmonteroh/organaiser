@@ -26,6 +26,7 @@ import { commitExists, isAncestor } from "../src/git/git.ts";
 import { advanceIntegration, refIsCurrentCheckout } from "../src/git/integrate.ts";
 import { accept, type Facts } from "../src/engine/predicates.ts";
 import type { WorkspaceHandle } from "../src/git/workspace.ts";
+import { validateDispatchLog } from "../src/compile/artifact-validator.ts";
 
 // ── A minimal reader for `integration.v1.yaml` only ────────────────────────
 //
@@ -567,6 +568,38 @@ test("the happy path reaches integrated through all eight stages, and the destin
   });
 });
 
+function readDispatchLogRows(attemptDir: string): string[][] {
+  const text = fs.readFileSync(path.join(attemptDir, "dispatch-log.tsv"), "utf8");
+  const lines = text.split("\n").filter((l) => l.length > 0);
+  assert.equal(lines[0], "seq\trole\treason\tcommit_before\tcommit_after\tpacket_file\treport_file");
+  return lines.slice(1).map((l) => l.split("\t"));
+}
+
+test("attempt-artifacts: the happy path writes one dispatch-log row and a quality-reviewer report for cross-task-review", async () => {
+  await withEnv(async (env) => {
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeReviewerStream(env.streamsDir, "pass", TASK_ID, "pass");
+    queue("pass");
+
+    const outcome = await runIntegrationStages(baseInput(env, adapter));
+    assert.equal(outcome.outcome, "integrated");
+
+    const attemptDir = path.join(env.taskDir, "attempt1-artifacts");
+    const rows = readDispatchLogRows(attemptDir);
+    assert.equal(rows.length, 1);
+    assert.deepEqual(rows[0], ["1", "quality-reviewer", "", "", "", "", "quality-reviewer.report.txt"]);
+    assert.notEqual(rows[0][1], "code-quality-reviewer");
+
+    assert.equal(
+      fs.readFileSync(path.join(attemptDir, "quality-reviewer.report.txt"), "utf8"),
+      "Verdict: pass\n",
+    );
+
+    const validation = validateDispatchLog(path.join(attemptDir, "dispatch-log.tsv"));
+    assert.equal(validation.ok, true, validation.reason ?? "expected ok");
+  });
+});
+
 test("a hung cross-task-review attempt past its spawn budget is recorded interrupted/signalled/worker-timeout, parks without classification, and still releases the destination lock", async () => {
   await withEnv(async (env) => {
     const { adapter, queue } = makeHangingAdapter(env.streamsDir);
@@ -616,6 +649,11 @@ test("a hung cross-task-review attempt past its spawn budget is recorded interru
       .prepare(`SELECT released_at FROM locks WHERE run_id = ? AND resource = ?`)
       .get(RUN_ID, "refs/heads/main") as { released_at: number | null };
     assert.ok(lockRow.released_at, "the destination lock is released on the timeout-parked exit path");
+
+    const attemptArtifactDirs = fs.existsSync(env.taskDir)
+      ? fs.readdirSync(env.taskDir).filter((name) => /^attempt\d+-artifacts$/.test(name))
+      : [];
+    assert.deepEqual(attemptArtifactDirs, [], "the watchdog-timeout path writes no dispatch-log row or report file");
   });
 });
 
@@ -979,6 +1017,7 @@ function freshCtx(input: IntegrationStagesInput): IntegrationDriverContext {
     lastAgentAttempt: null,
     lastAgentReport: null,
     resultCommit: null,
+    attemptRound: 1,
   };
 }
 

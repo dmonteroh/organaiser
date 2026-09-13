@@ -48,6 +48,12 @@ import { appendEvent } from "../store/events.ts";
 import { reclaimLease } from "../store/lease.ts";
 import type { LockRow } from "../store/types.ts";
 import { persistOperatorQuestions } from "./operator-questions.ts";
+import {
+  STAGE_DISPATCH_LOG_ROLE,
+  appendDispatchLogRow,
+  computeAttemptRound,
+  writeReviewerReport,
+} from "./attempt-artifacts.ts";
 
 export type IntegrationStageKind = "agent" | "runner";
 export type IntegrationStageAuthority = "workspace-write" | "read-only";
@@ -331,6 +337,7 @@ export interface IntegrationDriverContext {
   lastAgentAttempt: LastAgentAttempt | null;
   lastAgentReport: Record<string, unknown> | null;
   resultCommit: string | null;
+  attemptRound: number;
 }
 
 function pidAlive(pid: number): boolean {
@@ -833,6 +840,21 @@ async function runAgentStage(stage: IntegrationStageDefinition, ctx: Integration
   const outcome = await input.adapter.classify(artifacts);
   ctx.lastAgentReport = outcome.report;
 
+  const dispatchLogRole = STAGE_DISPATCH_LOG_ROLE[stage.id];
+  if (dispatchLogRole) {
+    const verdict = extractVerdict(outcome);
+    let reportFile = "";
+    if (dispatchLogRole === "quality-reviewer" && outcome.ok && outcome.report !== null) {
+      reportFile = writeReviewerReport(input.taskDir, ctx.attemptRound, dispatchLogRole, verdict);
+    }
+    appendDispatchLogRow(input.taskDir, ctx.attemptRound, {
+      role: dispatchLogRole,
+      commitBefore: "",
+      commitAfter: "",
+      reportFile,
+    });
+  }
+
   const normalizedAt = input.now();
   withTransaction(input.db, () => {
     input.db
@@ -1001,6 +1023,7 @@ export async function runIntegrationStages(input: IntegrationStagesInput): Promi
     lastAgentAttempt: null,
     lastAgentReport: null,
     resultCommit: null,
+    attemptRound: computeAttemptRound(input.taskDir),
   };
 
   const gateRounds: Record<string, number> = Object.fromEntries(
