@@ -402,7 +402,7 @@ test("unblockAnsweredTasks un-terminals a waiting-operator task whose latest att
   });
 });
 
-test("unblockAnsweredTasks skips a candidate whose latest attempt's stage_id is outside DEVELOPMENT_STAGE_IDS, without writing the tasks row, and appends task.unblock-skipped", async () => {
+test("unblockAnsweredTasks un-terminals a waiting-operator task whose latest attempt sits at an integration stage, resuming at stage_id 'integration'/state 'integrating', and appends task.unblocked with nextState 'integrating'", async () => {
   await withTempWorkspace(async (dir) => {
     initProject(dir);
     const db = openStore(dir);
@@ -423,9 +423,58 @@ test("unblockAnsweredTasks skips a candidate whose latest attempt's stage_id is 
 
       const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
 
+      assert.deepEqual(result.skipped, []);
+      assert.equal(result.unblocked.length, 1);
+      assert.equal(result.unblocked[0]!.taskId, "task-a");
+      assert.deepEqual(result.unblocked[0]!.questionIds, ["q-a"]);
+
+      const task = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get("task-a") as unknown as TaskRow;
+      assert.equal(task.disposition, null);
+      assert.equal(task.stage_id, "integration");
+      assert.equal(task.state, "integrating");
+      assert.equal(task.updated_at, 3_000_000);
+
+      const events = db
+        .prepare(`SELECT type, task_id, payload FROM events WHERE run_id = ? AND type = 'task.unblocked'`)
+        .all(RUN_ID) as Array<{ type: string; task_id: string | null; payload: string }>;
+      assert.equal(events.length, 1);
+      assert.equal(events[0]!.task_id, "task-a");
+      assert.deepEqual(JSON.parse(events[0]!.payload), {
+        previousState: "waiting-operator",
+        nextState: "integrating",
+        reasonCode: "operator-answer",
+        questionIds: ["q-a"],
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+test("unblockAnsweredTasks skips a candidate whose latest attempt's stage_id is outside both DEVELOPMENT_STAGE_IDS and INTEGRATION_STAGE_IDS, without writing the tasks row, and appends task.unblock-skipped", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const db = openStore(dir);
+    try {
+      insertRun(db, RUN_ID, 1_000_000);
+      insertTask(db, { id: "task-a", taskKey: "task-a", now: 1_000_000, disposition: "waiting-operator", state: "waiting-operator" });
+      insertAttempt(db, { id: "attempt-1", taskId: "task-a", stageId: "task-refinement", createdAt: 1_000_000 });
+      insertQuestion(db, {
+        id: `${RUN_ID}#q-a#task-a`,
+        taskId: "task-a",
+        status: "answered",
+        prompt: "first",
+        payloadId: "q-a",
+        answer: "answer a",
+        createdAt: 1_500_000,
+        answeredAt: 2_000_000,
+      });
+
+      const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
+
       assert.deepEqual(result.unblocked, []);
       assert.equal(result.skipped.length, 1);
-      assert.deepEqual(result.skipped[0], { taskId: "task-a", latestAttemptStageId: "cross-task-review" });
+      assert.deepEqual(result.skipped[0], { taskId: "task-a", latestAttemptStageId: "task-refinement" });
 
       const task = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get("task-a") as unknown as TaskRow;
       assert.equal(task.disposition, "waiting-operator");
@@ -437,8 +486,8 @@ test("unblockAnsweredTasks skips a candidate whose latest attempt's stage_id is 
       assert.equal(events.length, 1);
       assert.equal(events[0]!.task_id, "task-a");
       assert.deepEqual(JSON.parse(events[0]!.payload), {
-        reasonCode: "guard-stage-not-development",
-        latestAttemptStageId: "cross-task-review",
+        reasonCode: "guard-stage-outside-known-pipelines",
+        latestAttemptStageId: "task-refinement",
       });
     } finally {
       db.close();
@@ -482,7 +531,7 @@ test("unblockAnsweredTasks selects the latest attempts row by rowid when two row
       insertRun(db, RUN_ID, 1_000_000);
       insertTask(db, { id: "task-a", taskKey: "task-a", now: 1_000_000, disposition: "waiting-operator", state: "waiting-operator" });
       insertAttempt(db, { id: "attempt-earlier-rowid", taskId: "task-a", stageId: "implement", createdAt: 1_000_000 });
-      insertAttempt(db, { id: "attempt-later-rowid", taskId: "task-a", stageId: "cross-task-review", createdAt: 1_000_000 });
+      insertAttempt(db, { id: "attempt-later-rowid", taskId: "task-a", stageId: "task-refinement", createdAt: 1_000_000 });
       insertQuestion(db, {
         id: `${RUN_ID}#q-a#task-a`,
         taskId: "task-a",
@@ -497,7 +546,7 @@ test("unblockAnsweredTasks selects the latest attempts row by rowid when two row
       const result = unblockAnsweredTasks(db, { runId: RUN_ID, now: 3_000_000 });
 
       assert.deepEqual(result.unblocked, []);
-      assert.deepEqual(result.skipped, [{ taskId: "task-a", latestAttemptStageId: "cross-task-review" }]);
+      assert.deepEqual(result.skipped, [{ taskId: "task-a", latestAttemptStageId: "task-refinement" }]);
     } finally {
       db.close();
     }
@@ -536,7 +585,7 @@ test("unblockAnsweredTasks excludes a candidate with an open question row, visit
         disposition: "waiting-operator",
         state: "waiting-operator",
       });
-      insertAttempt(db, { id: "attempt-skip", taskId: "task-skip", stageId: "cross-task-review", createdAt: 1_000_000 });
+      insertAttempt(db, { id: "attempt-skip", taskId: "task-skip", stageId: "task-refinement", createdAt: 1_000_000 });
       insertQuestion(db, {
         id: `${RUN_ID}#q-skip#task-skip`,
         taskId: "task-skip",

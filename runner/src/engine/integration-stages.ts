@@ -47,6 +47,7 @@ import { withTransaction } from "../store/db.ts";
 import { appendEvent } from "../store/events.ts";
 import { reclaimLease } from "../store/lease.ts";
 import type { LockRow } from "../store/types.ts";
+import { persistOperatorQuestions } from "./operator-questions.ts";
 
 export type IntegrationStageKind = "agent" | "runner";
 export type IntegrationStageAuthority = "workspace-write" | "read-only";
@@ -1070,6 +1071,15 @@ export async function runIntegrationStages(input: IntegrationStagesInput): Promi
 
       if (resolvedGate && gateRounds[resolvedGate]! >= INTEGRATION_CAPS[resolvedGate]!) {
         return { outcome: "parked", stages, gateRounds };
+      }
+
+      if (target === "waiting-operator") {
+        const reportedQuestions = ctx.lastAgentReport?.questions;
+        persistOperatorQuestions(
+          input.db,
+          { runId: input.runId, questions: Array.isArray(reportedQuestions) ? reportedQuestions : [] },
+          input.now(),
+        );
       }
 
       if (TERMINAL_OUTCOME_IDS.has(target)) {

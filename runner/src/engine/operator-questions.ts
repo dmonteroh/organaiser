@@ -21,6 +21,21 @@ const DEVELOPMENT_STAGE_IDS: ReadonlySet<string> = new Set([
   "ready-to-integrate",
 ]);
 
+// Mirrors `integration-stages.ts`'s `INTEGRATION_STAGES` id set by hand, kept
+// local to this file to avoid a value-level import cycle with
+// `integration-stages.ts`. An `integration.v1.yaml` stage-list change means
+// updating both copies by hand.
+const INTEGRATION_STAGE_IDS: ReadonlySet<string> = new Set([
+  "lock-destination",
+  "create-candidate",
+  "replay-task",
+  "verify-candidate",
+  "cross-task-review",
+  "advance-destination",
+  "persist-integration",
+  "cleanup",
+]);
+
 export interface PersistOperatorQuestionsInput {
   runId: string;
   questions: readonly unknown[];
@@ -173,13 +188,25 @@ export function unblockAnsweredTasks(
         .get(runId, task.id) as { stage_id: string } | undefined;
       const latestAttemptStageId = latestAttempt?.stage_id ?? null;
 
-      if (latestAttemptStageId === null || !DEVELOPMENT_STAGE_IDS.has(latestAttemptStageId)) {
+      // The resume target depends on which pipeline the task was blocked in,
+      // not on a single hardcoded pair: a development-stage attempt resumes
+      // at the implementation stage, an integration-stage attempt resumes at
+      // the integration stage, and a stage id in neither set is unrecognized
+      // and stays parked rather than resuming into an arbitrary stage.
+      const resume: { stageId: string; state: string } | null =
+        latestAttemptStageId !== null && DEVELOPMENT_STAGE_IDS.has(latestAttemptStageId)
+          ? { stageId: "implementation", state: "implementing" }
+          : latestAttemptStageId !== null && INTEGRATION_STAGE_IDS.has(latestAttemptStageId)
+            ? { stageId: "integration", state: "integrating" }
+            : null;
+
+      if (latestAttemptStageId === null || resume === null) {
         appendEvent(db, {
           id: randomUUID(),
           run_id: runId,
           task_id: task.id,
           type: "task.unblock-skipped",
-          payload: JSON.stringify({ reasonCode: "guard-stage-not-development", latestAttemptStageId }),
+          payload: JSON.stringify({ reasonCode: "guard-stage-outside-known-pipelines", latestAttemptStageId }),
           created_at: now,
         });
         skipped.push({ taskId: task.id, latestAttemptStageId });
@@ -194,8 +221,8 @@ export function unblockAnsweredTasks(
       const questionIds = answeredRows.map(rawQuestionId);
 
       db.prepare(
-        `UPDATE tasks SET disposition = NULL, stage_id = 'implementation', state = 'implementing', updated_at = ? WHERE id = ? AND disposition = 'waiting-operator'`,
-      ).run(now, task.id);
+        `UPDATE tasks SET disposition = NULL, stage_id = ?, state = ?, updated_at = ? WHERE id = ? AND disposition = 'waiting-operator'`,
+      ).run(resume.stageId, resume.state, now, task.id);
 
       appendEvent(db, {
         id: randomUUID(),
@@ -204,7 +231,7 @@ export function unblockAnsweredTasks(
         type: "task.unblocked",
         payload: JSON.stringify({
           previousState: "waiting-operator",
-          nextState: "implementing",
+          nextState: resume.state,
           reasonCode: "operator-answer",
           questionIds,
         }),

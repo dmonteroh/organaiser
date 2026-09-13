@@ -312,7 +312,11 @@ const noopTerminate: TerminateFn = async () => ({
   timedOutWaitingForExit: false,
 });
 
-function reviewerReport(taskId: string, verdict: string): Record<string, unknown> {
+function reviewerReport(
+  taskId: string,
+  verdict: string,
+  questions?: readonly Record<string, unknown>[],
+): Record<string, unknown> {
   return {
     protocolVersion: "1",
     workflowId: "integration",
@@ -325,13 +329,20 @@ function reviewerReport(taskId: string, verdict: string): Record<string, unknown
     status: "completed",
     verdict,
     summary: `cross-task-review reported ${verdict}`,
+    ...(questions !== undefined ? { questions } : {}),
   };
 }
 
-function writeReviewerStream(streamsDir: string, scenario: string, taskId: string, verdict: string): void {
+function writeReviewerStream(
+  streamsDir: string,
+  scenario: string,
+  taskId: string,
+  verdict: string,
+  questions?: readonly Record<string, unknown>[],
+): void {
   const ops = [
     { op: "output", text: "reviewing" },
-    { op: "report", report: reviewerReport(taskId, verdict) },
+    { op: "report", report: reviewerReport(taskId, verdict, questions) },
     { op: "exit", code: 0 },
   ];
   fs.mkdirSync(streamsDir, { recursive: true });
@@ -620,6 +631,54 @@ test("a failing candidate routes verify-candidate to ready-to-implement, not par
       outcome.stages.map((s) => s.stageId),
       ["lock-destination", "create-candidate", "replay-task", "verify-candidate"],
     );
+  });
+});
+
+test("a needs-info verdict from cross-task-review routes to waiting-operator and persists the reported question to the questions table", async () => {
+  await withEnv(async (env) => {
+    withTransaction(env.db, () => {
+      env.db
+        .prepare(
+          `INSERT INTO tasks (id, run_id, task_key, title, brief_path, workflow_id, stage_id, depends_on, priority, state, disposition, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(TASK_ID, RUN_ID, TASK_ID, "Task 1", "brief.md", "task-board", null, "[]", 0, "integrating", null, 1000, 1000);
+    });
+
+    const reportedQuestion = {
+      id: "iq-1",
+      taskId: TASK_ID,
+      owner: "operator",
+      question: "which candidate wins the conflict?",
+      context: "cross-task-review found a cross-task conflict",
+      impact: "landing the wrong side breaks the destination",
+      safeDefault: null,
+      blocks: [],
+    };
+
+    const { adapter, queue } = makeAdapter(env.streamsDir);
+    writeReviewerStream(env.streamsDir, "needs-info", TASK_ID, "needs-info", [reportedQuestion]);
+    queue("needs-info");
+
+    const outcome = await runIntegrationStages(baseInput(env, adapter));
+
+    assert.equal(outcome.outcome, "waiting-operator");
+    assert.deepEqual(
+      outcome.stages.map((s) => s.stageId),
+      ["lock-destination", "create-candidate", "replay-task", "verify-candidate", "cross-task-review"],
+    );
+
+    const rows = env.db
+      .prepare(`SELECT * FROM questions WHERE run_id = ?`)
+      .all(RUN_ID) as Array<{ id: string; task_id: string | null; owner: string; prompt: string; status: string; payload: string | null }>;
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.id, `${RUN_ID}#iq-1#${TASK_ID}`);
+    assert.equal(row.task_id, TASK_ID);
+    assert.equal(row.owner, "operator");
+    assert.equal(row.prompt, "which candidate wins the conflict?");
+    assert.equal(row.status, "open");
+    assert.deepEqual(JSON.parse(row.payload as string), reportedQuestion);
   });
 });
 
