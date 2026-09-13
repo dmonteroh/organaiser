@@ -17,13 +17,10 @@
 // spawned. Targets no production service: Codex is pointed at a local Ollama model
 // server through a fixture-owned `CODEX_HOME`, never the operator's real one.
 //
-// Recorded live evidence: one `codex` run and two `claude` runs on 2026-09-05, all resting
-// `blocked`. The `codex` run (`codex-cli 0.46.0` against a local `gpt-oss:20b` Ollama model)
-// classified `failureClass: "worker-crash"`, `reason: "no-candidate-report"`,
-// `tool-failures=5`, ~134s. Each `claude` run classified `failureClass: "worker-crash"`,
-// `reason: "no-candidate-report"`, `exit_code: 1`; ~2.9-3.5s is aggregate across the two
-// runs, and no CLI version or model was captured in the surviving evidence. No run has yet
-// reached `succeeded`.
+// Recorded live evidence: two `claude` runs (`claude-cli 2.1.245`, model `sonnet`) on
+// 2026-09-13, both resting `blocked`, each classified `failureClass: "worker-crash"`,
+// `reason: "no-candidate-report"`, `exit_code: 1`, ~3s wall time. No run has yet reached
+// `succeeded`.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -122,6 +119,11 @@ function buildLiveBoard(): unknown {
   };
 }
 
+// Seeded directly at `stage_id: "implementation"` (state `"implementing"`,
+// `STAGE_TASK_STATE`'s own mapping for that stage) rather than at `null`: a task
+// seeded at `null` walks `admit-task` -> `release-dependencies` -> `acquire-claims`
+// -> `admit-to-batch` first, and `acquire-claims` never releases without a `claims`
+// row, which this fixture deliberately never creates.
 function insertLiveTask(root: string, runId: string, now: number): void {
   const db = openStore(root);
   try {
@@ -136,10 +138,10 @@ function insertLiveTask(root: string, runId: string, now: number): void {
         LIVE_TASK_TITLE,
         LIVE_TASK_BRIEF_PATH,
         "dev-workflow",
-        null,
+        "implementation",
         JSON.stringify([]),
         0,
-        "defined",
+        "implementing",
         null,
         now,
         now,
