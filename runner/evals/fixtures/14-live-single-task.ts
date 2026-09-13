@@ -208,20 +208,32 @@ function appendVendorEnvironmentAllowlist(dir: string, vendor: LiveVendor, names
 // own context, observed to cascade into unbounded turns and a mid-stream disconnect.
 function buildCodexHome(): string {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "orga-live-codex-home-"));
-  fs.chmodSync(codexHome, 0o700);
-  const configToml = [
-    'model_provider = "ollamar"',
-    "[model_providers.ollamar]",
-    'name = "ollama-responses"',
-    'base_url = "http://localhost:11434/v1"',
-    'wire_api = "responses"',
-    "requires_openai_auth = false",
-    "",
-  ].join("\n");
-  fs.writeFileSync(path.join(codexHome, "config.toml"), configToml, { mode: 0o600 });
-  const realAuthPath = path.join(os.homedir(), ".codex", "auth.json");
-  fs.symlinkSync(realAuthPath, path.join(codexHome, "auth.json"));
-  return codexHome;
+  try {
+    fs.chmodSync(codexHome, 0o700);
+    const configToml = [
+      'model_provider = "ollamar"',
+      "[model_providers.ollamar]",
+      'name = "ollama-responses"',
+      'base_url = "http://localhost:11434/v1"',
+      'wire_api = "responses"',
+      "requires_openai_auth = false",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(codexHome, "config.toml"), configToml, { mode: 0o600 });
+    const realAuthPath = path.join(os.homedir(), ".codex", "auth.json");
+    fs.symlinkSync(realAuthPath, path.join(codexHome, "auth.json"));
+    return codexHome;
+  } catch (err) {
+    // The directory exists from `mkdtempSync` onward, so any later throw leaves it
+    // behind. No caller-side `finally` can remove it: the caller's `codexHome` is
+    // still unassigned while the throw propagates, so its `if (codexHome)` is false.
+    try {
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
+    throw err;
+  }
 }
 
 async function ollamaReachable(): Promise<string | null> {
@@ -351,9 +363,9 @@ export async function liveSingleTask(vendor: LiveVendor): Promise<LiveSingleTask
       } finally {
         restoreEnv();
       }
-      insertLiveTask(root, runId, startedAt);
 
       try {
+        insertLiveTask(root, runId, startedAt);
         const reachedTerminal = await waitFor(() => {
           const run = readRunRow(root, runId);
           return ["succeeded", "failed", "blocked", "cancelled"].includes(run.state as string);
