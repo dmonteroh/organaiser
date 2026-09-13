@@ -729,15 +729,33 @@ export function executeGates(ctx: TickContext, runtime: SchedulerRuntime): void 
 // with no row at all is the state a crash between `git worktree add` and the
 // row-write transaction leaves behind.
 export function reconcileState(ctx: TickContext, runtime: SchedulerRuntime, workspace?: WorkspaceProvider): void {
-  const claims = ctx.db.prepare(`SELECT COUNT(*) AS n FROM claims WHERE run_id = ?`).get(ctx.runId) as {
-    n: number;
-  };
-  // With no workspace provider, dispatch never requires a claim, so any
-  // `claims` row is stray. With one, `claimSetComplete` requires a `claims`
-  // row for every mutating dispatch, so the same rows are expected state
-  // rather than an invariant violation.
-  if (!workspace && claims.n > 0) {
-    runtime.scratch.invariantViolations.push(`${claims.n} claim row(s) exist but P5 acquires none`);
+  // A `claims` row is legitimate state in every deployment shape: P11.1c's
+  // materialization loop (`supervisor-spawn.ts`) writes one per enabled task
+  // inside the run-creation transaction, before the first tick, with or
+  // without a workspace provider. What is never legitimate is a claims row
+  // for a task this run does not have, so that, not the bare row count, is
+  // what this step reports, and it reports it whether or not a workspace
+  // provider is configured: an orphaned row is illegitimate either way.
+  //
+  // Narrow today, not narrow forever: `supervisor-spawn.ts`'s loop is
+  // currently the only writer of this table in `src/`, and `claims.task_id`
+  // carries no FOREIGN KEY (`store/migrations.ts:84-94`), so the anomaly
+  // class this catches (a wrong-`run_id`/wrong-`task_id` write, a row left
+  // behind in a reused store) is rare now and unenforced by anything else.
+  // Same forward-looking character as the original check from `174cc4c`,
+  // and the same shape as `executeGates`' orphan check over `gates` above.
+  const orphanedClaims = ctx.db
+    .prepare(
+      `SELECT COUNT(*) AS n
+         FROM claims c
+         LEFT JOIN tasks t ON t.id = c.task_id AND t.run_id = c.run_id
+        WHERE c.run_id = ? AND t.id IS NULL`,
+    )
+    .get(ctx.runId) as { n: number };
+  if (orphanedClaims.n > 0) {
+    runtime.scratch.invariantViolations.push(
+      `${orphanedClaims.n} claim row(s) exist whose task is not present in this run`,
+    );
   }
 
   if (!workspace) return;
