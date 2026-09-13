@@ -211,6 +211,7 @@ test("run start rejects a board with a dangling dependency, matching board valid
         requiredWorkflowVersions: {},
         claims: "unknown",
         verification: [],
+        // board-enabled-waiver: this board is deliberately invalid (dangling dependency) and is rejected by the semantic validator before startRun materializes anything, so enabled is inert.
         enabled: true,
       },
     ]);
@@ -242,6 +243,7 @@ test("run start rejects a board with a dependency cycle, matching board validate
         requiredWorkflowVersions: {},
         claims: "unknown",
         verification: [],
+        // board-enabled-waiver: this board is deliberately invalid (dependency cycle) and is rejected by the semantic validator before startRun materializes anything, so enabled is inert.
         enabled: true,
       },
       {
@@ -254,6 +256,7 @@ test("run start rejects a board with a dependency cycle, matching board validate
         requiredWorkflowVersions: {},
         claims: "unknown",
         verification: [],
+        // board-enabled-waiver: this board is deliberately invalid (dependency cycle) and is rejected by the semantic validator before startRun materializes anything, so enabled is inert.
         enabled: true,
       },
     ]);
@@ -285,6 +288,7 @@ test("run start rejects a board with a duplicate task id, matching board validat
         requiredWorkflowVersions: {},
         claims: "unknown",
         verification: [],
+        // board-enabled-waiver: this board is deliberately invalid (duplicate task id) and is rejected by the semantic validator before startRun materializes anything, so enabled is inert.
         enabled: true,
       },
       {
@@ -297,6 +301,7 @@ test("run start rejects a board with a duplicate task id, matching board validat
         requiredWorkflowVersions: {},
         claims: "unknown",
         verification: [],
+        // board-enabled-waiver: this board is deliberately invalid (duplicate task id) and is rejected by the semantic validator before startRun materializes anything, so enabled is inert.
         enabled: true,
       },
     ]);
