@@ -24,6 +24,7 @@ import { openStore, withTransaction } from "../store/db.ts";
 import { appendEvent, mirrorEvent } from "../store/events.ts";
 import { sha256 } from "../store/evidence.ts";
 import { workflowAssetPath } from "../workflow-assets.ts";
+import { validateBoard as validateBoardSemantics } from "../board/validate.ts";
 import type { DatabaseSync } from "node:sqlite";
 import type { EventRow } from "../store/types.ts";
 
@@ -100,6 +101,18 @@ export interface StartRunResult {
 
 export function startRun(options: StartRunOptions): StartRunResult {
   validateBoard(options.board);
+
+  // Compiles board.schema.json a second time via loadAndValidateBoardShape,
+  // in addition to the schema-only validateBoard call above: accepted
+  // duplication, not a bug.
+  const semantics = validateBoardSemantics(options.board);
+  if (!semantics.valid) {
+    const summary = semantics.errors
+      .slice(0, 5)
+      .map((error) => `${error.path || "/"}: ${error.message}`)
+      .join("; ");
+    throw new BoardValidationError(`board failed semantic validation: ${summary}`, semantics.errors);
+  }
 
   const now = options.now ?? Date.now;
   const nowMs = now();

@@ -39,13 +39,13 @@ function ioAt(dir: string): Io & { outLines: string[]; errLines: string[] } {
   return io;
 }
 
-function minimalBoard(): unknown {
+function minimalBoard(tasks?: unknown[]): unknown {
   return {
     apiVersion: "ai-workflows.dev/v1alpha1",
     kind: "Board",
     metadata: { id: "board-1", contractVersion: "v1" },
     spec: {
-      tasks: [
+      tasks: tasks ?? [
         {
           id: "t1",
           title: "Task 1",
@@ -63,10 +63,33 @@ function minimalBoard(): unknown {
   };
 }
 
-function writeBoard(dir: string): string {
+function writeBoard(dir: string, tasks?: unknown[]): string {
   const boardPath = path.join(dir, "board.json");
-  fs.writeFileSync(boardPath, JSON.stringify(minimalBoard(), null, 2));
+  fs.writeFileSync(boardPath, JSON.stringify(minimalBoard(tasks), null, 2));
   return boardPath;
+}
+
+function findFilesNamed(root: string, names: readonly string[]): string[] {
+  const found: string[] = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop() as string;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+      } else if (names.includes(entry.name)) {
+        found.push(full);
+      }
+    }
+  }
+  return found;
 }
 
 function seedWaitingOperatorTask(root: string, runId: string, now: number): void {
@@ -153,6 +176,141 @@ test("run start returns 0 on durable submission without waiting for run success,
     fs.writeFileSync(badBoardPath, JSON.stringify({ apiVersion: "wrong" }));
     const code = await main(["node", "orga", "run", "start", "--board", badBoardPath], io);
     assert.equal(code, EXIT_CODES.INVALID_ARGS);
+  });
+});
+
+function assertSemanticRejection(dir: string, boardPath: string, runIo: ReturnType<typeof ioAt>, offendingTaskId: string): void {
+  assert.equal(runIo.errLines.length, 1);
+  const line = runIo.errLines[0] as string;
+  assert.ok(line.startsWith("error: "), `expected stderr to start with "error: ", got: ${line}`);
+  assert.ok(line.includes(offendingTaskId), `expected stderr to mention "${offendingTaskId}", got: ${line}`);
+  assert.ok(!line.includes("schema"), `expected stderr not to mention "schema", got: ${line}`);
+
+  const db = openStore(dir);
+  try {
+    const runs = db.prepare("SELECT COUNT(*) AS n FROM runs").get() as { n: number };
+    assert.equal(runs.n, 0);
+  } finally {
+    db.close();
+  }
+  assert.equal(fs.existsSync(path.join(dir, ".orga", "runs")), false);
+  assert.deepEqual(findFilesNamed(dir, ["supervisor.pid", "supervisor.log"]), []);
+}
+
+test("run start rejects a board with a dangling dependency, matching board validate's exit code and committing nothing", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const boardPath = writeBoard(dir, [
+      {
+        id: "t1",
+        title: "Task 1",
+        briefPath: "brief.md",
+        entry: { workflowId: "wf1", stageId: "s1" },
+        dependencies: ["missing-task"],
+        priority: 0,
+        requiredWorkflowVersions: {},
+        claims: "unknown",
+        verification: [],
+        enabled: true,
+      },
+    ]);
+
+    const runIo = ioAt(dir);
+    const runCode = await main(["node", "orga", "run", "start", "--board", boardPath], runIo);
+    const validateIo = ioAt(dir);
+    const validateCode = await main(["node", "orga", "board", "validate", "--board", boardPath], validateIo);
+
+    assert.equal(runCode, EXIT_CODES.INVALID_ARGS);
+    assert.equal(validateCode, EXIT_CODES.INVALID_ARGS);
+    assert.equal(runCode, validateCode);
+
+    assertSemanticRejection(dir, boardPath, runIo, "t1");
+  });
+});
+
+test("run start rejects a board with a dependency cycle, matching board validate's exit code and committing nothing", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const boardPath = writeBoard(dir, [
+      {
+        id: "cycle-a",
+        title: "Cycle A",
+        briefPath: "brief.md",
+        entry: { workflowId: "wf1", stageId: "s1" },
+        dependencies: ["cycle-b"],
+        priority: 0,
+        requiredWorkflowVersions: {},
+        claims: "unknown",
+        verification: [],
+        enabled: true,
+      },
+      {
+        id: "cycle-b",
+        title: "Cycle B",
+        briefPath: "brief.md",
+        entry: { workflowId: "wf1", stageId: "s1" },
+        dependencies: ["cycle-a"],
+        priority: 0,
+        requiredWorkflowVersions: {},
+        claims: "unknown",
+        verification: [],
+        enabled: true,
+      },
+    ]);
+
+    const runIo = ioAt(dir);
+    const runCode = await main(["node", "orga", "run", "start", "--board", boardPath], runIo);
+    const validateIo = ioAt(dir);
+    const validateCode = await main(["node", "orga", "board", "validate", "--board", boardPath], validateIo);
+
+    assert.equal(runCode, EXIT_CODES.INVALID_ARGS);
+    assert.equal(validateCode, EXIT_CODES.INVALID_ARGS);
+    assert.equal(runCode, validateCode);
+
+    assertSemanticRejection(dir, boardPath, runIo, "cycle-a");
+  });
+});
+
+test("run start rejects a board with a duplicate task id, matching board validate's exit code and committing nothing", async () => {
+  await withTempWorkspace(async (dir) => {
+    initProject(dir);
+    const boardPath = writeBoard(dir, [
+      {
+        id: "dup-task",
+        title: "First",
+        briefPath: "brief.md",
+        entry: { workflowId: "wf1", stageId: "s1" },
+        dependencies: [],
+        priority: 0,
+        requiredWorkflowVersions: {},
+        claims: "unknown",
+        verification: [],
+        enabled: true,
+      },
+      {
+        id: "dup-task",
+        title: "Second",
+        briefPath: "brief.md",
+        entry: { workflowId: "wf1", stageId: "s1" },
+        dependencies: [],
+        priority: 0,
+        requiredWorkflowVersions: {},
+        claims: "unknown",
+        verification: [],
+        enabled: true,
+      },
+    ]);
+
+    const runIo = ioAt(dir);
+    const runCode = await main(["node", "orga", "run", "start", "--board", boardPath], runIo);
+    const validateIo = ioAt(dir);
+    const validateCode = await main(["node", "orga", "board", "validate", "--board", boardPath], validateIo);
+
+    assert.equal(runCode, EXIT_CODES.INVALID_ARGS);
+    assert.equal(validateCode, EXIT_CODES.INVALID_ARGS);
+    assert.equal(runCode, validateCode);
+
+    assertSemanticRejection(dir, boardPath, runIo, "dup-task");
   });
 });
 
