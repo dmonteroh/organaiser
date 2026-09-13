@@ -656,6 +656,32 @@ test("executeGates and reconcileState record invariant evidence instead of throw
   });
 });
 
+test("reconcileState finds no invariant in legitimately materialized claims rows with no workspace present", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
+    insertTask(db, { id: "task-b", runId, stageId: "integration", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", []);
+    seedFilesClaim(db, runId, "task-b", ["src/a.ts"]);
+
+    const runtime = createSchedulerRuntime();
+    reconcileState(buildCtx(db, runId, clock), runtime);
+
+    assert.deepEqual(runtime.scratch.invariantViolations, []);
+  });
+});
+
+test("reconcileState flags an orphaned claims row with no workspace present", async () => {
+  await withRunDb(async ({ db, runId, clock }) => {
+    seedFilesClaim(db, runId, "ghost-task", ["x.txt"]);
+
+    const runtime = createSchedulerRuntime();
+    reconcileState(buildCtx(db, runId, clock), runtime);
+
+    assert.equal(runtime.scratch.invariantViolations.length, 1);
+    assert.match(runtime.scratch.invariantViolations[0] as string, /claim row\(s\) exist whose task is not present/);
+  });
+});
+
 test("the scheduler dispatches a two-task board strictly one attempt at a time", async () => {
   await withRunDb(async ({ db, runId, clock }) => {
     insertTask(db, { id: "task-a", runId, stageId: "integration", priority: 0, now: clock.now() });
@@ -1370,6 +1396,19 @@ test("reconcileState with a workspace provider: a worktree present on disk with 
   });
 });
 
+test("reconcileState flags an orphaned claims row even with a workspace provider present", async () => {
+  await withGitRunDb(async ({ dir, db, runId, clock }) => {
+    const provider = defaultProvider(dir);
+    seedFilesClaim(db, runId, "ghost-task", ["x.txt"]);
+
+    const runtime = createSchedulerRuntime();
+    reconcileState(buildCtx(db, runId, clock), runtime, provider);
+
+    assert.equal(runtime.scratch.invariantViolations.length, 1);
+    assert.match(runtime.scratch.invariantViolations[0] as string, /claim row\(s\) exist whose task is not present/);
+  });
+});
+
 test("a composed tick with a workspace provider and a seeded claims row does not rest blocked on stray-claims evidence", async () => {
   await withGitRunDb(async ({ dir, db, runId, clock }) => {
     insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
@@ -1389,6 +1428,30 @@ test("a composed tick with a workspace provider and a seeded claims row does not
       false,
       `a claims row required by claimSetComplete must not itself be flagged as an invariant violation; got ${JSON.stringify(outcome)}`,
     );
+  });
+});
+
+test("a composed tick with no workspace and a seeded claims row for an existing task dispatches instead of resting blocked", async () => {
+  await withRunDb(async ({ dir, db, runId, clock }) => {
+    insertTask(db, { id: "task-a", runId, stageId: "integration", now: clock.now() });
+    seedFilesClaim(db, runId, "task-a", ["claimed.txt"]);
+    const adapter = new FakeAdapter({ terminate: noopTerminate, streamsDir: fixturesStreamsDir, scenarioFor: () => "well-formed" });
+
+    const body = createSchedulerTick(adapter, DEFAULT_SCHEDULER_STEPS, undefined, undefined, dir);
+    const outcome = await body(buildCtx(db, runId, clock));
+
+    const restedBlockedOnClaims =
+      outcome.kind === "resting" &&
+      (outcome as { state: string }).state === "blocked" &&
+      /claim row\(s\) exist/.test((outcome as { reason: string | null }).reason ?? "");
+    assert.equal(
+      restedBlockedOnClaims,
+      false,
+      `a legitimate materialized claims row must not itself be flagged as an invariant violation; got ${JSON.stringify(outcome)}`,
+    );
+
+    const attemptCount = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE run_id = ?`).get(runId) as { n: number };
+    assert.equal(attemptCount.n, 1, "the run reaches a real dispatched attempt rather than parking on stray-claims evidence");
   });
 });
 
