@@ -143,7 +143,8 @@ function buildPlaceholderBoard(): unknown {
           requiredWorkflowVersions: {},
           claims: "unknown",
           verification: [],
-          enabled: true,
+          // Disabled deliberately: this fixture seeds its own tasks row via `insertReviewRepairTask`, so the board must not materialize it a second time.
+          enabled: false,
         },
       ],
     },

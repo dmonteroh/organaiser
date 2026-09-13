@@ -101,7 +101,8 @@ function buildPlaceholderBoard(): unknown {
           requiredWorkflowVersions: {},
           claims: "unknown",
           verification: [],
-          enabled: true,
+          // Disabled deliberately: this fixture seeds its own tasks rows via `insertBlockedLaneTasks`, so the board must not materialize them a second time.
+          enabled: false,
         },
       ],
     },
